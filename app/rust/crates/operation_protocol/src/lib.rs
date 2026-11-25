@@ -13,6 +13,7 @@ use thiserror::Error;
 
 pub mod effect_child_v4;
 pub mod owner_dispatch;
+pub mod owner_validation;
 pub use effect_child_v4::{
     canonical_effect_dispatch_input_bytes, checked_execution_key, BoundEffectInputV4,
     EffectChildInvocationV4, EffectChildProtocolError, EffectChildResultV4,
@@ -21,13 +22,18 @@ pub use effect_child_v4::{
 pub use owner_dispatch::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
     operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2, owner_child_workflow_id,
-    owner_content_hash, AdmittedArtifactV1, BoundArtifactV1, OperationDagRunV6, OwnerCommandWireV1,
+    owner_child_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, BoundArtifactV1,
+    OperationDagRunV6, OwnerCommandWireV1,
     OwnerInvocationV1, OwnerResultV1, PinnedOwnerRouteV1, ProducedArtifactEvidenceV1,
     RouteCatalogError, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
     OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_TYPE_V2,
     OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX, OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2,
     OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_INVOCATION_SCHEMA_REVISION,
     OWNER_OPERATION_CHILD_TYPE_V1,
+};
+pub use owner_validation::{
+    owner_validation_child_workflow_id_v1, OwnerValidationError, OwnerValidationRequestV1,
+    OwnerValidationResultV1, OWNER_VALIDATION_CHILD_TYPE_V1, OWNER_VALIDATION_SCHEMA_REVISION_V1,
 };
 
 /// Strongly typed identities prevent accidentally exchanging a node, port,

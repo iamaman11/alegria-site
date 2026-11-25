@@ -147,6 +147,25 @@ class RustArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("qdrant_effects", SHA, bundle, target=self.root / "forged_qdrant")
 
+    def test_legacy_qdrant_parent_separate_from_provider_free_generic_binary(self) -> None:
+        with patch.object(artifacts, "TARGET", self.target):
+            source = self.executable("temporal_orchestrator", b"feature-enabled frozen Qdrant V1")
+            legacy_bundle = self.root / "legacy_qdrant"
+            packaged = artifacts.package("legacy_qdrant_parent", SHA, legacy_bundle)
+            self.assertEqual(set(packaged["files"]), {"temporal_orchestrator_legacy_qdrant_v1"})
+            # Bundle bytes are frozen when the default-feature Cargo build is
+            # packaged earlier; later legacy Cargo linking cannot overwrite it.
+            installed = self.root / "installed"
+            artifacts.install("legacy_qdrant_parent", SHA, legacy_bundle, target=installed)
+            self.assertEqual((installed / "temporal_orchestrator_legacy_qdrant_v1").read_bytes(), source.read_bytes())
+            self.assertFalse((installed / "temporal_orchestrator").exists())
+            for wrong in ("v3", "legacy", "qdrant_effects"):
+                with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "manifest"):
+                    artifacts.install(wrong, SHA, legacy_bundle, target=self.root / f"wrong-{wrong}")
+            (legacy_bundle / "temporal_orchestrator_legacy_qdrant_v1").write_bytes(b"tampered")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                artifacts.install("legacy_qdrant_parent", SHA, legacy_bundle, target=self.root / "tampered")
+
     def test_rejects_manifest_confusion_symlink_and_extra_payload(self) -> None:
         source = self.executable("real")
         bundle = self.root / "bundle"

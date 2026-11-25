@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -158,6 +159,31 @@ def suite_runtime_environment(report: dict, name: str) -> dict[str, str]:
         runtime_env[variable] = str(path)
         print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
     return runtime_env
+
+
+def stage_selected_runtime_binaries(name: str) -> None:
+    """Keep feature-distinct Cargo builds separate for scoped developer runs.
+
+    The suite registry alone can authorize a known executable alias after its
+    exact Cargo preparation. CI's full E2E path uses SHA-bound binary artifacts
+    instead, never this local staging shortcut.
+    """
+    target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
+    if not target.is_absolute():
+        target = WORKSPACE / target
+    for alias, compiled_name in SUITE_OWNERS[name].get("stage_binaries", {}).items():
+        if not all(re.fullmatch(r"[A-Za-z0-9_-]+", part) for part in (alias, compiled_name)):
+            raise ValueError(f"invalid typed runtime staging name for {name}")
+        source = target / "debug" / compiled_name
+        staged = target / "debug" / alias
+        if (not source.is_file() or source.is_symlink() or not os.access(source, os.X_OK)
+                or staged.is_symlink()):
+            raise RuntimeError(f"suite {name} lacks trusted feature-built executable: {source}")
+        shutil.copyfile(source, staged)
+        staged.chmod(0o755)
+        if staged.stat().st_size != source.stat().st_size:
+            raise RuntimeError(f"suite {name} staged a truncated binary: {staged}")
+        print(f"CI_SUITE_RUNTIME_STAGED={name} alias={alias} source={compiled_name}", flush=True)
 
 
 def exact_verify_e2e_filter(command: list[str]) -> str:
@@ -586,6 +612,7 @@ def main() -> int:
         else:
             print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
             measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
+        stage_selected_runtime_binaries(name)
 
     # All real integration commands and owners come from ci_impact.py; the
     # runner has no suite-specific compilation or filter-selection branches.

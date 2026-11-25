@@ -146,6 +146,19 @@ NATIVE_OWNER_V7_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v1.rs",
 })
 
+# V2 keeps JSON at the exact operator/owner transport adapters. These files
+# decode strongly typed operator locators, *server* Temporal Histories, and
+# provider-owned ValidateOnly command DTOs. No blanket PG/Qdrant crate,
+# generic DAG workflow, domain, or future sibling exemption is permitted.
+NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
+    # Separate least-privilege business-root issuer parses a private typed
+    # operator intent and signs only its own tenant-scoped authority.
+    "app/rust/services/temporal_pg_effects/src/operator_business_run_v1.rs",
+    "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
+    "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v2.rs",
+    "app/rust/services/temporal_qdrant_effects/src/owner_generic_v1.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -160,7 +173,8 @@ def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
-               | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES):
+               | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES
+               | NATIVE_OWNER_V2_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

@@ -369,11 +369,11 @@ def default_generic_parent_feature_failures(manifest: dict) -> list[str]:
     if (isinstance(qdrant, dict)
             and qdrant.get("optional") is True
             and features.get("legacy-qdrant-v1") == ["dep:qdrant_contracts"]
-            and features.get("default", []) in ([], ["legacy-qdrant-v1"])):
+            and features.get("default", []) == []):
         return []
     return [
-        "generic Temporal parent must expose a no-default provider-neutral "
-        "build and explicit legacy-qdrant-v1 feature for immutable old History"
+        "default generic Temporal parent must be provider-neutral (default = []) "
+        "and retain an explicit opt-in legacy-qdrant-v1 feature for frozen old History"
     ]
 
 
@@ -569,6 +569,11 @@ def main() -> int:
             protocol_closure, pg_owner_closure, qdrant_owner_closure,
         ))
         for source in DAG_GENERIC_NEUTRAL_SOURCE:
+            violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
+        # New provider-neutral DAG types/validation modules are added without
+        # changing a handwritten allowlist: any direct provider-qualified Rust
+        # path anywhere in the core is rejected at the same fast CI boundary.
+        for source in sorted((RUST_ROOT / "crates/operation_protocol/src").rglob("*.rs")):
             violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
         for source in DAG_PG_OWNED_SOURCE:
             violations.extend(generic_dag_source_failures(source, {

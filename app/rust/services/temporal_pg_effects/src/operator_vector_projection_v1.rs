@@ -6,13 +6,17 @@ use std::{env, fs, path::Path};
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
-    operation_dag_parent_workflow_id, ArtifactBinding, Operation, OperationDagRunV6,
-    OwnerInvocationV1, PortId, OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_TYPE,
-    OWNER_OPERATION_CHILD_TYPE_V1,
+    operation_dag_parent_workflow_id, owner_child_workflow_id_v2,
+    ArtifactBinding, Operation, OperationDagRunV6, OwnerInvocationV1,
+    OwnerValidationRequestV1, OwnerValidationResultV1, PortId,
+    OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2,
+    OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_TYPE_V2,
+    OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 use postgres_store::truth_review_effect_v3::PG_OWNER_TASK_QUEUE_V1;
 use postgres_store::vector_projection_owner_v1::{
-    validate_pg_vector_projection_invocation_v1, PgReadVectorProjectionV1,
+    validate_pg_owner_v2_preflight, validate_pg_vector_projection_invocation_v1,
+    PgReadVectorProjectionV1,
     PgVectorProjectionCommandV1, INPUT_PORT,
 };
 use serde::Deserialize;
@@ -27,21 +31,21 @@ use super::operator_v4::{fetch_exact_history, first_started_payload, sha256_pg};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct IssueRequest {
-    admission_id: Uuid,
-    canonical_run_id: Uuid,
-    parent_workflow_id: String,
-    parent_workflow_run_id: String,
-    child_workflow_id: String,
-    child_workflow_run_id: String,
-    expires_in_seconds: u32,
+pub(super) struct IssueRequest {
+    pub(super) admission_id: Uuid,
+    pub(super) canonical_run_id: Uuid,
+    pub(super) parent_workflow_id: String,
+    pub(super) parent_workflow_run_id: String,
+    pub(super) child_workflow_id: String,
+    pub(super) child_workflow_run_id: String,
+    pub(super) expires_in_seconds: u32,
 }
 
-struct VerifiedHistory {
-    invocation: OwnerInvocationV1,
-    command: PgVectorProjectionCommandV1,
-    parent_start_bytes: Vec<u8>,
-    child_start_bytes: Vec<u8>,
+pub(super) struct VerifiedHistory {
+    pub(super) invocation: OwnerInvocationV1,
+    pub(super) command: PgVectorProjectionCommandV1,
+    pub(super) parent_start_bytes: Vec<u8>,
+    pub(super) child_start_bytes: Vec<u8>,
 }
 
 fn verify_history_bytes(
@@ -50,10 +54,25 @@ fn verify_history_bytes(
     request: &IssueRequest,
     trusted_build_id: &str,
 ) -> Result<VerifiedHistory> {
+    verify_history_bytes_for_version(parent,child,request,trusted_build_id,false)
+}
+
+fn verify_history_bytes_for_version(
+    parent: &History,
+    child: &History,
+    request: &IssueRequest,
+    trusted_build_id: &str,
+    v2: bool,
+) -> Result<VerifiedHistory> {
+    let (parent_type,parent_queue) = if v2 {
+        (OPERATION_DAG_PARENT_TYPE_V2,OPERATION_DAG_PARENT_QUEUE_V2)
+    } else {
+        (OPERATION_DAG_PARENT_TYPE,OPERATION_DAG_PARENT_QUEUE)
+    };
     let parent_start_bytes = first_started_payload(
         parent,
-        OPERATION_DAG_PARENT_TYPE,
-        OPERATION_DAG_PARENT_QUEUE,
+        parent_type,
+        parent_queue,
     )?;
     let child_start_bytes =
         first_started_payload(child, OWNER_OPERATION_CHILD_TYPE_V1, PG_OWNER_TASK_QUEUE_V1)?;
@@ -63,10 +82,11 @@ fn verify_history_bytes(
         serde_json::to_vec(&invocation)? == child_start_bytes
             && invocation.parent.workflow_id == request.parent_workflow_id
             && invocation.parent.run_id == request.parent_workflow_run_id
-            && request.child_workflow_id
-                == operation_protocol::owner_child_workflow_id(
-                    &invocation.checked_dispatch.execution_key
-                ),
+            && request.child_workflow_id == if v2 {
+                owner_child_workflow_id_v2(&invocation.checked_dispatch.execution_key)
+            } else {
+                operation_protocol::owner_child_workflow_id(&invocation.checked_dispatch.execution_key)
+            },
         "PG projection child start bytes/parent/deterministic ID mismatch"
     );
     let command = validate_pg_vector_projection_invocation_v1(&invocation)
@@ -226,6 +246,12 @@ fn verify_history_bytes(
                 == 1,
         "PG vector route is not trusted worker Build ID/type/queue"
     );
+    if v2 {
+        // The side-effectful child must not be authorized until ALL typed
+        // owner preflight Child Workflows have really completed on the
+        // Temporal server. A submitted manifest cannot fabricate this fence.
+        verify_v2_validation_stage(parent,&run,request,child_started_event_id(parent,request)?)?;
+    }
     Ok(VerifiedHistory {
         invocation,
         command,
@@ -234,7 +260,124 @@ fn verify_history_bytes(
     })
 }
 
+fn child_started_event_id(parent: &History, request: &IssueRequest) -> Result<i64> {
+    let event = parent.events.iter().find(|event| {
+        let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(started)) =
+            &event.attributes else { return false; };
+        started.workflow_execution.as_ref().is_some_and(|actual|
+            actual.workflow_id==request.child_workflow_id
+                && actual.run_id==request.child_workflow_run_id)
+    }).context("parent does not contain actual PG effect ChildStarted")?;
+    Ok(event.event_id)
+}
+
+fn verify_v2_validation_stage(
+    history: &History,
+    run: &OperationDagRunV6,
+    request: &IssueRequest,
+    effect_started_event_id: i64,
+) -> Result<()> {
+    use operation_protocol::{
+        owner_validation_child_workflow_id_v1, TemporalExecutionIdentityV4,
+    };
+    let parent = TemporalExecutionIdentityV4 {
+        workflow_id: request.parent_workflow_id.clone(),
+        run_id: request.parent_workflow_run_id.clone(),
+    };
+    for node in &run.plan.nodes {
+        let owner_wire = run.owner_commands.get(&node.instance)
+            .context("validation stage lacks own command wire for planned node")?;
+        let route = run.pinned_routes.iter().find(|r|
+            r.operation==node.operation && r.owner==owner_wire.owner)
+            .context("validation stage lacks trusted owner route")?;
+        let expected_child_id = owner_validation_child_workflow_id_v1(
+            &parent,&run.plan.hash,&node.instance,
+        );
+        let mut matching = 0_usize;
+        for initiated in &history.events {
+            let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(start)) =
+                &initiated.attributes else { continue; };
+            if start.workflow_id != expected_child_id { continue; }
+            ensure!(
+                start.workflow_type.as_ref().map(|t| t.name.as_str())
+                    == Some(OWNER_VALIDATION_CHILD_TYPE_V1)
+                    && start.task_queue.as_ref().map(|q| q.name.as_str())
+                        == Some(route.task_queue.as_str()),
+                "V2 validation was dispatched to untrusted Workflow Type or owner queue"
+            );
+            let raw_input = start.input.as_ref().and_then(|payloads|
+                (payloads.payloads.len()==1).then_some(payloads.payloads[0].data.as_slice()))
+                .context("validation child has no exact request input")?;
+            let typed: OwnerValidationRequestV1 = serde_json::from_slice(raw_input)?;
+            typed.validate_shape()?;
+            ensure!(
+                serde_json::to_vec(&typed)? == raw_input
+                    && typed.parent == parent
+                    && typed.scope == run.plan.scope
+                    && typed.plan_hash == run.plan.hash
+                    && typed.instance == node.instance
+                    && typed.operation == node.operation
+                    && typed.owner == owner_wire.owner
+                    && typed.contract_hash == owner_wire.contract_hash
+                    && typed.command_bytes == owner_wire.command_bytes,
+                "validation Child request is not exact immutable parent typed plan"
+            );
+            let expected_external = node.inputs.iter().filter_map(|(port,binding)| {
+                if let ArtifactBinding::External { artifact }=binding {
+                    run.admitted.get(artifact).map(|value|(port.clone(),value.clone()))
+                } else { None }
+            }).collect::<std::collections::BTreeMap<_,_>>();
+            let expected_produced = node.inputs.iter().filter_map(|(port,binding)|
+                matches!(binding,ArtifactBinding::Produced{..}).then_some(port.clone()))
+                .collect::<std::collections::BTreeSet<_>>();
+            ensure!(
+                typed.external_inputs==expected_external
+                    && typed.produced_input_ports==expected_produced,
+                "validation Child external/provenance sources differ from parent plan"
+            );
+            let started = history.events.iter().find(|event| {
+                matches!(&event.attributes,
+                    Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(s))
+                    if s.initiated_event_id==initiated.event_id)
+            }).context("validation Child never started on Temporal server")?;
+            let completed = history.events.iter().find(|event| {
+                matches!(&event.attributes,
+                    Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(c))
+                    if c.initiated_event_id==initiated.event_id
+                       && c.started_event_id==started.event_id)
+            }).context("validation Child did not complete on Temporal server")?;
+            ensure!(
+                completed.event_id < effect_started_event_id,
+                "effect Child started before all owner validation Children completed"
+            );
+            let Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(done)) =
+                &completed.attributes else { anyhow::bail!("invalid completion event"); };
+            let raw_result = done.result.as_ref().and_then(|payloads|
+                (payloads.payloads.len()==1).then_some(payloads.payloads[0].data.as_slice()))
+                .context("validation Child lacked typed completion result")?;
+            let result: OwnerValidationResultV1 = serde_json::from_slice(raw_result)?;
+            result.verify_success(&typed)?;
+            matching += 1;
+        }
+        ensure!(matching==1,"V2 owner preflight requires exactly one completed validation Child per node");
+    }
+    Ok(())
+}
+
 async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<VerifiedHistory> {
+    attest_from_server_with_version(request,build_id,false).await
+}
+
+pub(super) async fn attest_from_server_v2(
+    request: &IssueRequest,
+    build_id: &str,
+) -> Result<VerifiedHistory> {
+    attest_from_server_with_version(request,build_id,true).await
+}
+
+async fn attest_from_server_with_version(
+    request: &IssueRequest,build_id: &str,v2: bool,
+) -> Result<VerifiedHistory> {
     let url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")
         .context("PG projection operator must configure independent Temporal URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")
@@ -264,7 +407,105 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<Ve
         &request.child_workflow_run_id,
     )
     .await?;
-    verify_history_bytes(&parent, &child, request, build_id)
+    let attested = verify_history_bytes_for_version(&parent, &child, request, build_id,v2)?;
+    if v2 {
+        // Prove each ValidationChild against its OWN independent server History,
+        // not just a self-consistent parent completion claim. This executes
+        // before any PG source receipt/admission is issued.
+        use operation_protocol::{
+            owner_validation_child_workflow_id_v1, TemporalExecutionIdentityV4,
+        };
+        let dag: OperationDagRunV6 = serde_json::from_slice(&attested.parent_start_bytes)?;
+        let parent_identity = TemporalExecutionIdentityV4 {
+            workflow_id: request.parent_workflow_id.clone(),
+            run_id: request.parent_workflow_run_id.clone(),
+        };
+        for node in &dag.plan.nodes {
+            let child_id = owner_validation_child_workflow_id_v1(
+                &parent_identity,&dag.plan.hash,&node.instance,
+            );
+            let initiated = parent.events.iter().find(|event| matches!(
+                &event.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs))
+                    if attrs.workflow_id == child_id
+            )).context("V2 validation source does not appear in parent server History")?;
+            let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(init)) =
+                &initiated.attributes else { anyhow::bail!("missing initiated validation"); };
+            let started = parent.events.iter().find(|event| matches!(
+                &event.attributes,
+                Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs))
+                    if attrs.initiated_event_id == initiated.event_id
+            )).context("parent lacks independently started validation child")?;
+            let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(started_attrs)) =
+                &started.attributes else { anyhow::bail!("missing started validation"); };
+            let execution = started_attrs.workflow_execution.as_ref()
+                .context("server ValidateChild has no actual execution Run ID")?;
+            ensure!(execution.workflow_id==child_id,"server ValidationChild ID mismatched");
+            let route = dag.pinned_routes.iter().find(|route|
+                route.operation==node.operation)
+                .context("V2 owner route missing for validation history")?;
+            let child_history = fetch_exact_history(
+                &client,&namespace,&child_id,&execution.run_id,
+            ).await?;
+            let own_start_bytes = first_started_payload(
+                &child_history,OWNER_VALIDATION_CHILD_TYPE_V1,&route.task_queue,
+            )?;
+            let parent_start_bytes = init.input.as_ref().and_then(|value|
+                (value.payloads.len()==1).then_some(value.payloads[0].data.as_slice()))
+                .context("parent validation ChildInitiated missing exact request")?;
+            ensure!(
+                own_start_bytes==parent_start_bytes,
+                "validation child own server start differs from parent initiated input"
+            );
+            let server_start=child_history.events.first()
+                .context("empty independent ValidateChild server History")?;
+            let Some(Attributes::WorkflowExecutionStartedEventAttributes(attrs)) =
+                &server_start.attributes else { anyhow::bail!("ValidateChild missing server start"); };
+            let actual_parent=attrs.parent_workflow_execution.as_ref()
+                .context("ValidateChild own History missing parent")?;
+            ensure!(
+                actual_parent.workflow_id==request.parent_workflow_id
+                    && actual_parent.run_id==request.parent_workflow_run_id
+                    && attrs.parent_initiated_event_id==initiated.event_id,
+                "ValidateChild own History parent linkage does not match server parent"
+            );
+            let own_complete = child_history.events.iter().find_map(|event| {
+                if let Some(Attributes::WorkflowExecutionCompletedEventAttributes(done)) =
+                    &event.attributes { Some(done) } else { None }
+            }).context("ValidateChild independent server History not completed")?;
+            let own_result = own_complete.result.as_ref().and_then(|p|
+                (p.payloads.len()==1).then_some(p.payloads[0].data.as_slice()))
+                .context("ValidateChild own result missing typed bytes")?;
+            let parent_completed = parent.events.iter().find(|event| matches!(
+                &event.attributes,
+                Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(done))
+                    if done.initiated_event_id==initiated.event_id
+                        && done.started_event_id==started.event_id
+            )).context("parent lacks independent ValidateChild completion")?;
+            let Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(done)) =
+                &parent_completed.attributes else { anyhow::bail!("missing completion"); };
+            let parent_result = done.result.as_ref().and_then(|p|
+                (p.payloads.len()==1).then_some(p.payloads[0].data.as_slice()))
+                .context("parent validation completion missing result")?;
+            ensure!(
+                own_result==parent_result,
+                "ValidateChild parent and child independently observed results differ"
+            );
+            let typed: OwnerValidationRequestV1 = serde_json::from_slice(&own_start_bytes)?;
+            let result: OwnerValidationResultV1 = serde_json::from_slice(own_result)?;
+            result.verify_success(&typed)?;
+            if typed.owner.as_str()=="postgres_store" {
+                let own = validate_pg_owner_v2_preflight(&typed)?;
+                ensure!(
+                    own.request_hash==result.request_hash
+                        && own.operation==result.operation
+                        && own.contract_hash==result.contract_hash,
+                    "independent PG ValidateChild command/business DTO check failed"
+                );
+            }
+        }
+    }
+    Ok(attested)
 }
 
 async fn insert_admission(
@@ -405,7 +646,7 @@ async fn insert_admission(
     Ok(())
 }
 
-async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
+pub(super) async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
     use temporalio_common::data_converters::RawValue;
     let url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")?;

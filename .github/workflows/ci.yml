@@ -31,6 +31,7 @@ on:
           - coldwarm
           - pg-harness
           - owner-rebuild
+          - dag-parent-ab
           - legacy-worker-split
 
 permissions:
@@ -255,6 +256,7 @@ jobs:
           python3 automation/check_owner_rebuild.py
           python3 automation/test_native_dag_owner_isolation.py
           python3 automation/check_physical_build_options.py
+          python3 automation/test_measure_generic_temporal_rebuild.py
           python3 automation/check_temporal_activity_owner_inventory.py
           python3 automation/test_temporal_activity_owner_inventory.py
           python3 automation/check_reliability_contracts.py
@@ -950,6 +952,10 @@ jobs:
             owner-rebuild)
               RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py
               ;;
+            dag-parent-ab)
+              python3 automation/measure_generic_temporal_rebuild.py \
+                --output automation/reports/generic_parent_rebuild_ab.json
+              ;;
             legacy-worker-split)
               python3 automation/measure_legacy_worker_split.py \
                 --output automation/reports/legacy_worker_split_physical.json
@@ -980,6 +986,7 @@ jobs:
             automation/reports/physical_owner_ab.json
             automation/reports/physical_coldwarm_ab.json
             automation/reports/owner_rebuild_probe.json
+            automation/reports/generic_parent_rebuild_ab.json
             automation/reports/legacy_worker_split_physical.json
           if-no-files-found: warn
 
@@ -1074,17 +1081,46 @@ jobs:
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
             cargo-registry-${{ runner.os }}-
-      - name: Compile independent pure and PostgreSQL V3 Worker binaries
+      - name: Compile default provider-free Temporal DAG and independent PostgreSQL Worker
         working-directory: app/rust
-        run: cargo build --locked -p temporal_orchestrator -p temporal_pg_effects --bin temporal_orchestrator --bin temporal_pg_effects
-      - name: Bind V3 executable artifacts to exact source
+        run: cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects --bin temporal_orchestrator --bin temporal_pg_effects
+      - name: Bind provider-free generic parent and PostgreSQL Worker to exact source
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind v3 --source-sha "$GITHUB_SHA" \
             --directory automation/reports/rust-ci-artifacts/v3
+      - name: Compile frozen Qdrant V1 parent explicitly, without altering generic artifact
+        working-directory: app/rust
+        run: cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1
+      - name: Bind separate immutable Qdrant V1 replay executable to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/legacy_qdrant_parent
+      - name: Prove exact-source Temporal binaries expose disjoint legacy Workflow features
+        run: |
+          set -euo pipefail
+          missing_history="$RUNNER_TEMP/absent-temporal-qdrant-v1-history.json"
+          generic="automation/reports/rust-ci-artifacts/v3/temporal_orchestrator"
+          legacy="automation/reports/rust-ci-artifacts/legacy_qdrant_parent/temporal_orchestrator_legacy_qdrant_v1"
+          if "$generic" --replay-qdrant-effect-history "$missing_history" >"$RUNNER_TEMP/dag-generic-mode.log" 2>&1; then
+            echo "provider-free Temporal unexpectedly enabled frozen Qdrant V1 replay" >&2
+            exit 1
+          fi
+          grep -F 'requires legacy-qdrant-v1 binary feature' "$RUNNER_TEMP/dag-generic-mode.log"
+          if "$legacy" --replay-qdrant-effect-history "$missing_history" >"$RUNNER_TEMP/dag-legacy-mode.log" 2>&1; then
+            echo "frozen Qdrant V1 replay unexpectedly accepted absent server History" >&2
+            exit 1
+          fi
+          grep -F 'read actual Temporal history' "$RUNNER_TEMP/dag-legacy-mode.log"
+          echo 'CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1'
       - uses: actions/upload-artifact@v7
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/v3/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/legacy_qdrant_parent/
           if-no-files-found: error
 
   # The Qdrant SDK/PG effects runtime is compiled and attested independently
@@ -1257,6 +1293,10 @@ jobs:
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
         run: |
           set -euo pipefail
@@ -1269,6 +1309,9 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind v3 --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
       # Generic Temporal DAG routing is executable deployment authority.
       # Preserve the exact production /etc/alegria root-ownership fence even
       # on this disposable runner; the native test installs its typed catalog

@@ -26,6 +26,7 @@ from run_scoped_cargo_feedback import (
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
     run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
     run_precompiled_e2e_suite, selected_preparations, suite_runtime_environment,
+    stage_selected_runtime_binaries,
 )
 
 
@@ -142,6 +143,26 @@ class CargoFeedbackTests(unittest.TestCase):
 
 class ScopedCargoFeedbackTests(unittest.TestCase):
     """Exercise the production planner/runner ordering without installing Cargo."""
+
+    def test_scoped_legacy_qdrant_parent_stays_separate_from_generic_dag(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            debug = workspace / "target/debug"
+            debug.mkdir(parents=True)
+            generic = debug / "temporal_orchestrator"
+            generic.write_bytes(b"legacy-enabled exact Cargo output")
+            generic.chmod(0o755)
+            with patch("run_scoped_cargo_feedback.WORKSPACE", workspace), \
+                 patch.dict(os.environ, {}, clear=True):
+                stage_selected_runtime_binaries("temporal_qdrant_v8")
+                staged = debug / "temporal_orchestrator_legacy_qdrant_v1"
+                self.assertEqual(staged.read_bytes(), generic.read_bytes())
+                # An ordinary default-only build may overwrite Cargo's
+                # canonical binary name, never the frozen legacy child file.
+                generic.write_bytes(b"provider-free generic output")
+                self.assertEqual(staged.read_bytes(), b"legacy-enabled exact Cargo output")
+                stage_selected_runtime_binaries("temporal_mixed_v6_contract")
+                self.assertEqual(staged.read_bytes(), b"legacy-enabled exact Cargo output")
 
     def report(self, suites: list[str]) -> dict:
         return {

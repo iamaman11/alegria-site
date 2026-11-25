@@ -260,9 +260,33 @@ pub async fn execute_admitted_qdrant_projection_v3(
     admission_id: Uuid,
     dispatch_execution_key: &str,
 ) -> Result<QdrantProjectionOutcomeV1> {
+    execute_admitted_qdrant_projection_generic(pool, admission_id, dispatch_execution_key, 3).await
+}
+
+/// A separate generic V2-parent effect ledger. V3's shipped SQL/History
+/// remains unchanged: V4 uses independent generic business-run governance.
+pub async fn execute_admitted_qdrant_projection_v4(
+    pool: &PgPool,
+    admission_id: Uuid,
+    dispatch_execution_key: &str,
+) -> Result<QdrantProjectionOutcomeV1> {
+    execute_admitted_qdrant_projection_generic(pool, admission_id, dispatch_execution_key, 4).await
+}
+
+async fn execute_admitted_qdrant_projection_generic(
+    pool: &PgPool,
+    admission_id: Uuid,
+    dispatch_execution_key: &str,
+    ledger_revision: u8,
+) -> Result<QdrantProjectionOutcomeV1> {
+    ensure!(matches!(ledger_revision, 3 | 4), "unsupported generic Qdrant effect ledger");
     ensure!(
-        std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3").as_deref() == Ok("1"),
-        "generic Qdrant effect V3 is disabled without explicit opt-in"
+        std::env::var(if ledger_revision == 3 {
+            "ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3"
+        } else {
+            "ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4"
+        }).as_deref() == Ok("1"),
+        "generic Qdrant provider effect ledger is disabled without explicit opt-in"
     );
     ensure!(
         dispatch_execution_key.len() == 64
@@ -271,10 +295,14 @@ pub async fn execute_admitted_qdrant_projection_v3(
                 .all(|byte| byte.is_ascii_hexdigit()),
         "invalid checked generic Qdrant dispatch key"
     );
-    let row = sqlx::query(
+    let read_sql = if ledger_revision == 3 {
         "SELECT tenant_id,context_key,keyword_key,command_bytes,command_sha256,dispatch_execution_key
-           FROM pipeline.qdrant_projection_v3_admissions WHERE admission_id=$1",
-    )
+           FROM pipeline.qdrant_projection_v3_admissions WHERE admission_id=$1"
+    } else {
+        "SELECT tenant_id,context_key,keyword_key,command_bytes,command_sha256,dispatch_execution_key
+           FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
+    };
+    let row = sqlx::query(read_sql)
     .bind(admission_id)
     .fetch_one(pool)
     .await
@@ -292,7 +320,12 @@ pub async fn execute_admitted_qdrant_projection_v3(
             && command.keyword_key == row.try_get::<String, _>("keyword_key")?,
         "generic Qdrant admission does not pin exact checked owner command"
     );
-    let state: String = sqlx::query_scalar("SELECT pipeline.begin_qdrant_projection_v3($1,$2,$3)")
+    let begin_sql = if ledger_revision == 3 {
+        "SELECT pipeline.begin_qdrant_projection_v3($1,$2,$3)"
+    } else {
+        "SELECT pipeline.begin_qdrant_projection_v4($1,$2,$3)"
+    };
+    let state: String = sqlx::query_scalar(begin_sql)
         .bind(admission_id)
         .bind(&bytes)
         .bind(dispatch_execution_key)
@@ -335,8 +368,13 @@ pub async fn execute_admitted_qdrant_projection_v3(
         exact,
         "generic Qdrant V3 provider state drifted or not yet confirmed"
     );
+    let confirm_sql = if ledger_revision == 3 {
+        "SELECT pipeline.confirm_qdrant_projection_v3($1,$2,$3)"
+    } else {
+        "SELECT pipeline.confirm_qdrant_projection_v4($1,$2,$3)"
+    };
     let confirmed: bool =
-        sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v3($1,$2,$3)")
+        sqlx::query_scalar(confirm_sql)
             .bind(admission_id)
             .bind(&bytes)
             .bind(dispatch_execution_key)

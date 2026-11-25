@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["legacy-qdrant-v1"]
+default = []
 # Frozen Qdrant V1 parent is available only for explicitly deployed legacy
 # history replay. Generic DAG and PostgreSQL parents do not link this owner.
 legacy-qdrant-v1 = ["dep:qdrant_contracts"]

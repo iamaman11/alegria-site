@@ -14,7 +14,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use operation_protocol::{
     AdmittedArtifactV1, EffectChildInvocationV4, EffectChildResultV4, OwnerInvocationV1,
-    OwnerResultV1, PortId, OWNER_OPERATION_CHILD_TYPE_V1,
+    OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1, PortId,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 #[cfg(test)]
 use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
@@ -27,7 +28,8 @@ use postgres_store::truth_review_effect_v3::{
 };
 use postgres_store::vector_projection_owner_v1::{
     confirmed_pg_vector_projection_owner_result, execute_pg_vector_projection_owner_v1,
-    validate_pg_vector_projection_invocation_v1, PgVectorProjectionReceiptV1,
+    validate_pg_owner_v2_preflight, validate_pg_vector_projection_invocation_v1,
+    PgVectorProjectionReceiptV1,
     OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
 };
 use projection_contracts::VectorProjectionV1;
@@ -43,10 +45,13 @@ use temporalio_sdk::{
 };
 
 mod operator;
+mod operator_business_run_v1;
 mod operator_dag_governance;
+mod operator_dag_governance_v2;
 mod operator_owner_v1;
 mod operator_v4;
 mod operator_vector_projection_v1;
+mod operator_vector_projection_v2;
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
@@ -304,6 +309,32 @@ struct PgTruthReviewReconcileV5Workflow {
 struct AlegriaOwnerOperationV1Workflow {
     immutable_invocation: OwnerInvocationV1,
     admission_signal_received: bool,
+}
+
+/// Dedicated side-effect-free V2 parent preflight. It must decode every
+/// concrete PG-owned domain input, not merely acknowledge a generic envelope.
+/// No PostgreSQL, Qdrant or other network Activity is scheduled here.
+#[workflow]
+struct AlegriaOwnerValidateV1Workflow {
+    immutable_request: OwnerValidationRequestV1,
+}
+
+#[workflow_methods]
+impl AlegriaOwnerValidateV1Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, request: OwnerValidationRequestV1) -> Self {
+        Self { immutable_request: request }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerValidationResultV1> {
+        let request = ctx.state(|state| state.immutable_request.clone());
+        validate_pg_owner_v2_preflight(&request).map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })
+    }
 }
 
 #[workflow_methods]
@@ -628,6 +659,12 @@ async fn main() -> Result<()> {
             operator_vector_projection_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-issue-pg-projection-v2") {
+            let path = args.next().context("--operator-issue-pg-projection-v2 requires strict JSON child locator")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V2 PG owner operator arguments");
+            operator_vector_projection_v2::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-admit-dag-run-v1") {
             let path = args
                 .next()
@@ -637,6 +674,18 @@ async fn main() -> Result<()> {
                 "unexpected DAG governance operator arguments"
             );
             operator_dag_governance::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-admit-dag-run-v2") {
+            let path = args.next().context("--operator-admit-dag-run-v2 requires strict JSON parent locator")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V2 governance arguments");
+            operator_dag_governance_v2::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-issue-business-run-v1") {
+            let path = args.next().context("--operator-issue-business-run-v1 requires a private JSON business intent")?;
+            anyhow::ensure!(args.next().is_none(),"unexpected business-run root issuer arguments");
+            operator_business_run_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-revoke") {
@@ -710,6 +759,7 @@ async fn main() -> Result<()> {
     let mut generic_worker = if generic_enabled {
         let mut owner_options = WorkerOptions::new(PG_OWNER_TASK_QUEUE_V1).build();
         owner_options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
+        owner_options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?;
         Some(
             Worker::new(&runtime, client.clone(), owner_options)
                 .map_err(|error| anyhow::anyhow!("{error}"))?,

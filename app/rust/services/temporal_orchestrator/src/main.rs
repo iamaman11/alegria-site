@@ -36,7 +36,7 @@ const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
 const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
 const QDRANT_V1_LIVE_OPT_IN: &str = "ALLOW_QDRANT_DAG_ORCHESTRATOR_V1";
 const OPERATION_V1_LIVE_OPT_IN: &str = "ALLOW_OPERATION_DAG_V1";
-const OPERATION_V2_LIVE_OPT_IN: &str = "ALLOW_OPERATION_DAG_V2_PURE_ONLY";
+const OPERATION_V2_LIVE_OPT_IN: &str = "ALLOW_OPERATION_DAG_V2_WITH_OWNER_VALIDATION";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrchestratorMode {
@@ -46,7 +46,7 @@ enum OrchestratorMode {
     #[cfg(feature = "legacy-qdrant-v1")]
     QdrantV1,
     OperationDagV1,
-    OperationDagV2PureOnly,
+    OperationDagV2Validated,
 }
 
 impl OrchestratorMode {
@@ -58,7 +58,7 @@ impl OrchestratorMode {
             #[cfg(feature = "legacy-qdrant-v1")]
             Self::QdrantV1 => QDRANT_DAG_PARENT_QUEUE_V1,
             Self::OperationDagV1 => OPERATION_DAG_PARENT_QUEUE,
-            Self::OperationDagV2PureOnly => OPERATION_DAG_PARENT_QUEUE_V2,
+            Self::OperationDagV2Validated => OPERATION_DAG_PARENT_QUEUE_V2,
         }
     }
 }
@@ -120,7 +120,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
             }
         }
         (false, false, false, false, true, false) => OrchestratorMode::OperationDagV1,
-        (false, false, false, false, false, true) => OrchestratorMode::OperationDagV2PureOnly,
+        (false, false, false, false, false, true) => OrchestratorMode::OperationDagV2Validated,
         _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}, {OPERATION_V1_LIVE_OPT_IN}, {OPERATION_V2_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
@@ -186,7 +186,7 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
         #[cfg(feature = "legacy-qdrant-v1")]
         OrchestratorMode::QdrantV1 => workflow::register_qdrant_v1(&mut options)?,
         OrchestratorMode::OperationDagV1 => workflow::register_operation_dag_v1(&mut options)?,
-        OrchestratorMode::OperationDagV2PureOnly => {
+        OrchestratorMode::OperationDagV2Validated => {
             workflow::register_operation_dag_v2(&mut options)?
         }
     }
@@ -241,7 +241,7 @@ async fn main() -> Result<()> {
     let config = checked_live_config(|name| env::var(name).ok())?;
     if matches!(
         config.mode,
-        OrchestratorMode::OperationDagV1 | OrchestratorMode::OperationDagV2PureOnly
+        OrchestratorMode::OperationDagV1 | OrchestratorMode::OperationDagV2Validated
     ) {
         // A caller-controlled DAG never chooses a Workflow Type or queue.
         // Only an operator-provisioned, process-local immutable catalog can
@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn parallel_v2_is_a_distinct_pure_only_workflow_not_a_v1_history_reinterpretation() {
+    fn parallel_v2_has_owner_validation_gate_and_never_reinterprets_v1_history() {
         let mut settings = valid_env();
         settings.insert(LIVE_OPT_IN.into(), "false".into());
         settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "true".into());
@@ -431,7 +431,7 @@ mod tests {
             OPERATION_DAG_PARENT_QUEUE_V2.into(),
         );
         let cfg = checked_live_config(|name| settings.get(name).cloned()).unwrap();
-        assert_eq!(cfg.mode, OrchestratorMode::OperationDagV2PureOnly);
+        assert_eq!(cfg.mode, OrchestratorMode::OperationDagV2Validated);
         build_worker_options(&cfg).unwrap();
 
         settings.insert(OPERATION_V1_LIVE_OPT_IN.into(), "true".into());

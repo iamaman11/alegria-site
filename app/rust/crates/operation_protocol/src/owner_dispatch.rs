@@ -100,6 +100,23 @@ pub fn owner_child_workflow_id(dispatch_execution_key: &str) -> String {
     format!("alegria-owner-operation-v1-{dispatch_execution_key}")
 }
 
+/// Parallel V2 runs MUST never address the same Temporal Child ID as V1:
+/// checked dispatch keys are deliberately independent of parent version.
+pub fn owner_child_workflow_id_v2(dispatch_execution_key: &str) -> String {
+    format!("alegria-owner-operation-v2-{dispatch_execution_key}")
+}
+
+fn expected_owner_child_id_for_parent(
+    dispatch_execution_key: &str,
+    parent_workflow_id: &str,
+) -> String {
+    if parent_workflow_id.starts_with(OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2) {
+        owner_child_workflow_id_v2(dispatch_execution_key)
+    } else {
+        owner_child_workflow_id(dispatch_execution_key)
+    }
+}
+
 fn is_canonical_blake3_hash(value: &str) -> bool {
     value.len() == 64
         && value
@@ -252,7 +269,10 @@ impl OwnerInvocationV1 {
                     && proof.artifact_id == *artifact
                     && is_canonical_blake3_hash(&proof.dispatch_execution_key)
                     && proof.child_workflow_id
-                        == owner_child_workflow_id(&proof.dispatch_execution_key)
+                        == expected_owner_child_id_for_parent(
+                            &proof.dispatch_execution_key,
+                            &self.parent.workflow_id,
+                        )
                     && is_canonical_blake3_hash(&proof.result_hash)
                     && is_canonical_blake3_hash(&proof.receipt_hash)
                     && proof.payload_hash
@@ -328,7 +348,11 @@ impl OwnerInvocationV1 {
             || proof.artifact_id != *artifact_id
             || bound.artifact_id != *artifact_id
             || proof.dispatch_execution_key != upstream.execution_key
-            || proof.child_workflow_id != owner_child_workflow_id(&upstream.execution_key)
+            || proof.child_workflow_id
+                != expected_owner_child_id_for_parent(
+                    &upstream.execution_key,
+                    &self.parent.workflow_id,
+                )
         {
             return Err(invalid());
         }

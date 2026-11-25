@@ -6,8 +6,11 @@
 //! This process cannot execute Activities, access provider SDKs or publish.
 
 use operation_protocol::{
-    owner_child_workflow_id, EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1,
-    OwnerResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    owner_child_workflow_id, owner_child_workflow_id_v2,
+    owner_validation_child_workflow_id_v1, EffectChildInvocationV4, OperationDagRunV6,
+    OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1,
+    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
@@ -85,6 +88,21 @@ impl WorkflowDefinition for OwnerOperationV1Definition {
     }
 }
 
+/// Owner-specific ValidateOnly Child. It executes on the same independent
+/// owner queue but has NO Activity handler or external effects. The owner
+/// itself must parse its concrete domain command and available External data.
+#[derive(Clone, Copy)]
+struct OwnerValidationV1Definition;
+
+impl WorkflowDefinition for OwnerValidationV1Definition {
+    type Input = OwnerValidationRequestV1;
+    type Output = OwnerValidationResultV1;
+
+    fn name(&self) -> &str {
+        OWNER_VALIDATION_CHILD_TYPE_V1
+    }
+}
+
 fn workflow_failure(error: impl std::fmt::Display) -> WorkflowTermination {
     WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
         std::io::Error::other(error.to_string()),
@@ -145,8 +163,9 @@ struct AlegriaOperationDagV1Workflow {
 
 /// A NEW history-visible parent: unlike frozen serial V1, it may start a
 /// bounded wave of independent children before awaiting their typed results.
-/// Until independently operator-attested V2 effect owners exist, every
-/// registered operation must be pure; no PG/Qdrant external write can start.
+/// Effectful children remain blocked until all owner-local ValidateOnly
+/// children complete; independent operators must additionally attest V2
+/// Histories and issue exact owner SQL permissions before any Activity effect.
 #[workflow]
 struct AlegriaOperationDagV2Workflow {
     immutable_input: OperationDagRunV6,
@@ -241,10 +260,49 @@ impl AlegriaOperationDagV2Workflow {
             workflow_id: workflow_id.clone(),
             run_id: ctx.run_id().to_string(),
         };
-        // All plans, commands, schemas, routes and *pure-only* policy pass
-        // before the first Temporal child is started. A future effectful V2
-        // parent needs independent owner operator/governance protocol first.
-        let mut machine = OperationDagMachine::new_v2(&workflow_id, run, trusted_routes)
+        // Whole-plan structural preflight occurs BEFORE any child. The exact
+        // versioned owner-local business DTO validation below is a further
+        // required gate before the first potentially irreversible owner.
+        let mut machine = OperationDagMachine::new_v2_with_owner_validation(
+            &workflow_id,
+            run,
+            trusted_routes,
+        )
+        .map_err(workflow_failure)?;
+        let validations = machine
+            .v2_owner_validation_requests(parent.clone())
+            .map_err(workflow_failure)?;
+        let mut pending_validation_children = Vec::with_capacity(validations.len());
+        for (route, request) in validations {
+            if route.workflow_type != OWNER_OPERATION_CHILD_TYPE_V1 {
+                return Err(workflow_failure("untrusted owner validation Task Queue"));
+            }
+            let options = ChildWorkflowOptions::builder()
+                .workflow_id(owner_validation_child_workflow_id_v1(
+                    &parent,
+                    &request.plan_hash,
+                    &request.instance,
+                ))
+                .task_queue(route.task_queue)
+                .build();
+            let child = ctx
+                .start_child_workflow(OwnerValidationV1Definition, request, options)
+                .await
+                .map_err(workflow_failure)?;
+            pending_validation_children.push(child);
+        }
+        let mut validation_results = Vec::with_capacity(pending_validation_children.len());
+        for child in pending_validation_children {
+            let result: OwnerValidationResultV1 =
+                child.result().await.map_err(workflow_failure)?;
+            validation_results.push(result);
+        }
+        // Never schedule a single effect Child until every owner has returned
+        // a typed, exact request-hash validation receipt. The owner operators
+        // independently re-attest these SERVER completion Histories and may
+        // still deny the concrete effect or an invalid later Produced input.
+        machine
+            .complete_v2_owner_validation(parent.clone(), &validation_results)
             .map_err(workflow_failure)?;
         while machine.next_instance().is_some() {
             let ready = machine
@@ -261,7 +319,7 @@ impl AlegriaOperationDagV2Workflow {
                     return Err(workflow_failure("untrusted owner Workflow Type"));
                 }
                 let options = ChildWorkflowOptions::builder()
-                    .workflow_id(owner_child_workflow_id(
+                    .workflow_id(owner_child_workflow_id_v2(
                         &invocation.checked_dispatch.execution_key,
                     ))
                     .task_queue(route.task_queue)

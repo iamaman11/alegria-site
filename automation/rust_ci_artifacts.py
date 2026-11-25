@@ -36,6 +36,11 @@ KINDS = {
     "pg_app_harness": ("integration_pg_app_e2e_test",),
     "legacy": ("temporal_worker", "outbox_worker"),
     "v3": ("temporal_orchestrator", "temporal_pg_effects"),
+    # The historical Qdrant V1 parent is a separately built *feature-enabled*
+    # Temporal binary. Keep its exact-source executable physically distinct
+    # from the provider-free default generic DAG parent, while preserving the
+    # frozen Workflow Type and replay logic inside the legacy feature.
+    "legacy_qdrant_parent": ("temporal_orchestrator_legacy_qdrant_v1",),
     "qdrant_effects": ("temporal_qdrant_effects",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")
@@ -70,6 +75,12 @@ def source_binaries(kind: str, *, harness: Path | None = None) -> dict[str, Path
         return {KINDS[kind][0]: harness.resolve()}
     if harness is not None:
         raise ValueError("runtime bundles cannot disguise arbitrary harness executables")
+    if kind == "legacy_qdrant_parent":
+        # This kind is only packaged immediately after the explicit
+        # `cargo build --features legacy-qdrant-v1` command. Cargo always
+        # calls the produced executable `temporal_orchestrator`; the bundle
+        # gives it a distinct immutable, content-verified installed name.
+        return {KINDS[kind][0]: TARGET / "temporal_orchestrator"}
     return {name: TARGET / name for name in KINDS[kind]}
 
 

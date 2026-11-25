@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import unittest
 
 from report_ci_critical_path import (
-    COMPILER_STEPS, LIVE_E2E_STEPS, analyze, timestamp, to_summary,
+    COMPILER_STEPS, COMPILER_FINAL_STEPS, LIVE_E2E_STEPS, analyze, timestamp, to_summary,
 )
 
 
@@ -134,6 +134,14 @@ class CriticalPathEvidence(unittest.TestCase):
             job("rust-outbox-e2e (outbox)", "2026-11-25T14:03:20Z",
                 "2026-11-25T14:04:15Z", step=LIVE_E2E_STEPS["outbox"]),
         ]
+        v3 = next(row for row in complete if row["name"] == "rust-e2e-v3-binaries")
+        v3["steps"][0]["completed_at"] = "2026-11-25T14:02:20Z"
+        v3["steps"].append({
+            "name": COMPILER_FINAL_STEPS["rust-e2e-v3-binaries"],
+            "started_at": "2026-11-25T14:02:21Z",
+            "completed_at": "2026-11-25T14:02:33Z",
+            "conclusion": "success",
+        })
         report = analyze(RUN, complete, NOW, checkout_sha="f" * 40, expected_attempt=1)
         routes = {path["route"]: path for path in report["measured_paths"]}
         self.assertEqual(set(routes), {"manual-temporal", "native-qdrant", "outbox"})

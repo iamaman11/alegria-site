@@ -19,7 +19,7 @@ use super::operator_v4::{fetch_exact_history, first_started_payload};
 
 const MAX_GOVERNANCE_SECONDS: u32 = 3_600;
 
-fn read_private_operator_file(path: &Path, purpose: &str) -> Result<Vec<u8>> {
+pub(super) fn read_private_operator_file(path: &Path, purpose: &str) -> Result<Vec<u8>> {
     ensure!(path.is_absolute(), "{purpose} path must be absolute");
     ensure!(
         path.components().all(|component| !matches!(
@@ -79,12 +79,12 @@ pub(super) fn validate_local_temporal_endpoint(value: &str) -> Result<()> {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct GovernanceLocator {
-    canonical_run_id: Uuid,
-    context_key: String,
-    parent_workflow_id: String,
-    parent_workflow_run_id: String,
-    expires_in_seconds: u32,
+pub(super) struct GovernanceLocator {
+    pub(super) canonical_run_id: Uuid,
+    pub(super) context_key: String,
+    pub(super) parent_workflow_id: String,
+    pub(super) parent_workflow_run_id: String,
+    pub(super) expires_in_seconds: u32,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -94,7 +94,7 @@ struct OperatorInstalledCatalog {
     routes: Vec<PinnedOwnerRouteV1>,
 }
 
-fn read_operator_owned_catalog(path: &Path) -> Result<TrustedRouteCatalog> {
+pub(super) fn read_operator_owned_catalog(path: &Path) -> Result<TrustedRouteCatalog> {
     let bytes = read_private_operator_file(path, "installed governance catalog")?;
     let installed: OperatorInstalledCatalog = serde_json::from_slice(&bytes)
         .context("decode exact provider-neutral operator trust catalog")?;
@@ -132,6 +132,18 @@ async fn prove_real_generic_parent(
     tenant: &str,
     catalog: &TrustedRouteCatalog,
 ) -> Result<Vec<u8>> {
+    prove_real_generic_parent_for_type(
+        request, tenant, catalog, OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_QUEUE
+    ).await
+}
+
+pub(super) async fn prove_real_generic_parent_for_type(
+    request: &GovernanceLocator,
+    tenant: &str,
+    catalog: &TrustedRouteCatalog,
+    workflow_type: &str,
+    task_queue: &str,
+) -> Result<Vec<u8>> {
     let url = env::var("OPERATION_DAG_GOVERNANCE_TEMPORAL_URL")
         .context("governance issuer requires separately configured Temporal endpoint")?;
     let namespace = env::var("OPERATION_DAG_GOVERNANCE_TEMPORAL_NAMESPACE")
@@ -157,8 +169,8 @@ async fn prove_real_generic_parent(
     .await?;
     let bytes = first_started_payload(
         &history,
-        OPERATION_DAG_PARENT_TYPE,
-        OPERATION_DAG_PARENT_QUEUE,
+        workflow_type,
+        task_queue,
     )?;
     let run: OperationDagRunV6 = serde_json::from_slice(&bytes)
         .context("real Temporal parent History lacks typed OperationDagRunV6")?;

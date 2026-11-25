@@ -8,10 +8,14 @@ use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
-    operation_dag_parent_workflow_id,
+    owner_validation_child_workflow_id_v1, OwnerValidationRequestV1, OwnerValidationResultV1,
+    OWNER_VALIDATION_CHILD_TYPE_V1,
+    operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2,
     owner_dispatch::{
+        owner_child_workflow_id, owner_child_workflow_id_v2,
         OperationDagRunV6, OwnerInvocationV1, OwnerResultV1, OPERATION_DAG_PARENT_QUEUE,
-        OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
+        OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE,
+        OPERATION_DAG_PARENT_TYPE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
     },
     ArtifactBinding, Operation, PortId,
 };
@@ -30,7 +34,10 @@ use temporalio_client::{
 use temporalio_common::protos::temporal::api::history::v1::{history_event::Attributes, History};
 use uuid::Uuid;
 
-use super::operator::{exact_history, start_payload};
+use super::{
+    operator::{exact_history, start_payload},
+    owner_generic_v1::validate_qdrant_owner_pre_effect_v1,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,6 +49,42 @@ struct IssueRequestV3 {
     child_workflow_id: String,
     child_workflow_run_id: String,
     expires_in_seconds: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenericParentRevision {
+    V1,
+    V2,
+}
+
+impl GenericParentRevision {
+    fn for_request(request: &IssueRequestV3) -> Result<Self> {
+        if request.parent_workflow_id
+            == operation_dag_parent_workflow_id(&request.canonical_run_id.to_string())
+        {
+            Ok(Self::V1)
+        } else if request.parent_workflow_id
+            == operation_dag_parent_workflow_id_v2(&request.canonical_run_id.to_string())
+        {
+            Ok(Self::V2)
+        } else {
+            bail!("Qdrant operator rejects unknown or relabelled Temporal DAG parent identity")
+        }
+    }
+
+    fn temporal_type(self) -> &'static str {
+        match self {
+            Self::V1 => OPERATION_DAG_PARENT_TYPE,
+            Self::V2 => OPERATION_DAG_PARENT_TYPE_V2,
+        }
+    }
+
+    fn temporal_queue(self) -> &'static str {
+        match self {
+            Self::V1 => OPERATION_DAG_PARENT_QUEUE,
+            Self::V2 => OPERATION_DAG_PARENT_QUEUE_V2,
+        }
+    }
 }
 
 struct AttestedV3 {
@@ -79,6 +122,155 @@ fn exactly_one_payload<'a>(
         "{label} is not exactly one typed payload"
     );
     Ok(payloads.payloads[0].data.as_slice())
+}
+
+/// V2 never permits a Qdrant effect Child unless EVERY DAG owner finished
+/// its pure ValidateOnly Child before the first provider effect was even
+/// initiated. The Qdrant operator independently verifies its own validator's
+/// exact deployed contract/command and reciprocal server result.
+async fn attest_v2_validation_barrier(
+    client: &temporalio_client::Client,
+    namespace: &str,
+    parent: &History,
+    request: &IssueRequestV3,
+    effect: &AttestedV3,
+) -> Result<()> {
+    let run: OperationDagRunV6 = serde_json::from_slice(&effect.parent_bytes)?;
+    let first_effect_id = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs)) = &event.attributes {
+            if attrs.workflow_type.as_ref().map(|ty| ty.name.as_str())
+                == Some(OWNER_OPERATION_CHILD_TYPE_V1) { return Some(event.event_id); }
+        }
+        None
+    }).min().context("V2 parent server History contains no effect ChildInitiated")?;
+    let validations = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs)) = &event.attributes {
+            if attrs.workflow_type.as_ref().map(|ty| ty.name.as_str())
+                == Some(OWNER_VALIDATION_CHILD_TYPE_V1) {
+                return Some((event.event_id, attrs));
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(validations.len() == run.plan.nodes.len(),
+        "V2 parent did not initiate exactly one owner ValidateOnly Child per DAG operation");
+    let expected_validation_ids = run.plan.nodes.iter().map(|node| {
+        owner_validation_child_workflow_id_v1(
+            &effect.invocation.parent, &run.plan.hash, &node.instance)
+    }).collect::<std::collections::BTreeSet<_>>();
+    let actual_validation_ids = validations.iter().map(|(_, attrs)| {
+        attrs.workflow_id.clone()
+    }).collect::<std::collections::BTreeSet<_>>();
+    ensure!(expected_validation_ids.len() == run.plan.nodes.len()
+        && actual_validation_ids == expected_validation_ids,
+        "V2 validation wave has duplicate, missing or foreign owner ValidateChild IDs");
+    for (id, _) in &validations {
+        ensure!(*id < first_effect_id, "V2 validation Child began after first effect");
+        let completed = parent.events.iter().filter_map(|event| {
+            if let Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs)) = &event.attributes {
+                if attrs.initiated_event_id == *id { return Some(event.event_id); }
+            }
+            None
+        }).collect::<Vec<_>>();
+        ensure!(completed.len() == 1 && completed[0] < first_effect_id,
+            "V2 effect started before every owner validation completed");
+    }
+
+    let expected_id = owner_validation_child_workflow_id_v1(
+        &effect.invocation.parent,
+        &effect.invocation.checked_dispatch.plan_hash,
+        &effect.invocation.checked_dispatch.instance,
+    );
+    let matching = validations.iter()
+        .filter(|(_, attrs)| attrs.workflow_id == expected_id)
+        .collect::<Vec<_>>();
+    ensure!(matching.len() == 1,
+        "V2 parent omitted unique Qdrant ValidateOnly Child for this effect");
+    let (initiated_id, initiated) = matching[0];
+    ensure!(initiated.task_queue.as_ref().map(|queue| queue.name.as_str())
+        == Some(QDRANT_GENERIC_OWNER_QUEUE_V1),
+        "Qdrant ValidateOnly Child was routed to another owner queue");
+    let validation_started = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) = &event.attributes {
+            if attrs.initiated_event_id == *initiated_id {
+                return Some(attrs);
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(validation_started.len() == 1,
+        "Qdrant ValidateOnly Child lacks exact parent server ChildStarted identity");
+    let validation_identity = validation_started[0].workflow_execution.as_ref()
+        .context("Qdrant ValidateOnly parent ChildStarted omitted Run ID")?;
+    ensure!(validation_identity.workflow_id == expected_id && !validation_identity.run_id.is_empty(),
+        "Qdrant ValidateOnly parent ChildStarted identity is wrong");
+    let validation_history = exact_history(
+        client, namespace, &expected_id, &validation_identity.run_id).await?;
+    let input = start_payload(&validation_history,
+        OWNER_VALIDATION_CHILD_TYPE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1)?;
+    ensure!(exactly_one_payload(initiated.input.as_ref(), "Qdrant ValidateOnly initiation")?
+        == input.as_slice(),
+        "Qdrant ValidateOnly parent initiation differs from child start History");
+    let validated: OwnerValidationRequestV1 = serde_json::from_slice(&input)?;
+    validated.validate_shape()?;
+    ensure!(validated.parent == effect.invocation.parent
+        && validated.plan_hash == effect.invocation.checked_dispatch.plan_hash
+        && validated.instance == effect.invocation.checked_dispatch.instance
+        && validated.operation == effect.invocation.checked_dispatch.operation
+        && validated.owner == effect.invocation.checked_dispatch.owner
+        && validated.command_bytes == effect.invocation.command_bytes,
+        "Qdrant ValidateOnly command/owner/run does not match exact effect Child");
+    let node = run.plan.nodes.iter()
+        .find(|node| node.instance == validated.instance)
+        .context("Qdrant ValidateOnly node absent from immutable plan")?;
+    for (port, binding) in &node.inputs {
+        match binding {
+            ArtifactBinding::External { artifact } => {
+                ensure!(validated.external_inputs.get(port) == run.admitted.get(artifact)
+                    && !validated.produced_input_ports.contains(port),
+                    "ValidateOnly External artifact differs from canonical DAG admission");
+            }
+            ArtifactBinding::Produced { .. } => {
+                ensure!(validated.produced_input_ports.contains(port)
+                    && !validated.external_inputs.contains_key(port),
+                    "ValidateOnly Produced port incorrectly materialized before producer effect");
+            }
+        }
+    }
+    validate_qdrant_owner_pre_effect_v1(&validated)
+        .context("Qdrant own ValidateOnly Child didn't validate its actual typed command")?;
+    let completed = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs)) = &event.attributes {
+            if attrs.initiated_event_id == *initiated_id { return Some(attrs); }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(completed.len() == 1
+        && completed[0].workflow_execution.as_ref().is_some_and(|id|
+            id.workflow_id == validation_identity.workflow_id && id.run_id == validation_identity.run_id),
+        "Qdrant ValidateOnly completed another child run");
+    let result_bytes = exactly_one_payload(completed[0].result.as_ref(),
+        "Qdrant parent ValidateOnly completed")?;
+    let last_event = validation_history.events.last()
+        .context("Qdrant ValidateOnly child History empty")?;
+    let Some(Attributes::WorkflowExecutionCompletedEventAttributes(actual)) = &last_event.attributes else {
+        bail!("Qdrant ValidateOnly child never completed successfully");
+    };
+    ensure!(result_bytes == exactly_one_payload(actual.result.as_ref(),
+        "Qdrant ValidateOnly child completed")?,
+        "Qdrant ValidateOnly result differs between parent and child server Histories");
+    let accepted: OwnerValidationResultV1 = serde_json::from_slice(result_bytes)?;
+    accepted.verify_success(&validated)?;
+    let start = validation_history.events.first()
+        .context("Qdrant ValidateOnly child History has no server start")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(started)) = &start.attributes else {
+        bail!("Qdrant ValidateOnly child first event not server WorkflowStarted");
+    };
+    ensure!(started.parent_workflow_execution.as_ref().is_some_and(|id|
+        id.workflow_id == request.parent_workflow_id && id.run_id == request.parent_workflow_run_id)
+        && started.parent_initiated_event_id == *initiated_id,
+        "Qdrant ValidateOnly child has forged parent linkage");
+    Ok(())
 }
 
 async fn attest_produced_source_v1(
@@ -362,11 +554,8 @@ fn attest_pair_v3(
     request: &IssueRequestV3,
     trusted_build_id: &str,
 ) -> Result<AttestedV3> {
-    let parent_bytes = start_payload(
-        parent,
-        OPERATION_DAG_PARENT_TYPE,
-        OPERATION_DAG_PARENT_QUEUE,
-    )?;
+    let parent_revision = GenericParentRevision::for_request(request)?;
+    let parent_bytes = start_payload(parent, parent_revision.temporal_type(), parent_revision.temporal_queue())?;
     let child_bytes = start_payload(
         child,
         OWNER_OPERATION_CHILD_TYPE_V1,
@@ -401,10 +590,12 @@ fn attest_pair_v3(
             && invocation.checked_dispatch.owner == contract.owner
             && invocation.checked_dispatch.effects == contract.effects
             && request.child_workflow_id
-                == format!(
-                    "alegria-owner-operation-v1-{}",
-                    invocation.checked_dispatch.execution_key
-                ),
+                == match parent_revision {
+                    GenericParentRevision::V1 => owner_child_workflow_id(
+                        &invocation.checked_dispatch.execution_key),
+                    GenericParentRevision::V2 => owner_child_workflow_id_v2(
+                        &invocation.checked_dispatch.execution_key),
+                },
         "Qdrant child is not bound to exact checked run, owner and immutable parent"
     );
     let contract_hash = contract.fingerprint()?;
@@ -601,7 +792,10 @@ fn attest_pair_v3(
     })
 }
 
-async fn operator_pool_v3(requires_produced_certificate: bool) -> Result<PgPool> {
+async fn operator_pool_v3(
+    parent_revision: GenericParentRevision,
+    requires_produced_certificate: bool,
+) -> Result<PgPool> {
     ensure!(
         env::var("ALEGRIA_ENABLE_QDRANT_GENERIC_OPERATOR_V1").as_deref() == Ok("true"),
         "generic Qdrant operator requires distinct explicit opt-in"
@@ -637,6 +831,8 @@ async fn operator_pool_v3(requires_produced_certificate: bool) -> Result<PgPool>
     let role = sqlx::query(
         "SELECT r.rolsuper,r.rolbypassrls,pipeline.current_session_tenant_v1() AS tenant,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v3_admissions','INSERT') AS v3_insert,
+                COALESCE(has_table_privilege(session_user,
+                    to_regclass('pipeline.qdrant_projection_v4_admissions'),'INSERT'),FALSE) AS v4_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v2_admissions','INSERT') AS v2_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','INSERT') AS v1_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v2_admissions','SELECT') AS v2_read,
@@ -648,11 +844,19 @@ async fn operator_pool_v3(requires_produced_certificate: bool) -> Result<PgPool>
                 COALESCE(has_function_privilege(session_user,
                     to_regprocedure('pipeline.operation_artifact_receipt_matches_v1(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)'),
                     'EXECUTE'),FALSE) AS cross_owner_cert_verify,
+                COALESCE(has_function_privilege(session_user,
+                    to_regprocedure('pipeline.operation_artifact_receipt_matches_v2(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)'),
+                    'EXECUTE'),FALSE) AS cross_owner_cert_verify_v2,
                 has_table_privilege(session_user,'pipeline.operation_dag_run_governance_v1','INSERT') AS governance_issue,
                 has_function_privilege(session_user,
                     'pipeline.operation_dag_governance_matches_v1(uuid,text,text,text,text,text,text,boolean)','EXECUTE') AS governed,
                 has_function_privilege(session_user,
+                    'pipeline.operation_dag_governance_matches_v2(uuid,text,text,text,text,text,text,boolean)','EXECUTE') AS governed_v2,
+                has_function_privilege(session_user,
                     'pipeline.verify_qdrant_operator_resignal_v3(uuid,uuid,text,text,text,text,text,text,text,bigint,bytea,bytea,bytea,text)','EXECUTE') AS resignal_allowed,
+                COALESCE(has_function_privilege(session_user,
+                    to_regprocedure('pipeline.verify_qdrant_operator_resignal_v4(uuid,uuid,text,text,text,text,text,text,text,bigint,bytea,bytea,bytea,text)'),
+                    'EXECUTE'),FALSE) AS resignal_v4_allowed,
                 has_function_privilege(session_user,
                     'pipeline.begin_qdrant_projection_v3(uuid,bytea,text)','EXECUTE') AS v3_begin,
                 has_function_privilege(session_user,
@@ -670,18 +874,27 @@ async fn operator_pool_v3(requires_produced_certificate: bool) -> Result<PgPool>
     ensure!(
         !role.try_get::<bool, _>("rolsuper")?
             && !role.try_get::<bool, _>("rolbypassrls")?
-            && role.try_get::<bool, _>("v3_insert")?
+            && match parent_revision {
+                GenericParentRevision::V1 => role.try_get::<bool, _>("v3_insert")?,
+                GenericParentRevision::V2 => role.try_get::<bool, _>("v4_insert")?,
+            }
             && !role.try_get::<bool, _>("v2_insert")?
             && !role.try_get::<bool, _>("v1_insert")?
             && !role.try_get::<bool, _>("v2_read")?
             && !role.try_get::<bool, _>("v1_read")?
             && !role.try_get::<bool, _>("producer_source_read")?
             && !role.try_get::<bool, _>("cross_owner_receipt_read")?
-            && (!requires_produced_certificate
-                || role.try_get::<bool, _>("cross_owner_cert_verify")?)
+            && (!requires_produced_certificate || match parent_revision {
+                GenericParentRevision::V1 => role.try_get::<bool, _>("cross_owner_cert_verify")?,
+                GenericParentRevision::V2 => role.try_get::<bool, _>("cross_owner_cert_verify_v2")?,
+            })
             && !role.try_get::<bool, _>("governance_issue")?
-            && role.try_get::<bool, _>("governed")?
-            && role.try_get::<bool, _>("resignal_allowed")?
+            && match parent_revision {
+                GenericParentRevision::V1 => role.try_get::<bool, _>("governed")?
+                    && role.try_get::<bool, _>("resignal_allowed")?,
+                GenericParentRevision::V2 => role.try_get::<bool, _>("governed_v2")?
+                    && role.try_get::<bool, _>("resignal_v4_allowed")?,
+            }
             && !role.try_get::<bool, _>("v3_begin")?
             && !role.try_get::<bool, _>("v3_confirm")?
             && !role.try_get::<bool, _>("v2_begin")?
@@ -710,12 +923,17 @@ async fn attested_request(
         !request.admission_id.is_nil()
             && !request.canonical_run_id.is_nil()
             && (1..=300).contains(&request.expires_in_seconds)
-            && request.parent_workflow_id
-                == operation_dag_parent_workflow_id(&request.canonical_run_id.to_string())
             && Uuid::parse_str(&request.parent_workflow_run_id).is_ok()
             && Uuid::parse_str(&request.child_workflow_run_id).is_ok(),
         "invalid generic Qdrant operator run locators or TTL"
     );
+    let revision = GenericParentRevision::for_request(&request)?;
+    if revision == GenericParentRevision::V2 {
+        ensure!(
+            env::var("ALEGRIA_ENABLE_QDRANT_GENERIC_V2_OPERATOR_V1").as_deref() == Ok("true"),
+            "Qdrant V2-parent effect admission requires separate, explicit version opt-in"
+        );
+    }
     let temporal_url = env::var("QDRANT_GENERIC_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("QDRANT_GENERIC_OPERATOR_TEMPORAL_NAMESPACE")?;
     verify_trusted_temporal_url(&temporal_url)?;
@@ -750,6 +968,11 @@ async fn attested_request(
     )
     .await?;
     let mut attested = attest_pair_v3(&parent, &child, &request, &trusted_build_id)?;
+    if revision == GenericParentRevision::V2 {
+        attest_v2_validation_barrier(
+            &client, &namespace, &parent, &request, &attested,
+        ).await?;
+    }
     // The deterministic DAG parent only carries an *assertion* of Produced
     // provenance. A separate Qdrant operator fetches both upstream server
     // Histories and checks the PG-issued, immutable neutral certificate before
@@ -762,14 +985,20 @@ async fn attested_request(
     );
     // Legacy External-only routes must not acquire a new cross-owner
     // certificate capability. Require it exclusively for Produced dataflow.
-    let pool = operator_pool_v3(produced.is_some()).await?;
+    let pool = operator_pool_v3(revision, produced.is_some()).await?;
     if let Some(source) = &produced {
-        let verified: bool = sqlx::query_scalar(
+        let certificate_sql = if revision == GenericParentRevision::V2 {
+            "SELECT pipeline.operation_artifact_receipt_matches_v2(\
+                $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
+                $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
+                $13::text,$14::jsonb)"
+        } else {
             "SELECT pipeline.operation_artifact_receipt_matches_v1(\
                 $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
                 $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
-                $13::text,$14::jsonb)",
-        )
+                $13::text,$14::jsonb)"
+        };
+        let verified: bool = sqlx::query_scalar(certificate_sql)
         .bind(source.receipt_id)
         .bind(&attested.command.tenant_id)
         .bind(request.canonical_run_id)
@@ -819,6 +1048,7 @@ async fn signal_after_commit(
 
 pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     let (request, namespace, client, proof, pool) = attested_request(path).await?;
+    let revision = GenericParentRevision::for_request(&request)?;
     let command = &proof.command;
     let effect_command_bytes = if proof.invocation.checked_dispatch.operation
         == QdrantProducedVectorProjectionContractV1::contract().reference
@@ -832,7 +1062,10 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
         .execute(&mut *tx)
         .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-        .bind(format!("truth-run-status|{}", request.canonical_run_id))
+        .bind(match revision {
+            GenericParentRevision::V1 => format!("truth-run-status|{}", request.canonical_run_id),
+            GenericParentRevision::V2 => format!("operation-dag-business|{}", request.canonical_run_id),
+        })
         .execute(&mut *tx)
         .await?;
     // Lock in the same order as the governance issuer/revoker and the V3
@@ -845,33 +1078,38 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
         ))
         .execute(&mut *tx)
         .await?;
-    let canonical = sqlx::query(
-        "SELECT workflow_type,status,context_key,tenant_id
-           FROM pipeline.execution_runs WHERE run_id=$1",
-    )
+    let canonical_sql = match revision {
+        GenericParentRevision::V1 =>
+            "SELECT context_key,tenant_id FROM pipeline.execution_runs
+                WHERE run_id=$1 AND workflow_type='seo_site_build'
+                  AND status IN ('verifying','pending_hitl')",
+        GenericParentRevision::V2 =>
+            "SELECT context_key,tenant_id FROM pipeline.operation_dag_business_runs_v1
+                WHERE run_id=$1 AND revoked_at IS NULL AND expires_at>clock_timestamp()",
+    };
+    let canonical = sqlx::query(canonical_sql)
     .bind(request.canonical_run_id)
     .fetch_one(&mut *tx)
     .await
     .context("generic Qdrant canonical execution run disappeared before admission")?;
     ensure!(
-        canonical.try_get::<String, _>("workflow_type")? == "seo_site_build"
-            && matches!(
-                canonical.try_get::<String, _>("status")?.as_str(),
-                "verifying" | "pending_hitl"
-            )
-            && canonical.try_get::<String, _>("tenant_id")? == command.tenant_id
+        canonical.try_get::<String, _>("tenant_id")? == command.tenant_id
             && canonical.try_get::<String, _>("context_key")? == command.context_key,
-        "generic Qdrant canonical source run terminal or foreign"
+        "generic Qdrant canonical V1/V2 business run inactive or foreign"
     );
     // A generic DAG is a distinct Temporal execution from seo_site_build.
     // Only an independently operator-issued governance row, attested against
     // the actual generic parent server start History, can bind these runs.
     // No invented equality with the SEO Workflow Run ID is permissible.
-    let governed: bool = sqlx::query_scalar(
-        "SELECT pipeline.operation_dag_governance_matches_v1(
+    let governance_sql = match revision {
+        GenericParentRevision::V1 => "SELECT pipeline.operation_dag_governance_matches_v1(
             $1,$2,$3,$4,$5,$6,
             encode(public.digest($7::bytea,'sha256'),'hex'),TRUE)",
-    )
+        GenericParentRevision::V2 => "SELECT pipeline.operation_dag_governance_matches_v2(
+            $1,$2,$3,$4,$5,$6,
+            encode(public.digest($7::bytea,'sha256'),'hex'),TRUE)",
+    };
+    let governed: bool = sqlx::query_scalar(governance_sql)
     .bind(request.canonical_run_id)
     .bind(&command.tenant_id)
     .bind(&command.context_key)
@@ -891,12 +1129,18 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
         // transaction and advisory locks* that commits Qdrant admission. The
         // earlier check in attested_request is necessary for resignal but is
         // not by itself a sufficient effect-admission TOCTOU fence.
-        let verified: bool = sqlx::query_scalar(
+        let certificate_sql = if revision == GenericParentRevision::V2 {
+            "SELECT pipeline.operation_artifact_receipt_matches_v2(\
+                $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
+                $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
+                $13::text,$14::jsonb)"
+        } else {
             "SELECT pipeline.operation_artifact_receipt_matches_v1(\
                 $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
                 $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
-                $13::text,$14::jsonb)",
-        )
+                $13::text,$14::jsonb)"
+        };
+        let verified: bool = sqlx::query_scalar(certificate_sql)
         .bind(source.receipt_id)
         .bind(&command.tenant_id)
         .bind(request.canonical_run_id)
@@ -919,8 +1163,8 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
             "Produced source receipt revoked or mismatched before Qdrant effect admission"
         );
     }
-    let inserted = sqlx::query(
-        "INSERT INTO pipeline.qdrant_projection_v3_admissions
+    let insertion_sql = match revision {
+        GenericParentRevision::V1 => "INSERT INTO pipeline.qdrant_projection_v3_admissions
            (admission_id,run_id,tenant_id,context_key,keyword_key,
             parent_workflow_id,parent_workflow_run_id,child_workflow_id,child_workflow_run_id,
             child_started_event_id,operation_instance,plan_hash,dispatch_execution_key,
@@ -937,7 +1181,24 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
            AND pipeline.operation_dag_governance_matches_v1(
                $2,$3,$4,$6,$7,$12,
                encode(public.digest($14::bytea,'sha256'),'hex'),TRUE)",
-    )
+        GenericParentRevision::V2 => "INSERT INTO pipeline.qdrant_projection_v4_admissions
+           (admission_id,run_id,tenant_id,context_key,keyword_key,
+            parent_workflow_id,parent_workflow_run_id,child_workflow_id,child_workflow_run_id,
+            child_started_event_id,operation_instance,plan_hash,dispatch_execution_key,
+            parent_sha256,child_sha256,command_sha256,command_bytes,expires_at)
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+           encode(public.digest($14::bytea,'sha256'),'hex'),
+           encode(public.digest($15::bytea,'sha256'),'hex'),
+           encode(public.digest($16::bytea,'sha256'),'hex'),$16,
+           clock_timestamp()+($17::integer*interval '1 second')
+         FROM pipeline.operation_dag_business_runs_v1 b
+         WHERE b.run_id=$2 AND b.tenant_id=$3 AND b.context_key=$4
+           AND b.revoked_at IS NULL AND b.expires_at>clock_timestamp()
+           AND pipeline.operation_dag_governance_matches_v2(
+               $2,$3,$4,$6,$7,$12,
+               encode(public.digest($14::bytea,'sha256'),'hex'),TRUE)",
+    };
+    let inserted = sqlx::query(insertion_sql)
     .bind(request.admission_id)
     .bind(request.canonical_run_id)
     .bind(&command.tenant_id)
@@ -960,7 +1221,7 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     .context("generic Qdrant V3 admission insert denied by tenant/run/History fence")?;
     ensure!(
         inserted.rows_affected() == 1,
-        "V3 Qdrant must insert exactly one operator admission"
+        "V1/V2 Qdrant must insert exactly one versioned operator admission"
     );
     tx.commit().await?;
     signal_after_commit(client, &namespace, &request)
@@ -970,6 +1231,7 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
 
 pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
     let (request, namespace, client, proof, pool) = attested_request(path).await?;
+    let revision = GenericParentRevision::for_request(&request)?;
     let command = &proof.command;
     let effect_command_bytes = if proof.invocation.checked_dispatch.operation
         == QdrantProducedVectorProjectionContractV1::contract().reference
@@ -978,10 +1240,13 @@ pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
     } else {
         proof.invocation.command_bytes.clone()
     };
-    let matched: bool = sqlx::query_scalar(
-        "SELECT pipeline.verify_qdrant_operator_resignal_v3(
+    let resignal_sql = match revision {
+        GenericParentRevision::V1 => "SELECT pipeline.verify_qdrant_operator_resignal_v3(
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
-    )
+        GenericParentRevision::V2 => "SELECT pipeline.verify_qdrant_operator_resignal_v4(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+    };
+    let matched: bool = sqlx::query_scalar(resignal_sql)
     .bind(request.admission_id)
     .bind(request.canonical_run_id)
     .bind(&command.tenant_id)
@@ -1009,6 +1274,30 @@ pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_qdrant_operator_never_confuses_v1_and_v2_parent_identities() {
+        let run_id = Uuid::new_v4();
+        let mut request = IssueRequestV3 {
+            admission_id: Uuid::new_v4(),
+            canonical_run_id: run_id,
+            parent_workflow_id: operation_dag_parent_workflow_id(&run_id.to_string()),
+            parent_workflow_run_id: Uuid::new_v4().to_string(),
+            child_workflow_id: "unused-child".into(),
+            child_workflow_run_id: Uuid::new_v4().to_string(),
+            expires_in_seconds: 120,
+        };
+        assert_eq!(GenericParentRevision::for_request(&request).unwrap(),
+            GenericParentRevision::V1);
+        request.parent_workflow_id = operation_dag_parent_workflow_id_v2(&run_id.to_string());
+        assert_eq!(GenericParentRevision::for_request(&request).unwrap(),
+            GenericParentRevision::V2);
+        assert_eq!(GenericParentRevision::V2.temporal_type(), OPERATION_DAG_PARENT_TYPE_V2);
+        assert_eq!(GenericParentRevision::V2.temporal_queue(), OPERATION_DAG_PARENT_QUEUE_V2);
+        request.parent_workflow_id = operation_dag_parent_workflow_id(&run_id.to_string());
+        request.parent_workflow_id.push_str("-v2-forged");
+        assert!(GenericParentRevision::for_request(&request).is_err());
+    }
 
     #[test]
     fn generic_owner_operator_requires_exact_loopback_temporal_origin() {

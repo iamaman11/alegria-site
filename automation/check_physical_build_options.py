@@ -75,13 +75,13 @@ class ManifestEvidenceTests(unittest.TestCase):
         manifest = ab.cargo_manifest(self.paths[ab.ORCHESTRATOR])
         evidence = ab.generic_parent_default_feature_boundary(self.graph, manifest)
         # A neutral native parent can be built without provider contracts
-        # under --no-default-features, while legacy V1 E2E currently consumes
-        # the DEFAULT binary. Do not falsely label the default artifact as
-        # isolated until CI builds a separate legacy-featured executable.
+        # with default/no-default features, while legacy V1 E2E consumes a
+        # separately compiled feature-enabled executable and its exact-source
+        # artifact. This is still Cargo graph evidence, not observed rustc A/B.
         self.assertTrue(evidence["explicit_no_default_feature_isolation_declared"])
         self.assertFalse(evidence["legacy_qdrant_contracts_in_no_default_closure"])
-        if not evidence["default_legacy_dependency_gated"]:
-            self.assertTrue(evidence["legacy_qdrant_contracts_in_default_closure"])
+        self.assertTrue(evidence["default_legacy_dependency_gated"])
+        self.assertFalse(evidence["legacy_qdrant_contracts_in_default_closure"])
         self.assertEqual(evidence["confidence"],
                          "manifest_feature_boundary_only_not_physical_rustc")
         self.assertIn("qdrant_contracts", evidence["feature_union_workspace_closure_excluding_self"])

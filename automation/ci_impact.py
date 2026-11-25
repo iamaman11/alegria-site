@@ -332,9 +332,10 @@ QDRANT_V7_PARENT_CHILD_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_qdrant_effects",
     "--bin", "temporal_orchestrator", "--bin", "temporal_qdrant_effects",
+    "--features", "temporal_orchestrator/legacy-qdrant-v1",
 )
 QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES = {
-    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
     "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
 }
 MIXED_V6_NATIVE_OWNER_PREPARE = (
@@ -345,7 +346,10 @@ MIXED_V6_NATIVE_OWNER_PREPARE = (
     "--bin", "temporal_qdrant_effects",
 )
 MIXED_V6_NATIVE_RUNTIME_BINARIES = {
-    **QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
+    # Mixed V6/V7 exercises the provider-free generic parent, NEVER the
+    # historical Qdrant V1-featured executable used by the frozen V8 suite.
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
 }
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
@@ -569,6 +573,10 @@ SUITE_OWNERS = {
         "on_unknown_global_input": True,
         "prepare": QDRANT_V7_PARENT_CHILD_PREPARE,
         "runtime_binaries": QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
+        # Scoped developer feedback uses the same exact reviewed feature-
+        # gated source but Cargo names both outputs temporal_orchestrator.
+        # Stage the old V1 ABI under a separate immutable executable name.
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "qdrant_v8_native_temporal_history_operator_real_effect",
@@ -642,6 +650,45 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "mixed_v7_",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # NEW exact native V2 test: separate generic business authority, all
+    # owner ValidateOnly Children before first effect, real PG Produced ->
+    # Temporal -> Qdrant plus an independent parallel PG/Qdrant plan and
+    # malformed downstream command rejected with ZERO upstream effects.
+    # This is a mandatory dedicated shard, not a contract-only substitute.
+    "temporal_mixed_v2_native": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/db/migrations/20261125_0020_operation_dag_run_governance_v1.sql",
+            "app/db/migrations/20261125_0021_pg_vector_projection_v1.sql",
+            "app/db/migrations/20261125_0022_pg_owner_v2_admission.sql",
+            "app/db/migrations/20261125_0023_qdrant_owner_v2_admission.sql",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/projection_contracts/",
+            "app/rust/crates/qdrant_contracts/",
+            "app/rust/crates/qdrant_effects_core/",
+            "app/rust/crates/postgres_store/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_qdrant_effects/",
+        ),
+        "lock_crates": {"operation_protocol", "projection_contracts", "qdrant_contracts",
+                        "qdrant_effects_core", "postgres_store", "seo_application",
+                        "temporal_orchestrator", "temporal_pg_effects",
+                        "temporal_qdrant_effects"},
+        "on_unknown_global_input": True,
+        "prepare": MIXED_V6_NATIVE_OWNER_PREPARE,
+        "runtime_binaries": MIXED_V6_NATIVE_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_v2_native_",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -1159,6 +1206,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
         ("temporal_mixed_v6_contract", "mixed_v6_", 3),
         ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+        ("temporal_mixed_v2_native", "mixed_v2_native_", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

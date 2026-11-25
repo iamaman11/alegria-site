@@ -22,11 +22,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use operation_protocol::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
     operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2, owner_child_workflow_id,
-    owner_content_hash, AdmittedArtifactV1, ArtifactBinding, ArtifactId, BoundArtifactV1,
+    owner_child_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding, ArtifactId,
+    BoundArtifactV1,
     CheckedDispatch, DispatchAttempt, OperationDagRunV6, OperationInstanceId, OwnerInvocationV1,
     OwnerResultV1, PinnedOwnerRouteV1, PlanError, PlanHash, PortId, ProducedArtifactEvidenceV1,
     RouteCatalogError, TemporalExecutionIdentityV4, TrustedRouteCatalog, ValidatedPlan,
-    OWNER_INVOCATION_SCHEMA_REVISION,
+    OwnerValidationRequestV1, OwnerValidationResultV1, OWNER_INVOCATION_SCHEMA_REVISION,
+    OWNER_VALIDATION_SCHEMA_REVISION_V1,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -60,6 +62,8 @@ pub enum GenericDagError {
     Incomplete,
     #[error("parallel V2 parent cannot execute unadmitted effectful operation {0:?}")]
     UnadmittedV2Effect(OperationInstanceId),
+    #[error("V2 owner-local ValidateOnly preflight did not complete before effect dispatch")]
+    OwnerPreflightPending,
 }
 
 /// Immutable, typed final result of one fully completed operation DAG.
@@ -86,6 +90,9 @@ pub struct OperationDagMachine {
     produced_evidence: BTreeMap<ArtifactId, ProducedArtifactEvidenceV1>,
     owner_results: BTreeMap<OperationInstanceId, OwnerResultV1>,
     cursor: usize,
+    v2: bool,
+    validation_required: bool,
+    validation_completed: bool,
 }
 
 impl OperationDagMachine {
@@ -95,7 +102,7 @@ impl OperationDagMachine {
         routes: TrustedRouteCatalog,
     ) -> Result<Self, GenericDagError> {
         let expected_id = operation_dag_parent_workflow_id(&run.plan.scope.run_id);
-        Self::new_for_identity(temporal_workflow_id, expected_id, run, routes)
+        Self::new_for_identity(temporal_workflow_id, expected_id, run, routes, false)
     }
 
     /// A completely different Temporal parent Workflow Type/ID is required
@@ -107,7 +114,7 @@ impl OperationDagMachine {
         routes: TrustedRouteCatalog,
     ) -> Result<Self, GenericDagError> {
         let expected_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
-        let machine = Self::new_for_identity(temporal_workflow_id, expected_id, run, routes)?;
+        let machine = Self::new_for_identity(temporal_workflow_id, expected_id, run, routes, true)?;
         for node in &machine.run.plan.nodes {
             let contract = machine
                 .routes
@@ -124,11 +131,28 @@ impl OperationDagMachine {
         Ok(machine)
     }
 
+    /// Effectful V2 is **not** authorized by this constructor. It builds a
+    /// strictly preflight-gated machine: the caller must first receive and
+    /// verify one pure typed ValidateOnly Child result from EVERY owner, and
+    /// each external effect still needs independently attested V2 admission.
+    pub fn new_v2_with_owner_validation(
+        temporal_workflow_id: &str,
+        run: OperationDagRunV6,
+        routes: TrustedRouteCatalog,
+    ) -> Result<Self, GenericDagError> {
+        let expected_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        let mut machine =
+            Self::new_for_identity(temporal_workflow_id, expected_id, run, routes, true)?;
+        machine.validation_required = true;
+        Ok(machine)
+    }
+
     fn new_for_identity(
         temporal_workflow_id: &str,
         expected_id: String,
         run: OperationDagRunV6,
         routes: TrustedRouteCatalog,
+        v2: bool,
     ) -> Result<Self, GenericDagError> {
         if temporal_workflow_id != expected_id {
             return Err(GenericDagError::TemporalRunIdMismatch);
@@ -216,6 +240,9 @@ impl OperationDagMachine {
             produced_evidence: BTreeMap::new(),
             owner_results: BTreeMap::new(),
             cursor: 0,
+            v2,
+            validation_required: false,
+            validation_completed: false,
         })
     }
 
@@ -223,10 +250,111 @@ impl OperationDagMachine {
         self.validated.execution_order().get(self.cursor)
     }
 
+    /// V2-only owner-local pre-effect validation requests for *every* node.
+    /// Exact External bytes are available; Produced sources are represented
+    /// solely by their already checked versioned port schemas. Owners MUST
+    /// validate concrete Produced bytes again before any downstream effect.
+    pub fn v2_owner_validation_requests(
+        &self,
+        parent: TemporalExecutionIdentityV4,
+    ) -> Result<Vec<(PinnedOwnerRouteV1, OwnerValidationRequestV1)>, GenericDagError> {
+        if !self.v2 || self.cursor != 0 {
+            return Err(GenericDagError::Incomplete);
+        }
+        let mut requests = Vec::with_capacity(self.run.plan.nodes.len());
+        for instance in self.validated.execution_order() {
+            let node = self
+                .run
+                .plan
+                .nodes
+                .iter()
+                .find(|node| &node.instance == instance)
+                .expect("validated plan node");
+            let contract = self
+                .routes
+                .catalog()
+                .contract(&node.operation)
+                .expect("validated owner contract");
+            let command = self
+                .run
+                .owner_commands
+                .get(instance)
+                .expect("validated owner command");
+            let route = self
+                .routes
+                .trusted_snapshot_for([&node.operation])?
+                .into_iter()
+                .next()
+                .expect("validated trusted owner route");
+            let mut external_inputs = BTreeMap::new();
+            let mut produced_input_ports = BTreeSet::new();
+            for (port, source) in &node.inputs {
+                match source {
+                    ArtifactBinding::External { artifact } => {
+                        external_inputs.insert(
+                            port.clone(),
+                            self.run.admitted.get(artifact).expect("validated External").clone(),
+                        );
+                    }
+                    ArtifactBinding::Produced { .. } => {
+                        produced_input_ports.insert(port.clone());
+                    }
+                }
+            }
+            let request = OwnerValidationRequestV1 {
+                schema_revision: OWNER_VALIDATION_SCHEMA_REVISION_V1,
+                parent: parent.clone(),
+                plan_hash: self.run.plan.hash.clone(),
+                scope: self.run.plan.scope.clone(),
+                instance: instance.clone(),
+                operation: node.operation.clone(),
+                owner: contract.owner.clone(),
+                contract_hash: contract.fingerprint()?,
+                command_bytes: command.command_bytes.clone(),
+                input_schemas: contract.inputs.clone(),
+                external_inputs,
+                produced_input_ports,
+            };
+            request
+                .validate_shape()
+                .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+            requests.push((route, request));
+        }
+        Ok(requests)
+    }
+
+    /// Called only once after the parent observed all typed owner validation
+    /// Child completions. No proof can be supplied by the untrusted run plan.
+    pub fn complete_v2_owner_validation(
+        &mut self,
+        parent: TemporalExecutionIdentityV4,
+        results: &[OwnerValidationResultV1],
+    ) -> Result<(), GenericDagError> {
+        if !self.v2
+            || !self.validation_required
+            || self.validation_completed
+            || self.cursor != 0
+            || results.len() != self.run.plan.nodes.len()
+        {
+            return Err(GenericDagError::OwnerPreflightPending);
+        }
+        let requests = self.v2_owner_validation_requests(parent)?;
+        for ((_, request), result) in requests.iter().zip(results) {
+            result
+                .verify_success(request)
+                .map_err(|_| GenericDagError::OwnerPreflightPending)?;
+        }
+        self.validation_completed = true;
+        Ok(())
+    }
+
     fn checked_input_for(
         &self,
         instance: &OperationInstanceId,
     ) -> Result<(CheckedDispatch, BTreeMap<PortId, BoundArtifactV1>), GenericDagError> {
+        if self.validation_required && !self.validation_completed {
+            return Err(GenericDagError::OwnerPreflightPending);
+        }
         let node = self
             .run
             .plan
@@ -284,7 +412,11 @@ impl OperationDagMachine {
                         || proof.artifact_id != *artifact
                         || proof.dispatch_execution_key != earlier.dispatch_execution_key
                         || proof.child_workflow_id
-                            != owner_child_workflow_id(&proof.dispatch_execution_key)
+                            != if self.v2 {
+                                owner_child_workflow_id_v2(&proof.dispatch_execution_key)
+                            } else {
+                                owner_child_workflow_id(&proof.dispatch_execution_key)
+                            }
                         || proof.result_hash != actual_result_hash
                         || proof.receipt_hash != owner_content_hash(&earlier.receipt_bytes)
                         || proof.payload_hash != owner_content_hash(&actual.payload)
@@ -448,7 +580,11 @@ impl OperationDagMachine {
                     port: port.clone(),
                     artifact_id: id.clone(),
                     dispatch_execution_key: checked.execution_key.clone(),
-                    child_workflow_id: owner_child_workflow_id(&checked.execution_key),
+                    child_workflow_id: if self.v2 {
+                        owner_child_workflow_id_v2(&checked.execution_key)
+                    } else {
+                        owner_child_workflow_id(&checked.execution_key)
+                    },
                     result_hash: result_hash.clone(),
                     receipt_hash: receipt_hash.clone(),
                     payload_hash: owner_content_hash(&value.payload),
@@ -796,9 +932,38 @@ mod tests {
         };
         let id = operation_dag_parent_workflow_id_v2("run-a");
         assert!(matches!(
-            OperationDagMachine::new_v2(&id, run, routes),
+            OperationDagMachine::new_v2(&id, run.clone(), routes.clone()),
             Err(GenericDagError::UnadmittedV2Effect(rejected)) if rejected == instance
         ));
+        let mut gated = OperationDagMachine::new_v2_with_owner_validation(&id, run, routes)
+            .expect("V2 admits an effectful contract only behind owner validation gate");
+        let mut actual_parent = parent();
+        actual_parent.workflow_id = id;
+        assert!(matches!(
+            gated.next_independent_owner_invocations(actual_parent.clone()),
+            Err(GenericDagError::OwnerPreflightPending)
+        ));
+        let requests = gated
+            .v2_owner_validation_requests(actual_parent.clone())
+            .unwrap();
+        let accepted = requests
+            .iter()
+            .map(|(_, request)| OwnerValidationResultV1::accepted(request).unwrap())
+            .collect::<Vec<_>>();
+        let mut forged = accepted.clone();
+        forged[0].request_hash = "forged-validation-receipt".into();
+        assert!(matches!(
+            gated.complete_v2_owner_validation(actual_parent.clone(), &forged),
+            Err(GenericDagError::OwnerPreflightPending)
+        ));
+        gated
+            .complete_v2_owner_validation(actual_parent.clone(), &accepted)
+            .unwrap();
+        let ready = gated
+            .next_independent_owner_invocations(actual_parent)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].1.checked_dispatch.instance, instance);
     }
 
     #[test]

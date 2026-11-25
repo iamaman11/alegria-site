@@ -324,8 +324,23 @@ def check() -> None:
         assert opt_in_probe not in architecture, "physical experiments must not stretch the required PR gate"
     assert "- physical-study" in workflow
     assert "expected_source_sha:" in workflow and "physical_study:" in workflow
+    # The expensive default-vs-legacy rustc A/B remains a manual exact-green
+    # SHA experiment in the ONE workflow, never a mandatory PR job.
+    assert "- dag-parent-ab" in workflow
+    assert "python3 automation/measure_generic_temporal_rebuild.py" in optional_pg_ab
+    assert "automation/reports/generic_parent_rebuild_ab.json" in optional_pg_ab
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
-    assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3_job
+    assert "cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects" in v3_job
+    # Distinct exact-source artifacts for provider-free default vs historical
+    # Qdrant V1: the legacy compile must happen only AFTER generic packaging.
+    assert v3_job.index('--kind v3 --source-sha "$GITHUB_SHA"') < v3_job.index(
+        'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1'
+    ) < v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"')
+    assert "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1" in v3_job
+    assert v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"') < v3_job.index(
+        "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1"
+    ) < v3_job.index("uses: actions/upload-artifact@v7")
+    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in v3_job
     assert "cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects" in qdrant_effects_job
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_effects_job
     for block in (truth_compiler, pg_compiler, outbox_compiler, legacy_job, v3_job, qdrant_effects_job):
@@ -389,7 +404,9 @@ def check() -> None:
     assert 'name: rust-e2e-v3-${{ github.sha }}' in qdrant_runner
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in qdrant_runner
-    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 3
+    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in qdrant_runner
+    assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 4
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]
