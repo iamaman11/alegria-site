@@ -73,8 +73,7 @@ pub struct PureDagReceipt {
 // on the actual JSON history payloads, not just on raw source text. A future
 // worker/activity protocol may support larger artifacts outside History.
 pub use operation_protocol::{
-    DAG_MAX_INPUT_BYTES as PURE_DAG_MAX_INPUT_BYTES,
-    DAG_MAX_NODES as PURE_DAG_MAX_NODES,
+    DAG_MAX_INPUT_BYTES as PURE_DAG_MAX_INPUT_BYTES, DAG_MAX_NODES as PURE_DAG_MAX_NODES,
     DAG_MAX_RESULT_BYTES as PURE_DAG_MAX_RESULT_BYTES,
 };
 

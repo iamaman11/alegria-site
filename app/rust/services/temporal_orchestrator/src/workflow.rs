@@ -5,15 +5,14 @@
 //! `seo_application` execution semantics for replay compatibility.
 //! This process cannot execute Activities, access provider SDKs or publish.
 
+#[cfg(feature = "legacy-workflows")]
+use operation_protocol::EffectChildInvocationV4;
 use operation_protocol::{
     owner_child_workflow_id, owner_child_workflow_id_v2, owner_validation_child_workflow_id_v1,
     OperationDagMachine, OperationDagReceiptV1, OperationDagRunV6, OwnerInvocationV1,
-    OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1,
-    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
-    OWNER_VALIDATION_CHILD_TYPE_V1,
+    OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1, TemporalExecutionIdentityV4,
+    TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
-#[cfg(feature = "legacy-workflows")]
-use operation_protocol::EffectChildInvocationV4;
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,

@@ -2,8 +2,7 @@
 //! No DB, provider SDK, Activity registration, poller or network connection.
 
 use super::{
-    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
-    PURE_DAG_ORCHESTRATOR_QUEUE,
+    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
 };
 use std::path::Path;
 

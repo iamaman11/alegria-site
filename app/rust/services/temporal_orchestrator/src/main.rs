@@ -515,7 +515,10 @@ mod tests {
             settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
             settings.insert(legacy_flag.into(), "true".into());
             let denied = checked_live_config(|name| settings.get(name).cloned()).unwrap_err();
-            assert!(denied.to_string().contains("legacy-workflows"), "{legacy_flag}");
+            assert!(
+                denied.to_string().contains("legacy-workflows"),
+                "{legacy_flag}"
+            );
         }
     }
 }
