@@ -22,8 +22,9 @@ mod tests {
         time::Duration,
     };
     use temporalio_client::{
-        UntypedSignal, UntypedWorkflow, WorkflowExecutionInfo, WorkflowFetchHistoryOptions,
-        WorkflowGetResultOptions, WorkflowSignalOptions, WorkflowStartOptions,
+        UntypedSignal, UntypedWorkflow, WorkflowDescribeOptions, WorkflowExecutionInfo,
+        WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowSignalOptions,
+        WorkflowStartOptions,
     };
     use temporalio_common::{
         data_converters::{PayloadConverter, RawValue},
