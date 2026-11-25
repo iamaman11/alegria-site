@@ -185,7 +185,7 @@ pub async fn execute_pg_vector_projection_owner_v1(
     .bind(actual_child_workflow_run_id)
     .bind(&command.operation_instance)
     .bind(&command.plan_hash)
-    .bind(&fingerprint)
+    .bind(fingerprint.as_str())
     .bind(&invocation.checked_dispatch.execution_key)
     .bind(&invocation.parent.workflow_id)
     .bind(&invocation.parent.run_id)
