@@ -5404,6 +5404,7 @@ name = "temporal_qdrant_effects"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "futures-util",
  "operation_protocol",
  "qdrant_effects_core",

@@ -159,13 +159,17 @@ mod tests {
     fn versioned_qdrant_command_rejects_untrusted_shape() {
         let mut command = QdrantKeywordProjectionCommandV1 {
             schema_revision: 1,
-            admission_id: Uuid::nil(),
+            admission_id: Uuid::new_v4(),
             tenant_id: "tenant-a".into(),
             context_key: "ES:tourist:BY".into(),
             keyword_key: "consular fee".into(),
             vector: vec![0.1; VECTOR_DIMENSIONS],
         };
         command.validate().unwrap();
+        let admission_id = command.admission_id;
+        command.admission_id = Uuid::nil();
+        assert!(command.validate().is_err());
+        command.admission_id = admission_id;
         command.vector[7] = f32::NAN;
         assert!(command.validate().is_err());
         command.vector[7] = 0.1;

@@ -23,11 +23,12 @@ class ManifestEvidenceTests(unittest.TestCase):
 
     def test_current_native_worker_cannot_isolate_providers_inside_same_package(self) -> None:
         report = ab.manifest_report(self.graph, self.paths)
-        # Delivery/Voyage, SQL-only ports and Graph capability are four new
-        # physical packages. Native Temporal still reaches all four through
-        # its composition wrapper; a module refactor is not owner isolation.
-        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 23)
-        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 23)
+        # Delivery/Voyage, SQL-only ports, Graph capability and the new
+        # Qdrant effect core extend the physical dependency graph. Native
+        # Temporal still reaches provider owners via its composition wrapper;
+        # a module refactor is not owner isolation.
+        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 24)
+        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 24)
         self.assertIn("projection_delivery", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertIn("voyage_api", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertIn("pg_runtime_ports", report["A_native_monolith"]["workspace_closure_excluding_self"])
@@ -62,8 +63,9 @@ class ManifestEvidenceTests(unittest.TestCase):
         self.assertEqual(set(actual["vector_qdrant"]), {
             "vector_qdrant", "integration_data_fixtures", "integration_harness",
             "integration_outbox_e2e", "integration_pg_app_e2e", "integration_qdrant_e2e",
-            "integration_temporal_e2e", "outbox_worker", "projection_delivery",
-            "runtime_composition", "temporal_worker",
+            "integration_qdrant_temporal_e2e", "integration_temporal_e2e", "outbox_worker",
+            "projection_delivery", "qdrant_effects_core", "runtime_composition",
+            "temporal_qdrant_effects", "temporal_worker",
         })
         self.assertEqual(set(actual["postgres_store"]), {
             "postgres_store", "cli_tools", "infrastructure", "integration_harness",
