@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 42)
+                             for _, _, _, count in rows), 45)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -188,7 +188,7 @@ class ImpactFixtures(unittest.TestCase):
         })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
-    def test_pg_v3_package_is_physically_isolated_from_monolith_and_owns_six_tests_once(self) -> None:
+    def test_pg_v3_package_is_physically_isolated_and_owns_nine_pg_tests_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
         owner_root = root / "app/rust/crates/integration_pg_v3_e2e"
         manifest = tomllib.loads((owner_root / "Cargo.toml").read_text(encoding="utf-8"))
@@ -211,6 +211,7 @@ class ImpactFixtures(unittest.TestCase):
             "pg_v3_truth_review_effect_tests.rs",
             "pg_v3_admission_race_tests.rs",
             "pg_v3_operator_cli_tests.rs",
+            "pg_v5_ordered_children_tests.rs",
             "pg_v3_temporal_cross_queue_tests.rs",
         )
         physical_test_names: list[str] = []
@@ -219,10 +220,14 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(new_lib.count(f'include!("tests/{filename}")'), 1)
                 self.assertNotIn(filename, monolith)
                 source = (owner_root / "src/tests" / filename).read_text(encoding="utf-8")
-                self.assertEqual(source.count("#[tokio::test]"),
-                                 2 if filename in {"pg_v3_truth_review_effect_tests.rs",
-                                                   "pg_v3_admission_race_tests.rs",
-                                                   "pg_v3_operator_cli_tests.rs"} else 1)
+                expected = {
+                    "pg_v3_truth_review_effect_tests.rs": 2,
+                    "pg_v3_admission_race_tests.rs": 3,
+                    "pg_v3_operator_cli_tests.rs": 3,
+                    "pg_v5_ordered_children_tests.rs": 1,
+                    "pg_v3_temporal_cross_queue_tests.rs": 1,
+                }[filename]
+                self.assertEqual(source.count("#[tokio::test]"), expected)
                 declared = re.findall(r"#\[tokio::test\]\s+(?:#\[[^\]]+\]\s+)*async fn ([a-z0-9_]+)\s*\(", source)
                 self.assertEqual(len(declared), source.count("#[tokio::test]"))
                 physical_test_names.extend(declared)
@@ -230,13 +235,16 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("pg_v3_raw_source_concurrent_update_is_fenced", physical_test_names)
         self.assertIn("pg_v3_native_operator_cli_least_privilege_issue_revoke", physical_test_names)
         self.assertIn("pg_v3_v4_live_parent_child_operator_attestation_effect_receipt", physical_test_names)
-        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 6)
+        self.assertIn("pg_v3_v5_live_ordered_two_child_operator_attestations", physical_test_names)
+        self.assertIn("pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect", physical_test_names)
+        self.assertIn("pg_v3_hitl_concurrent_mutation_fenced", physical_test_names)
+        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 9)
         self.assertEqual(len([name for name in physical_test_names if name.startswith("temporal_effect_v3_")]), 1)
-        self.assertEqual(len(physical_test_names), 7, "a new PG E2E must be assigned to a mandatory filter")
+        self.assertEqual(len(physical_test_names), 10, "a new PG E2E must be assigned to a mandatory filter")
         self.assertEqual(set(SUITE_OWNERS["pg_effect_v3"]["paths"]) & {
             "app/rust/crates/integration_harness/src/lib.rs",
         }, set())
-        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 6))
+        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 9))
         self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
         self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
@@ -259,7 +267,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
                       E2E_SHARD_RUNS["pg_app_delivery"])
 
-    def test_full_real_e2e_shards_cover_all_43_existing_tests_without_duplicate_filters(self) -> None:
+    def test_full_real_e2e_shards_cover_all_46_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -275,7 +283,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
         self.assertTrue(all(shards[shard] for shard in shards))
         self.assertEqual(
-            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 35
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 38
         )
         self.assertEqual(
             sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 8

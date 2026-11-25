@@ -103,5 +103,6 @@ mod tests {
     include!("tests/pg_v3_truth_review_effect_tests.rs");
     include!("tests/pg_v3_admission_race_tests.rs");
     include!("tests/pg_v3_operator_cli_tests.rs");
+    include!("tests/pg_v5_ordered_children_tests.rs");
     include!("tests/pg_v3_temporal_cross_queue_tests.rs");
 }

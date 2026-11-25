@@ -246,6 +246,10 @@ def check() -> None:
     assert "--compiler-owners > automation/reports/physical_owner_ab.json" in optional_pg_ab
     assert "--compiler > automation/reports/physical_coldwarm_ab.json" in optional_pg_ab
     assert "RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py" in optional_pg_ab
+    assert "python3 automation/summarize_owner_build_evidence.py" in optional_pg_ab
+    assert '--study "$STUDY" --source-sha "$STUDY_SOURCE_SHA" --report "$report"' in optional_pg_ab
+    assert "name: Publish exact four-owner metrics as auditable text" in optional_pg_ab
+    assert "inputs.physical_study || 'shared'" in workflow.split("jobs:\n", 1)[0]
     assert "--output automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
     assert "--report automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
     assert "if: always()" in optional_pg_ab
@@ -354,20 +358,27 @@ def check() -> None:
     assert "uses: actions/cache@v4" not in verify
     assert "uses: actions/cache/save" not in verify
     assert verify.count("uses: actions/cache/restore@v4") == 1
-    assert verify.count("run: cargo test --workspace --locked") == 1
+    assert verify.count("cargo test --workspace --locked") == 1
     assert "cargo test --workspace --locked" not in architecture
+    for step_name in ("Fast source contracts and policy", "Fast integration and consistency checks"):
+        step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+        assert "if: needs.impact.outputs.cargo_scope != 'full'" in step
     for step_name in (
         "Install native Rust test build dependencies",
         "Pin Rust for full workspace tests",
         "Reuse trusted main Rust compiler objects for full workspace tests",
         "Authorize full-scope Rust cache reads",
         "Restore shared Cargo dependency sources without a second writer",
-        "Full workspace Rust unit tests (parallel with real E2E)",
+        "Full workspace Rust tests and both mandatory policy phases",
     ):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         assert "        if: needs.impact.outputs.cargo_scope == 'full'" in step, step_name
-        if step_name == "Full workspace Rust unit tests (parallel with real E2E)":
+        if step_name == "Full workspace Rust tests and both mandatory policy phases":
             assert "          RUSTC_WRAPPER: sccache\n" in step
+            assert "bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts" in step
+            assert "bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration" in step
+            assert 'wait "$policy_pid"' in step and 'wait "$rust_pid"' in step
+            assert 'if [[ "$policy_result" -ne 0 || "$rust_result" -ne 0 ]]' in step
     for step_name in ("Full-scope compiler cache statistics", "Classify full-scope Rust cache failures"):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         assert "        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'" in step, step_name
@@ -375,7 +386,10 @@ def check() -> None:
     assert "python3 automation/check_module_boundaries.py" not in architecture
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):
         invocation = f"bash automation/measure_ci_phase.sh {phase} bash automation/ci_fast_verify.sh {phase}"
-        assert workflow.count(invocation) == 1, phase
+        # Full-scope source policies overlap the Rust workspace compilation;
+        # narrow scopes retain their own source-only steps. Both paths execute
+        # the *same* phase once, never skip it.
+        assert workflow.count(invocation) == (1 if phase == "product" else 2), phase
         assert invocation in owner
         assert f"  {phase})" in fast
         assert f'"$PHASE" == "{phase}"' in legacy

@@ -2443,6 +2443,17 @@ DECLARE
     v_open BIGINT;
     v_receipt_key TEXT;
 BEGIN
+    -- SQL SECURITY DEFINER bypasses the caller's RLS. Never let a worker
+    -- consume another tenant's receipt, including an old replay that returns
+    -- before the receipt INSERT trigger. A custom GUC is not an identity.
+    IF pipeline.current_session_tenant_v1() IS DISTINCT FROM p_tenant_id
+       AND NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_roles r
+           WHERE r.rolname = session_user AND r.rolsuper
+       ) THEN
+        RAISE EXCEPTION 'authenticated PostgreSQL LOGIN cannot consume this tenant effect'
+            USING ERRCODE = 'AV001';
+    END IF;
     IF p_admission_revision NOT IN (3,4)
        OR length(p_execution_key) <> 64
        OR length(p_plan_hash) <> 64
@@ -2782,6 +2793,74 @@ CREATE TRIGGER guard_verified_truth_step_context
 BEFORE INSERT OR UPDATE OR DELETE ON pipeline.step_executions
 FOR EACH ROW EXECUTE FUNCTION pipeline.guard_verified_truth_step_context();
 
+-- Migration 20261125_0006: a concurrent operator may independently edit
+-- Truth HITL queue rows. Serialize those edits with the admitted Activity's
+-- source/HITL/receipt transaction using the same per-context advisory key.
+CREATE OR REPLACE FUNCTION site.guard_truth_review_hitl_context()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog AS $$
+DECLARE
+    previous_scope TEXT;
+    next_scope TEXT;
+BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+        RAISE EXCEPTION 'Truth HITL history cannot be truncated around admitted effects'
+            USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP <> 'INSERT' AND OLD.task_type = 'truth_candidate_review' THEN
+        previous_scope := OLD.scope_signature;
+    END IF;
+    IF TG_OP <> 'DELETE' AND NEW.task_type = 'truth_candidate_review' THEN
+        next_scope := NEW.scope_signature;
+    END IF;
+    IF previous_scope IS NULL AND next_scope IS NULL THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+    END IF;
+    IF (previous_scope IS NOT NULL AND length(btrim(previous_scope)) = 0)
+        OR (next_scope IS NOT NULL AND length(btrim(next_scope)) = 0) THEN
+        RAISE EXCEPTION 'Truth HITL context must be nonempty'
+            USING ERRCODE = '23514';
+    END IF;
+    IF previous_scope IS NULL THEN previous_scope := next_scope; END IF;
+    IF next_scope IS NULL THEN next_scope := previous_scope; END IF;
+    IF previous_scope <= next_scope THEN
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || previous_scope, 0)) THEN
+            RAISE EXCEPTION 'Truth HITL context is locked by admitted effect'
+                USING ERRCODE = '55P03';
+        END IF;
+        IF previous_scope <> next_scope AND NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || next_scope, 0)) THEN
+            RAISE EXCEPTION 'destination Truth HITL context is locked'
+                USING ERRCODE = '55P03';
+        END IF;
+    ELSE
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || next_scope, 0)) THEN
+            RAISE EXCEPTION 'destination Truth HITL context is locked'
+                USING ERRCODE = '55P03';
+        END IF;
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || previous_scope, 0)) THEN
+            RAISE EXCEPTION 'Truth HITL context is locked by admitted effect'
+                USING ERRCODE = '55P03';
+        END IF;
+    END IF;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS guard_truth_review_hitl_context ON site.seo_hitl_tasks;
+CREATE TRIGGER guard_truth_review_hitl_context
+BEFORE INSERT OR UPDATE OR DELETE ON site.seo_hitl_tasks
+FOR EACH ROW EXECUTE FUNCTION site.guard_truth_review_hitl_context();
+DROP TRIGGER IF EXISTS guard_truth_review_hitl_truncate ON site.seo_hitl_tasks;
+CREATE TRIGGER guard_truth_review_hitl_truncate
+BEFORE TRUNCATE ON site.seo_hitl_tasks
+FOR EACH STATEMENT EXECUTE FUNCTION site.guard_truth_review_hitl_context();
+
 CREATE TABLE IF NOT EXISTS pipeline.step_attempts (
     step_attempt_id    BIGSERIAL PRIMARY KEY,
     step_execution_id  BIGINT      NOT NULL REFERENCES pipeline.step_executions(step_execution_id) ON DELETE CASCADE,
@@ -2980,5 +3059,252 @@ CREATE UNIQUE INDEX IF NOT EXISTS manual_llm_one_pending_editorial_owner
     (run_id, (input_json #>> '{request,editorial_brief,page_node_key}'))
     WHERE operation = 'editorial_draft' AND job_status = 'pending'
       AND nullif(input_json #>> '{request,editorial_brief,page_node_key}', '') IS NOT NULL;
+
+
+CREATE TABLE IF NOT EXISTS pipeline.tenant_context_ownership (
+    context_key TEXT PRIMARY KEY REFERENCES kb.visa_contexts(context_key) ON UPDATE CASCADE,
+    tenant_id TEXT NOT NULL CHECK (tenant_id = btrim(tenant_id) AND length(tenant_id) > 0),
+    provisioned_by NAME NOT NULL DEFAULT session_user,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_context_ownership_tenant
+    ON pipeline.tenant_context_ownership(tenant_id, context_key);
+
+CREATE TABLE IF NOT EXISTS pipeline.tenant_role_ownership (
+    role_name NAME PRIMARY KEY,
+    tenant_id TEXT NOT NULL CHECK (tenant_id = btrim(tenant_id) AND length(tenant_id) > 0),
+    provisioned_by NAME NOT NULL DEFAULT session_user,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_tenant_role_ownership_tenant
+    ON pipeline.tenant_role_ownership(tenant_id, role_name);
+
+REVOKE ALL ON pipeline.tenant_context_ownership, pipeline.tenant_role_ownership FROM PUBLIC;
+
+-- These administrative bindings cannot silently drift underneath a previously
+-- issued admission. Tenant transfers need a separately reviewed drain/rebind.
+CREATE OR REPLACE FUNCTION pipeline.deny_tenant_ownership_mutation_v1()
+RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    RAISE EXCEPTION 'immutable tenant ownership; drain and use an explicit transfer protocol'
+        USING ERRCODE = 'AV001';
+END;
+$$;
+DROP TRIGGER IF EXISTS tenant_context_owner_immutable ON pipeline.tenant_context_ownership;
+CREATE TRIGGER tenant_context_owner_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON pipeline.tenant_context_ownership
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_ownership_mutation_v1();
+DROP TRIGGER IF EXISTS tenant_role_owner_immutable ON pipeline.tenant_role_ownership;
+CREATE TRIGGER tenant_role_owner_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON pipeline.tenant_role_ownership
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_ownership_mutation_v1();
+
+ALTER TABLE pipeline.execution_runs ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE raw.pages ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE raw.sections ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE extracted.rule_candidates ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE site.seo_hitl_tasks ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+ALTER TABLE pipeline.pg_effect_v3_receipts ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_execution_runs_tenant_context
+    ON pipeline.execution_runs(tenant_id, context_key, run_id);
+CREATE INDEX IF NOT EXISTS idx_raw_pages_tenant ON raw.pages(tenant_id, id);
+CREATE INDEX IF NOT EXISTS idx_raw_sections_tenant ON raw.sections(tenant_id, page_id);
+CREATE INDEX IF NOT EXISTS idx_rule_candidates_tenant_context
+    ON extracted.rule_candidates(tenant_id, context_key);
+CREATE INDEX IF NOT EXISTS idx_hitl_tasks_tenant_scope
+    ON site.seo_hitl_tasks(tenant_id, scope_signature);
+
+-- A custom GUC is never tenant authority: anybody can SET one. Only the
+-- authenticated PostgreSQL LOGIN (session_user), bound by DBA-owned rows, is.
+CREATE OR REPLACE FUNCTION pipeline.current_session_tenant_v1()
+RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT ownership.tenant_id
+    FROM pipeline.tenant_role_ownership ownership
+    WHERE ownership.role_name = session_user::name;
+$$;
+REVOKE ALL ON FUNCTION pipeline.current_session_tenant_v1() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pipeline.current_session_tenant_v1() TO PUBLIC;
+
+-- RLS is active for non-owner roles. No permissive NULL/legacy policy exists.
+-- Superuser/table-owner bypass remains a distinct production acceptance NO-GO
+-- until each legacy database role is replaced with tenant-scoped credentials.
+ALTER TABLE pipeline.execution_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw.pages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE raw.sections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE extracted.rule_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site.seo_hitl_tasks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline.pg_effect_v3_admissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline.pg_effect_v3_receipts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS execution_runs_tenant_v1 ON pipeline.execution_runs;
+CREATE POLICY execution_runs_tenant_v1 ON pipeline.execution_runs
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS raw_pages_tenant_v1 ON raw.pages;
+CREATE POLICY raw_pages_tenant_v1 ON raw.pages
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS raw_sections_tenant_v1 ON raw.sections;
+CREATE POLICY raw_sections_tenant_v1 ON raw.sections
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS extracted_candidates_tenant_v1 ON extracted.rule_candidates;
+CREATE POLICY extracted_candidates_tenant_v1 ON extracted.rule_candidates
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS site_hitl_tasks_tenant_v1 ON site.seo_hitl_tasks;
+CREATE POLICY site_hitl_tasks_tenant_v1 ON site.seo_hitl_tasks
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS pg_effect_admissions_tenant_v1 ON pipeline.pg_effect_v3_admissions;
+CREATE POLICY pg_effect_admissions_tenant_v1 ON pipeline.pg_effect_v3_admissions
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS pg_effect_receipts_tenant_v1 ON pipeline.pg_effect_v3_receipts;
+CREATE POLICY pg_effect_receipts_tenant_v1 ON pipeline.pg_effect_v3_receipts
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+
+-- Recheck every evidence edge under the same Truth context lock as the
+-- admitted capability. A single NULL or cross-tenant source quarantines the
+-- entire future effect, including older unassigned HITL tasks.
+CREATE OR REPLACE FUNCTION pipeline.tenant_truth_scope_ready_v1(
+    p_tenant TEXT, p_context TEXT, p_run UUID
+) RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM pipeline.tenant_context_ownership o
+        JOIN pipeline.execution_runs er ON er.context_key = o.context_key
+        WHERE o.context_key = p_context AND o.tenant_id = p_tenant
+          AND er.run_id = p_run AND er.tenant_id = o.tenant_id
+    )
+    AND EXISTS (
+        SELECT 1 FROM extracted.rule_candidates c
+        WHERE c.context_key = p_context AND c.tenant_id = p_tenant
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM extracted.rule_candidates c
+        LEFT JOIN raw.sections source_section ON source_section.id = c.raw_section_id
+        LEFT JOIN raw.pages source_page ON source_page.id = source_section.page_id
+        LEFT JOIN raw.sections evidence_section ON evidence_section.id = c.evidence_section_id
+        LEFT JOIN raw.pages evidence_page ON evidence_page.id = evidence_section.page_id
+        WHERE c.context_key = p_context AND (
+            c.tenant_id IS DISTINCT FROM p_tenant
+            OR source_section.tenant_id IS DISTINCT FROM p_tenant
+            OR source_page.tenant_id IS DISTINCT FROM p_tenant
+            OR evidence_section.tenant_id IS DISTINCT FROM p_tenant
+            OR evidence_page.tenant_id IS DISTINCT FROM p_tenant
+        )
+    )
+    AND NOT EXISTS (
+        SELECT 1 FROM site.seo_hitl_tasks t
+        WHERE t.task_type = 'truth_candidate_review' AND t.scope_signature = p_context
+          AND t.tenant_id IS DISTINCT FROM p_tenant
+    );
+$$;
+REVOKE ALL ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) TO PUBLIC;
+
+CREATE OR REPLACE FUNCTION pipeline.enforce_pg_effect_admission_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE is_admin BOOLEAN;
+BEGIN
+    SELECT rol.rolsuper INTO is_admin FROM pg_catalog.pg_roles rol
+        WHERE rol.rolname = session_user;
+    IF NOT coalesce(is_admin, false) AND
+       pipeline.current_session_tenant_v1() IS DISTINCT FROM NEW.tenant_id THEN
+        RAISE EXCEPTION 'authenticated operator PostgreSQL LOGIN is not authorized for tenant'
+            USING ERRCODE = 'AV001';
+    END IF;
+    IF NOT pipeline.tenant_truth_scope_ready_v1(NEW.tenant_id, NEW.context_key, NEW.run_id) THEN
+        RAISE EXCEPTION 'canonical tenant run/source ownership not provisioned or stale'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS pg_effect_admission_tenant_v1 ON pipeline.pg_effect_v3_admissions;
+CREATE TRIGGER pg_effect_admission_tenant_v1 BEFORE INSERT ON pipeline.pg_effect_v3_admissions
+FOR EACH ROW EXECUTE FUNCTION pipeline.enforce_pg_effect_admission_tenant_v1();
+
+-- Internal Truth-review task creation derives tenant only from the DBA-owned
+-- canonical context binding, never the command's request/GUC. Existing
+-- historical rows remain NULL until an explicit audited backfill.
+CREATE OR REPLACE FUNCTION site.bind_new_truth_review_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE owner_tenant TEXT;
+BEGIN
+    IF NEW.task_type = 'truth_candidate_review' THEN
+        SELECT tenant_id INTO owner_tenant FROM pipeline.tenant_context_ownership
+            WHERE context_key = NEW.scope_signature;
+        IF owner_tenant IS NOT NULL THEN
+            IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> owner_tenant THEN
+                RAISE EXCEPTION 'truth review task tenant differs from canonical context'
+                    USING ERRCODE = 'AV001';
+            END IF;
+            NEW.tenant_id := owner_tenant;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS bind_new_truth_review_tenant_v1 ON site.seo_hitl_tasks;
+CREATE TRIGGER bind_new_truth_review_tenant_v1 BEFORE INSERT ON site.seo_hitl_tasks
+FOR EACH ROW EXECUTE FUNCTION site.bind_new_truth_review_tenant_v1();
+
+-- The pre-receipt SQL capability may have created HITL tasks. A denied tenant
+-- receipt INSERT raises in that same transaction, rolling back ALL effects.
+CREATE OR REPLACE FUNCTION pipeline.enforce_pg_effect_receipt_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE scope RECORD;
+BEGIN
+    SELECT tenant_id, context_key, run_id INTO scope
+    FROM pipeline.pg_effect_v3_admissions a
+    WHERE a.admission_id = NEW.admission_id AND a.context_key = NEW.context_key
+      AND a.run_id = NEW.run_id;
+    IF NOT FOUND OR NOT pipeline.tenant_truth_scope_ready_v1(
+        scope.tenant_id, scope.context_key, scope.run_id) THEN
+        RAISE EXCEPTION 'receipt refuses unowned or drifted canonical tenant evidence'
+            USING ERRCODE = 'AV001';
+    END IF;
+    IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> scope.tenant_id THEN
+        RAISE EXCEPTION 'receipt tenant mismatch' USING ERRCODE = 'AV001';
+    END IF;
+    NEW.tenant_id := scope.tenant_id;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS pg_effect_receipt_tenant_v1 ON pipeline.pg_effect_v3_receipts;
+CREATE TRIGGER pg_effect_receipt_tenant_v1 BEFORE INSERT ON pipeline.pg_effect_v3_receipts
+FOR EACH ROW EXECUTE FUNCTION pipeline.enforce_pg_effect_receipt_tenant_v1();
+
+-- A tenant transfer cannot race an admission issued from the formerly
+-- unowned canonical run. Writer-first and operator-first are serialized by
+-- the same run key. No automatic tenant transfer is permitted post-admission.
+CREATE OR REPLACE FUNCTION pipeline.guard_execution_run_tenant_transfer_v1()
+RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF NEW.tenant_id IS NOT DISTINCT FROM OLD.tenant_id THEN
+        RETURN NEW;
+    END IF;
+    IF NOT pg_try_advisory_xact_lock(
+        hashtextextended('truth-run-status|' || OLD.run_id::text, 0)) THEN
+        RAISE EXCEPTION 'tenant transfer blocked by active admitted Truth operation'
+            USING ERRCODE = '55P03';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pipeline.pg_effect_v3_admissions a
+               WHERE a.run_id = OLD.run_id) THEN
+        RAISE EXCEPTION 'admitted canonical run cannot change tenant owner'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS guard_execution_run_tenant_transfer_v1
+    ON pipeline.execution_runs;
+CREATE TRIGGER guard_execution_run_tenant_transfer_v1
+BEFORE UPDATE OF tenant_id ON pipeline.execution_runs
+FOR EACH ROW EXECUTE FUNCTION pipeline.guard_execution_run_tenant_transfer_v1();
 
 COMMIT;

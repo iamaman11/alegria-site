@@ -4,7 +4,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use temporal_gateway::{EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE};
+use temporal_gateway::{
+    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+    PURE_DAG_ORCHESTRATOR_QUEUE,
+};
 use temporalio_client::WorkflowHistory;
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 
@@ -14,7 +17,9 @@ pub(crate) async fn replay_history(path: &Path) -> Result<()> {
 
 pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result<()> {
     anyhow::ensure!(
-        queue == PURE_DAG_ORCHESTRATOR_QUEUE || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+        queue == PURE_DAG_ORCHESTRATOR_QUEUE
+            || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
+            || queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
         "unknown replay Task Queue"
     );
     let bytes = std::fs::read(path)
@@ -25,7 +30,9 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
         .namespace("default".to_string())
         .task_queue(queue.to_string())
         .build();
-    if queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE {
+    if queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE {
+        super::workflow::register_for_replay_v5(&mut options)?;
+    } else if queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE {
         super::workflow::register_for_replay_v4(&mut options)?;
     } else {
         super::workflow::register_for_replay(&mut options)?;

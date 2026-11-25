@@ -35,12 +35,12 @@ pub struct MixedDagReceiptV4 {
 }
 
 pub struct MixedDagMachineV4 {
-    run: EffectDagRunV1,
-    prepared: PreparedDagV1,
+    pub(super) run: EffectDagRunV1,
+    pub(super) prepared: PreparedDagV1,
     registry: OperationRegistry,
     artifacts: BTreeMap<ArtifactId, ArtifactValue>,
     receipts: BTreeMap<OperationInstanceId, ReconcileTruthReviewsReceipt>,
-    cursor: usize,
+    pub(super) cursor: usize,
 }
 
 impl MixedDagMachineV4 {
@@ -182,13 +182,25 @@ impl MixedDagMachineV4 {
         &self,
         parent: TemporalExecutionIdentityV4,
     ) -> Result<EffectChildInvocationV4, EffectDagError> {
-        let (bound_input, command, checked) = match self.next_step() {
-            Some(PreparedDagStepV1::Owner {
+        let step = self.next_step().ok_or(EffectDagError::WrongStepKind)?;
+        self.owner_invocation_at_v5(step, parent)
+    }
+
+    /// Exact frozen V4 invocation encoder reused by V5 for a later owner in
+    /// an independently scheduled batch. It still hashes its actual external
+    /// bytes; this helper neither admits nor executes an owner effect.
+    pub(super) fn owner_invocation_at_v5(
+        &self,
+        step: &PreparedDagStepV1,
+        parent: TemporalExecutionIdentityV4,
+    ) -> Result<EffectChildInvocationV4, EffectDagError> {
+        let (bound_input, command, checked) = match step {
+            PreparedDagStepV1::Owner {
                 bound_input,
                 command,
                 checked,
                 ..
-            }) => (bound_input, command, checked),
+            } => (bound_input, command, checked),
             _ => return Err(EffectDagError::WrongStepKind),
         };
         let value = self

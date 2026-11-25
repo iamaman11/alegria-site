@@ -124,6 +124,17 @@ pub enum EffectDagError {
     InvalidInvocation(String),
     #[error("mixed DAG PG effect receipt mismatches exact dispatch for {0:?}")]
     InvalidOwnerReceipt(OperationInstanceId),
+    #[error("V5 DAG reuses an owner admission UUID across operation instances at {0:?}")]
+    DuplicateOwnerAdmission(OperationInstanceId),
+    #[error("V5 DAG has multiple Truth context keys in one canonical run at {0:?}")]
+    MixedOwnerContext(OperationInstanceId),
+    #[error("V5 DAG has unordered owners {first:?} and {second:?} mutating the same canonical Truth scope")]
+    ConflictingOwnerWriteScope {
+        first: OperationInstanceId,
+        second: OperationInstanceId,
+    },
+    #[error("V5 does not admit parallel owner batches without a separately proven compensation policy")]
+    ParallelOwnerBatchNotSupported,
     #[error("mixed DAG was completed before all operations finished")]
     IncompleteDag,
     #[error("V4 owner input artifact {0:?} is not canonical typed Truth-review scope JSON")]

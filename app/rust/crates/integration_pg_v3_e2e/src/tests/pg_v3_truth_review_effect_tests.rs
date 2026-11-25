@@ -37,6 +37,16 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
     .execute(pool)
     .await
     .expect("seed exact scoped Truth context");
+    // Explicit disposable DBA provisioning: no tenant is inferred from a
+    // caller-supplied Temporal scope or from legacy NULL source rows.
+    sqlx::query(
+        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id)
+         VALUES ($1,'ci-pg-v3-tenant')",
+    )
+    .bind(&context_key)
+    .execute(pool)
+    .await
+    .expect("provision authoritative fixture tenant context");
     sqlx::query(
         "INSERT INTO kb.sources
          (source_key, source_type, source_label, trust_level)
@@ -47,8 +57,8 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
     .await
     .expect("seed Truth evidence source");
     let page_id: i64 = sqlx::query_scalar(
-        "INSERT INTO raw.pages (url, domain, dtype)
-         VALUES ($1, $2, 'government') RETURNING id",
+        "INSERT INTO raw.pages (url, domain, dtype, tenant_id)
+         VALUES ($1, $2, 'government', 'ci-pg-v3-tenant') RETURNING id",
     )
     .bind(&source_key)
     .bind(format!("ci-{marker}.example.gov"))
@@ -56,8 +66,8 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
     .await
     .expect("seed immutable source page");
     let section_id: i64 = sqlx::query_scalar(
-        "INSERT INTO raw.sections (page_id, content_md, content_hash)
-         VALUES ($1, $2, 'pg-v3-immutable-source') RETURNING id",
+        "INSERT INTO raw.sections (page_id, content_md, content_hash, tenant_id)
+         VALUES ($1, $2, 'pg-v3-immutable-source', 'ci-pg-v3-tenant') RETURNING id",
     )
     .bind(page_id)
     .bind(raw_text)
@@ -69,10 +79,10 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
          (rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
           raw_mention, confidence, evidence_section_id, evidence_quote,
           span_start, span_end, source_key, source_snapshot_hash,
-          llm_provider, llm_model, prompt_version, epistemic_status)
+          llm_provider, llm_model, prompt_version, epistemic_status, tenant_id)
          VALUES ($1, $2, $3, 'FEE_ITEM', 'consular_fee', '35 EUR', 0.98,
                  $3, $4, 0, $5, $6, 'pg-v3-immutable-source',
-                 'chat_manual', 'gpt-6', 'ci_truth@1', 'needs_hitl')",
+                 'chat_manual', 'gpt-6', 'ci_truth@1', 'needs_hitl', 'ci-pg-v3-tenant')",
     )
     .bind(&candidate_id)
     .bind(&context_key)
@@ -85,8 +95,8 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
     .expect("seed actual unresolved Truth candidate");
     sqlx::query(
         "INSERT INTO pipeline.execution_runs
-         (run_id, workflow_run_id, workflow_type, context_key, status)
-         VALUES ($1, $2, 'seo_site_build', $3, 'verifying')",
+         (run_id, workflow_run_id, workflow_type, context_key, status, tenant_id)
+         VALUES ($1, $2, 'seo_site_build', $3, 'verifying', 'ci-pg-v3-tenant')",
     )
     .bind(run_id)
     .bind(&workflow_run_id)
@@ -205,7 +215,9 @@ async fn pg_v3_unprivileged_effect_identity(postgres: &PostgresHarness) -> (sqlx
          GRANT EXECUTE ON FUNCTION pipeline.consume_pg_truth_review_v1(
              UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,SMALLINT,
              TEXT,TEXT,TEXT,BYTEA,BYTEA,BYTEA
-         ) TO {role};"
+         ) TO {role};
+         INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
+         VALUES ('{role}', 'ci-pg-v3-tenant');"
     );
     // Identifiers are composed solely of a fixed prefix and generated UUID
     // hex, and this PostgreSQL lives inside this test's disposable container.

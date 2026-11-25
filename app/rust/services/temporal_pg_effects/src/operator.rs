@@ -51,12 +51,30 @@ impl IssueRequest {
     }
 }
 
-/// Only an issuer-configuration check. There is no independently attested
-/// tenant on the canonical run or source tables, so this is NOT PostgreSQL RLS.
+/// The environment tenant is only a secondary scope check. Actual authority
+/// comes from a DBA-provisioned PostgreSQL LOGIN→tenant binding plus canonical
+/// run/context/source tenant rows; no self-asserted plan or GUC grants access.
 fn enforce_operator_tenant(configured: &str, claimed: &str) -> Result<()> {
     ensure!(
         !configured.is_empty() && configured.trim() == configured && configured == claimed,
         "operator tenant policy does not match typed command scope"
+    );
+    Ok(())
+}
+
+pub(crate) async fn enforce_authoritative_pg_tenant(
+    pool: &PgPool,
+    tenant: &str,
+) -> Result<()> {
+    let actual: Option<String> = sqlx::query_scalar(
+        "SELECT pipeline.current_session_tenant_v1()",
+    )
+    .fetch_one(pool)
+    .await
+    .context("resolve tenant from authenticated PostgreSQL session LOGIN")?;
+    ensure!(
+        actual.as_deref() == Some(tenant),
+        "operator PostgreSQL LOGIN is not provisioned for requested tenant"
     );
     Ok(())
 }
@@ -214,6 +232,7 @@ async fn issue_with_pool(
 ) -> Result<OperatorResult> {
     request.validate()?;
     enforce_operator_tenant(operator_tenant, &request.command.scope.tenant_id)?;
+    enforce_authoritative_pg_tenant(pool, operator_tenant).await?;
     ensure!(
         assert_operator_role(pool).await? == role,
         "operator connection identity changed after role verification"
@@ -316,6 +335,18 @@ async fn issue_with_pool(
         .fetch_one(&mut *tx)
         .await
         .context("compute authoritative scoped evidence fingerprint")?;
+    let tenant_ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(&request.command.scope.tenant_id)
+    .bind(&request.command.context_key)
+    .bind(request.command.run_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        tenant_ready,
+        "canonical run, Truth sources or existing HITL rows lack authoritative tenant ownership"
+    );
     // Only PostgreSQL determines issued_by, issue time, contract fingerprint,
     // exact source hash and expiry. None are accepted from the JSON file.
     // Run permissions intentionally remain SELECT-only. Recheck the canonical
@@ -365,6 +396,7 @@ async fn issue_with_pool(
 }
 
 async fn revoke_once(pool: &PgPool, admission_id: Uuid, tenant: &str) -> Result<&'static str> {
+    enforce_authoritative_pg_tenant(pool, tenant).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '5s'")
         .execute(&mut *tx)

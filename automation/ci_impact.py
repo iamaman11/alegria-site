@@ -576,6 +576,8 @@ SUITE_OWNERS = {
             "app/db/migrations/20261125_0003_pg_effect_parent_child_v4.sql",
             "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql",
             "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
+            "app/db/migrations/20261125_0006_truth_hitl_writer_fence.sql",
+            "app/db/migrations/20261125_0007_authoritative_tenant_truth_rls.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
@@ -583,6 +585,7 @@ SUITE_OWNERS = {
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v5_ordered_children_tests.rs",
         },
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
@@ -1005,7 +1008,9 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
     ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    "verify_d": (("pg_effect_v3", "pg_v3_", 6),),
+    # Six V3/V4 plus three additional real V5-boundary E2E: native ordered
+    # child execution, HITL racing writes, and authoritative tenant RLS.
+    "verify_d": (("pg_effect_v3", "pg_v3_", 9),),
 }
 
 

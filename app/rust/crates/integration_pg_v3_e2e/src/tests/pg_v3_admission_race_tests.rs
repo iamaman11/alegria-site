@@ -951,3 +951,182 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
     assert!(stored.is_none(), "forged HTML did not remain uncommitted");
     eprintln!("CI_PG_V3_ADMITTED_SOURCE_IMMUTABLE=PASS");
 }
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn pg_v3_hitl_concurrent_mutation_fenced() {
+    let postgres = PostgresHarness::start()
+        .await
+        .expect("disposable real PostgreSQL Truth HITL writer race");
+    let (effect_pool, activity_role) = pg_v3_unprivileged_effect_identity(&postgres).await;
+    let accepted = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &accepted).await;
+    // A real reviewer may have an unrelated resolved task in the same Truth
+    // context. Reconciliation must not depend on accidentally locking this
+    // task row; its context, not its row ID, is the serialization boundary.
+    let unrelated_task = format!("ci-received-review-{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO site.seo_hitl_tasks
+         (task_key, task_type, queue_state, scope_signature,
+          blocking_execution_key, tenant_id)
+         VALUES ($1, 'truth_candidate_review', 'resolved', $2, 'historical-review', $3)",
+    )
+    .bind(&unrelated_task)
+    .bind(&accepted.command.context_key)
+    .bind(&accepted.command.scope.tenant_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("seed an independently editable Truth HITL decision");
+
+    // Hold the receipt relation, not the HITL table: the Activity already
+    // owns its canonical truth-context key when it waits on this SELECT.
+    // A competing HITL writer is otherwise free to lock its distinct row,
+    // proving the trigger and not an incidental relation lock denies it.
+    let mut receipt_blocker = postgres
+        .pool
+        .begin()
+        .await
+        .expect("receipt blocker transaction");
+    sqlx::query("LOCK TABLE pipeline.pg_effect_v3_receipts IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *receipt_blocker)
+        .await
+        .expect("pause Activity after it acquires Truth context");
+    let pending = pg_v3_spawn_effect(&effect_pool, &accepted);
+    pg_v3_wait_for_lock(&postgres.pool, &activity_role, "relation").await;
+
+    for mutation in [
+        "UPDATE site.seo_hitl_tasks SET queue_state = 'reopened' WHERE task_key = $1",
+        "DELETE FROM site.seo_hitl_tasks WHERE task_key = $1",
+        "UPDATE site.seo_hitl_tasks SET scope_signature = 'forged-context' WHERE task_key = $1",
+    ] {
+        let refused = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            sqlx::query(mutation).bind(&unrelated_task).execute(&postgres.pool),
+        )
+        .await
+        .expect("HITL writer waited instead of immediate context denial")
+        .expect_err("external reviewer altered a task during committed Truth effect");
+        assert_eq!(
+            refused
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("55P03"),
+            "all direct Truth HITL writers must share admitted context lock"
+        );
+    }
+    let inserted_task = format!("ci-insert-race-{}", Uuid::new_v4().simple());
+    let refused_insert = sqlx::query(
+        "INSERT INTO site.seo_hitl_tasks
+         (task_key, task_type, queue_state, scope_signature, tenant_id)
+         VALUES ($1, 'truth_candidate_review', 'open', $2, $3)",
+    )
+    .bind(&inserted_task)
+    .bind(&accepted.command.context_key)
+    .bind(&accepted.command.scope.tenant_id)
+    .execute(&postgres.pool)
+    .await
+    .expect_err("phantom Truth review task inserted during admitted Activity");
+    assert_eq!(
+        refused_insert
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    let refused_truncate = sqlx::query("TRUNCATE site.seo_hitl_tasks")
+        .execute(&postgres.pool)
+        .await
+        .expect_err("TRUNCATE bypassed per-row serialization");
+    assert_eq!(
+        refused_truncate
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+    // An unrelated operational task has no Truth-count implications and
+    // should remain writeable under a different task type.
+    sqlx::query(
+        "INSERT INTO site.seo_hitl_tasks
+         (task_key, task_type, queue_state, scope_signature)
+         VALUES ($1, 'registry_change', 'open', $2)",
+    )
+    .bind(format!("ci-independent-{}", Uuid::new_v4().simple()))
+    .bind(&accepted.command.context_key)
+    .execute(&postgres.pool)
+    .await
+    .expect("unrelated queue type remains available");
+
+    receipt_blocker.commit().await.expect("release admitted Activity");
+    let receipt = tokio::time::timeout(std::time::Duration::from_secs(10), pending)
+        .await
+        .expect("admitted effect finishes after receipt unlock")
+        .expect("Activity task did not panic")
+        .expect("Truth effect still commits exactly once");
+    assert_eq!(receipt.created_review_tasks, 1);
+    assert_eq!(receipt.open_review_tasks, 1);
+    let queue_state: String = sqlx::query_scalar(
+        "SELECT queue_state FROM site.seo_hitl_tasks WHERE task_key = $1",
+    )
+    .bind(&unrelated_task)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("read unchanged, independently resolved review");
+    assert_eq!(queue_state, "resolved");
+    let changed = sqlx::query(
+        "UPDATE site.seo_hitl_tasks SET queue_state = 'reopened' WHERE task_key = $1",
+    )
+    .bind(&unrelated_task)
+    .execute(&postgres.pool)
+    .await
+    .expect("reviewer may edit after admitted effect commits");
+    assert_eq!(changed.rows_affected(), 1);
+    eprintln!("CI_PG_V3_HITL_WRITER_EFFECT_FIRST=PASS");
+
+    // Reverse order: the independent reviewer already holds the context lock.
+    // The Activity must wait until that edit commits and reconcile from the
+    // observed committed rowset; no stale pre-writer queue count is admitted.
+    let writer_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &writer_first).await;
+    let obsolete_task = format!("ci-obsolete-{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO site.seo_hitl_tasks
+         (task_key, task_type, queue_state, scope_signature, tenant_id)
+         VALUES ($1, 'truth_candidate_review', 'resolved', $2, $3)",
+    )
+    .bind(&obsolete_task)
+    .bind(&writer_first.command.context_key)
+    .bind(&writer_first.command.scope.tenant_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("seed reviewer-managed resolved item");
+    let mut reviewer = postgres.pool.begin().await.expect("independent reviewer tx");
+    sqlx::query(
+        "UPDATE site.seo_hitl_tasks SET queue_state = 'in_review' WHERE task_key = $1",
+    )
+    .bind(&obsolete_task)
+    .execute(&mut *reviewer)
+    .await
+    .expect("reviewer locks Truth context first");
+    let waiting = pg_v3_spawn_effect(&effect_pool, &writer_first);
+    pg_v3_wait_for_lock(&postgres.pool, &activity_role, "advisory").await;
+    reviewer.commit().await.expect("reviewer commits before admitted Activity");
+    let reconciled = tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("Activity resumes after independent reviewer")
+        .expect("Activity task did not panic")
+        .expect("admitted effect recomputes from canonical committed queue");
+    assert_eq!(reconciled.created_review_tasks, 1);
+    assert_eq!(reconciled.open_review_tasks, 1);
+    let superseded: String = sqlx::query_scalar(
+        "SELECT queue_state FROM site.seo_hitl_tasks WHERE task_key = $1",
+    )
+    .bind(&obsolete_task)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("read independently committed state after reconciliation");
+    assert_eq!(superseded, "superseded");
+    eprintln!("CI_PG_V3_HITL_WRITER_FIRST=PASS");
+}

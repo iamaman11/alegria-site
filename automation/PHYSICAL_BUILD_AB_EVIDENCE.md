@@ -4,7 +4,54 @@ Scope: Issue #94, Draft PR #95. The project GitHub repository remains the
 canonical source. This report describes a **compiler experiment**, not an
 authorization to switch production processes, Task Queues, or release images.
 
-## Baseline and reproducibility
+## Actual four-owner experiment — 25 November 2026
+
+The opt-in [GitHub Actions #527](https://github.com/iamaman11/alegria-site/actions/runs/45542716451)
+completed successfully at exact accepted Draft PR #95 SHA
+`9eecf4e25d40a0cef6677578ea9ad031b1b525d7`, tree
+`0cd479edfb512de8b7850fdf1e7c6fd71bf43f54`. The downloadable
+`rust-pg-physical-ab-compiler-owners-*` JSON artifact has
+`status=FOUR_OWNER_ACTUAL_RUSTC_AB_CAPTURED` and
+`actual_rustc_evidence=true`. Its baseline real `cargo build` of three
+binaries took **128.929 s**, with reported peak per-process RSS
+**2,009,924 KiB** (not simultaneous aggregate memory).
+
+Each row below is an **individual inert owner-only Rust source edit** in an
+isolated exact-SHA Git archive with a single Cargo target. This experiment
+disables sccache and incremental Rust so `non_fresh` compiler units represent
+actual compiler work; after every row it restores the original source and
+rebuilds the same baseline before continuing.
+
+| Modified owner | Actual rebuild, seconds | Relinked binary targets | Baseline restore, seconds |
+| --- | ---: | --- | ---: |
+| `postgres_store` | **20.941** | `temporal_pg_effects`, legacy `temporal_worker` | 20.693 |
+| `graph_neo4j` | **15.523** | legacy `temporal_worker` only | 15.325 |
+| `vector_qdrant` | **15.948** | legacy `temporal_worker` only | 15.566 |
+| `temporal_orchestrator` | **2.048** | `temporal_orchestrator` only | 1.963 |
+
+The central measured conclusion is narrow but real: none of the three
+provider-owner edits rebuilt or rewrote `temporal_orchestrator`, and its own
+edit rebuilt only its own executable among the three observed targets. The
+legacy monolith **still** relinked for all three provider edits; the PG
+Activity owner relinked for the PG edit, as it should. All four experiments
+reported unchanged binary SHA-256 because the source markers are intentionally
+unused constants; actual compiler artifacts and file mtimes demonstrate
+rebuilds/relinks, not executable behavior changes.
+
+**Limitations:** this experiment covers only `temporal_worker`,
+`temporal_orchestrator`, `temporal_pg_effects`; it does **not** measure the
+independence of Outbox, CLI, analytics or reconciliation binaries, Docker
+layers, production deployment, or a general effectful DAG. Nor does it prove
+the full CI target: mandatory [CI #526](https://github.com/iamaman11/alegria-site/actions/runs/45541890765)
+passed all 42 live E2E but took **292 seconds** event-to-gate. Physical
+evidence and the SLO must be accepted separately.
+
+The optional owner-build workflow now publishes an exact-SHA concise JSON
+summary and Markdown table into the Actions logs and step summary so later
+audits do not depend on opening the ZIP artifact. It does not run on normal
+pull-request CI.
+
+## Historical pre-V4 hypothesis and reproducibility record
 
 The local comparison used integrated Git SHA
 `8be89d193030fd22c164132eb3fabc24382ba6ba`, tree

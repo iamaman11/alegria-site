@@ -7,12 +7,43 @@ that opens, reopens and supersedes `site.seo_hitl_tasks` for actual
 verified or publishes. Legacy verified Truth writes continue to invoke the
 same function inside their one original canonical transaction.
 
-**Status: experiment / NO-GO for production.** There is no general
-`ExecutionPlan`→PG effect scheduling or automatic production caller.
-The isolated native operator command below can issue/revoke admissions, but
-there is no production credential provisioning, independent tenant authority,
-or deployed cross-queue acceptance yet. Do not start on a production
-namespace or grant its worker broad application DB credentials.
+**Status: experiment / NO-GO for production.** V4 native Temporal parent and
+child execute this one real admitted PostgreSQL effect; a V5 parent can order
+several separately admitted instances. No general cross-owner arbitrary
+effectful DAG or production starter has been accepted. Do not start on a
+production namespace or grant broad application credentials.
+
+### Transitional canonical tenant fencing (20261125_0007)
+
+Migration `20261125_0007_authoritative_tenant_truth_rls.sql` is a forward-only,
+fail-closed *migration contract*, not a production cutover. It adds nullable
+`tenant_id` to canonical runs, pages, sections, candidates, HITL tasks and
+receipts. Existing rows are **not auto-assigned** a fabricated tenant. A DBA
+must explicitly provision immutable `pipeline.tenant_context_ownership`
+(`context_key` → exactly one tenant) and `pipeline.tenant_role_ownership`
+(`PostgreSQL LOGIN` → tenant), then verify any historical row backfill. A
+natural `context_key` can currently have **only one owner**; two tenants
+sharing a visa context require a separate composite-identity redesign.
+
+RLS is enabled for canonical run/evidence/HITL/admission/receipt tables and
+compares row ownership to an independently provisioned authenticated
+`session_user`, **never** a caller-set PostgreSQL GUC or a Temporal JSON scope.
+The native operator verifies this LOGIN mapping before issuing and revoking;
+the SQL admission and receipt triggers verify the DBA-owned context/run/source
+chain. The effect capability independently checks `session_user` **before
+every replay**, because its `SECURITY DEFINER` execution bypasses RLS.
+Historical NULL ownership denies new effects without erasing old receipts.
+Each new Truth-review task derives its tenant from the canonical context
+binding, never from an untrusted command field.
+
+This is deliberately **not a completed multi-tenant deployment**. Legacy
+ingestion/Truth writers do not yet propagate tenant IDs, schema-owner and
+superuser access is not removed by `ENABLE RLS`, `FORCE RLS` is not enabled,
+and existing multi-tenant natural context keys need redesign. Until all
+writer roles are tenant-scoped and historical data is attested, these paths
+must stay unactivated in production. Real negative E2E
+`pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect`
+proves the narrow admitted effect cannot cross the tenant LOGIN boundary.
 
 ## Native Temporal contract
 

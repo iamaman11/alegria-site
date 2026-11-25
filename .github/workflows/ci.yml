@@ -38,8 +38,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # Dispatch modes cannot cancel each other or an accepted-main push.
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'automatic' }}
+  # Independent physical modes must not destroy each other's measurements.
+  # PR synchronization still cancels an obsolete run for that one PR.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'automatic' }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study' && inputs.physical_study || 'shared' }}
   cancel-in-progress: true
 
 jobs:
@@ -756,7 +757,7 @@ jobs:
 
   # One optional physical study on a previously green, exact canonical PR SHA.
   # It never participates in the required PR gate, and cannot replace any of
-  # the 41 real E2E checks. Reuse this existing job for all expensive probes;
+  # mandatory real E2E checks. Reuse this existing job for expensive probes;
   # no diagnostic Cargo work executes inside a mandatory job.
   rust-pg-physical-ab:
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study'
@@ -866,6 +867,20 @@ jobs:
               ;;
             *) echo "Unknown physical study kind" >&2; exit 2 ;;
           esac
+      - name: Publish exact four-owner metrics as auditable text
+        if: success() && (inputs.physical_study == 'compiler-owners' || inputs.physical_study == 'owner-rebuild')
+        env:
+          STUDY: ${{ inputs.physical_study }}
+          STUDY_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$STUDY" == compiler-owners ]]; then
+            report=automation/reports/physical_owner_ab.json
+          else
+            report=automation/reports/owner_rebuild_probe.json
+          fi
+          python3 automation/summarize_owner_build_evidence.py \
+            --study "$STUDY" --source-sha "$STUDY_SOURCE_SHA" --report "$report"
       - name: Publish optional isolated build measurement
         if: always()
         uses: actions/upload-artifact@v7
@@ -1559,9 +1574,11 @@ jobs:
         run: bash automation/install_ci_native_tools.sh ripgrep
 
       - name: Fast source contracts and policy
+        if: needs.impact.outputs.cargo_scope != 'full'
         run: bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
 
       - name: Fast integration and consistency checks
+        if: needs.impact.outputs.cargo_scope != 'full'
         run: bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
 
       # Only broad/unclassifiable changes require the whole Rust workspace.
@@ -1607,13 +1624,38 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Full workspace Rust unit tests (parallel with real E2E)
+      # The full-scope Rust tests used to wait for both Python policy phases.
+      # They are independent read-only source checks, so run both owners on
+      # this *same* runner concurrently, still wait and fail for either result.
+      # No extra runner, cache writer or skipped test is introduced.
+      - name: Full workspace Rust tests and both mandatory policy phases
         if: needs.impact.outputs.cargo_scope == 'full'
-        working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
           RUSTC_WRAPPER: sccache
-        run: cargo test --workspace --locked
+        shell: bash
+        run: |
+          set -uo pipefail
+          (
+            set -euo pipefail
+            bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
+            bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
+          ) &
+          policy_pid=$!
+          (
+            set -euo pipefail
+            cd app/rust
+            cargo test --workspace --locked
+          ) &
+          rust_pid=$!
+          wait "$policy_pid"
+          policy_result=$?
+          wait "$rust_pid"
+          rust_result=$?
+          printf 'CI_VERIFY_PARALLEL policy_exit=%s rust_exit=%s\n' "$policy_result" "$rust_result"
+          if [[ "$policy_result" -ne 0 || "$rust_result" -ne 0 ]]; then
+            exit 1
+          fi
 
       # The independent rust-verify-e2e job consumes the ONE shared, hashed
       # integration harness instead of recompiling it after workspace tests.

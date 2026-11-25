@@ -100,7 +100,7 @@ def validate_cache_policy(workflow: str) -> None:
         "Reuse trusted main Rust compiler objects for full workspace tests",
         "Authorize full-scope Rust cache reads",
         "Restore shared Cargo dependency sources without a second writer",
-        "Full workspace Rust unit tests (parallel with real E2E)",
+        "Full workspace Rust tests and both mandatory policy phases",
     ):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         if "        if: needs.impact.outputs.cargo_scope == 'full'" not in step:
@@ -145,9 +145,9 @@ class CargoCachePolicy(unittest.TestCase):
     def test_verify_cargo_setup_cannot_run_for_scoped_or_non_rust_changes(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
         changed = original.replace(
-            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "      - name: Full workspace Rust tests and both mandatory policy phases\n"
             "        if: needs.impact.outputs.cargo_scope == 'full'",
-            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "      - name: Full workspace Rust tests and both mandatory policy phases\n"
             "        if: needs.impact.outputs.cargo_scope != 'none'",
             1,
         )

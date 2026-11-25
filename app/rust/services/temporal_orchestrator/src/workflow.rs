@@ -8,7 +8,7 @@
 use operation_protocol::{EffectChildInvocationV4, TemporalExecutionIdentityV4};
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
-    MixedDagMachineV4, PreparedDagStepV1, PureDagRun,
+    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1, PureDagRun,
 };
 use temporalio_common::WorkflowDefinition;
 use temporalio_macros::{workflow, workflow_methods};
@@ -66,6 +66,16 @@ struct AlegriaAdmittedEffectDagV2Workflow {
     immutable_input: EffectDagRunV1,
 }
 
+/// New History-visible V5 parent. It sequences independently admissible PG
+/// owner child Workflows in deterministic topological order. The grouped
+/// start/join boundary is reserved for genuinely disjoint future owner
+/// routes; today's single canonical PG Truth context always serializes.
+/// Old V2 histories are never upgraded in place.
+#[workflow]
+struct AlegriaAdmittedEffectDagV3Workflow {
+    immutable_input: EffectDagRunV1,
+}
+
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
@@ -86,6 +96,91 @@ pub(crate) fn register_v4(opts: &mut WorkerOptions) -> anyhow::Result<()> {
 pub(crate) fn register_for_replay_v4(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV2Workflow>()?;
     Ok(())
+}
+
+pub(crate) fn register_v5(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaAdmittedEffectDagV3Workflow>()?;
+    Ok(())
+}
+
+pub(crate) fn register_for_replay_v5(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaAdmittedEffectDagV3Workflow>()?;
+    Ok(())
+}
+
+#[workflow_methods]
+impl AlegriaAdmittedEffectDagV3Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, immutable_input: EffectDagRunV1) -> Self {
+        Self { immutable_input }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
+        let input = ctx.state(|state| state.immutable_input.clone());
+        let workflow_id = ctx.info().workflow_id().to_string();
+        let parent = TemporalExecutionIdentityV4 {
+            workflow_id: workflow_id.clone(),
+            run_id: ctx.run_id().to_string(),
+        };
+        // Preflight all contracts, admission UUIDs, input bytes and pure
+        // implementations before even one irreversible child is initiated.
+        let mut machine = MixedDagMachineV5::new(&workflow_id, input).map_err(workflow_failure)?;
+        while let Some(step) = machine.next_step().cloned() {
+            match step {
+                PreparedDagStepV1::Pure { .. } => {
+                    machine.advance_pure().map_err(workflow_failure)?;
+                }
+                PreparedDagStepV1::Owner { .. } => {
+                    let children = machine
+                        .next_independent_children(parent.clone())
+                        .map_err(workflow_failure)?;
+                    // Initiate only proven-disjoint children first (one in
+                    // the current Truth-only owner model). Every child
+                    // remains blocked until its own operator
+                    // verifies reciprocal server Histories and grants its
+                    // exact immutable PG admission. This is not batch auth.
+                    let mut started_children = Vec::with_capacity(children.len());
+                    for child in children {
+                        let child_id = format!(
+                            "alegria-pg-effect-v4-{}",
+                            child.checked.execution_key
+                        );
+                        let options = ChildWorkflowOptions::builder()
+                            .workflow_id(child_id)
+                            .task_queue(PG_V4_CHILD_COMMAND_QUEUE.to_string())
+                            .build();
+                        let started = match child.route {
+                            NativeEffectRouteV5::PgTruthReviewV4 => ctx
+                                .start_child_workflow(
+                                    PgTruthReviewReconcileV4Definition,
+                                    child.invocation,
+                                    options,
+                                )
+                                .await
+                                .map_err(workflow_failure)?,
+                        };
+                        started_children.push((child.checked, started));
+                    }
+                    // Fan-in is deliberately ordered, so a deterministic
+                    // replay never changes which receipt is inspected next.
+                    // A failed child does not assert rollback of siblings:
+                    // each durable PG effect and revocation is independent.
+                    for (checked, started) in started_children {
+                        let result_json: String =
+                            started.result().await.map_err(workflow_failure)?;
+                        let receipt = decode_owner_child_result_v4(&result_json, &checked)
+                            .map_err(workflow_failure)?;
+                        machine
+                            .advance_owner_receipt(receipt)
+                            .map_err(workflow_failure)?;
+                    }
+                }
+            }
+        }
+        let receipt = machine.finish().map_err(workflow_failure)?;
+        serde_json::to_string(&receipt).map_err(workflow_failure)
+    }
 }
 
 #[workflow_methods]

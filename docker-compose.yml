@@ -136,6 +136,11 @@ services:
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     volumes:
       - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
+    # The pure Temporal orchestrators are attached only to this additional
+    # internal network. Provider stores and application Worker stay on default.
+    networks:
+      - default
+      - temporal_pure_control
     ports:
       - "127.0.0.1:7233:7233"
     healthcheck:
@@ -309,6 +314,8 @@ services:
     depends_on:
       temporal-server:
         condition: service_healthy
+    networks:
+      - temporal_pure_control
 
   # V4 effect DAG parent: a DIFFERENT explicit profile and Task Queue from
   # the V3 pure orchestrator. Reuses the same provider-free native binary but
@@ -335,11 +342,43 @@ services:
     depends_on:
       temporal-server:
         condition: service_healthy
+    networks:
+      - temporal_pure_control
 
-  # V3 experiment: a distinct PostgreSQL owner with a strictly limited role.
-  # Never pass the legacy admin DATABASE_URL to this runtime.
+  # V5 native parent is opt-in, versioned and on a disjoint Task Queue.
+  # Its L3 network contains Temporal only: no direct PostgreSQL, Neo4j,
+  # Qdrant, Outbox, provider credentials, or application-admin DSN.
+  # Do not route production traffic here until historical drain and parity.
+  temporal-effect-dag-v5:
+    profiles: ["v5-effect-evaluation"]
+    build:
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v5
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V5: ${ALLOW_EFFECT_DAG_ORCHESTRATOR_V5:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    networks:
+      - temporal_pure_control
+
+  # One least-privileged PostgreSQL child owner serves opt-in V3/V4/V5 parents.
+  # Each profile is separately gated; there is no duplicate binary/process
+  # for different parent versions and no legacy admin DATABASE_URL.
   temporal-pg-effects-v3:
-    profiles: ["v3-evaluation"]
+    profiles: ["v3-evaluation", "v4-effect-evaluation", "v5-effect-evaluation"]
     build:
       context: ${V3_PG_BUILD_CONTEXT:-.}
       dockerfile: ./infra/temporal/Dockerfile.v3
@@ -423,10 +462,18 @@ services:
 
 # External, operator-provisioned secret. No credential is embedded in Compose,
 # image layers, source control or `docker inspect` service environment.
-# Unused while the V3 profile is disabled; no implicit application-admin DSN.
+# Unused while every V3/V4/V5 effect-evaluation profile is disabled;
+# no implicit application-admin DSN in any provider-free parent.
 secrets:
   pg_effect_worker_dsn:
     external: true
+
+# Experimental pure Workflow parents have L3 reachability only to Temporal.
+# The legacy production temporal-worker remains on the default provider network
+# pending explicit historical drain and parity evidence; this is NOT cutover.
+networks:
+  temporal_pure_control:
+    internal: true
 
 volumes:
   # New PG18 volumes are intentionally disjoint from PG16: no implicit

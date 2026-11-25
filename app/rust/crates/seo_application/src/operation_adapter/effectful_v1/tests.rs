@@ -613,3 +613,121 @@ fn v4_interpreter_completes_only_after_exact_typed_receipt_for_each_effect() {
     assert_eq!(finished.order.len(), 2);
     assert_eq!(finished.artifacts.len(), 3); // one admitted scope + two PG receipts
 }
+
+#[test]
+fn v5_unordered_same_context_effects_fail_before_any_child_invocation() {
+    let manifest = run(vec![review_node("review_a"), review_node("review_b")]);
+    let denied = super::super::MixedDagMachineV5::new(&scope().run_id, manifest);
+    assert!(matches!(
+        denied,
+        Err(EffectDagError::ConflictingOwnerWriteScope { .. })
+    ));
+}
+
+#[test]
+fn v5_duplicate_admission_id_and_different_context_fail_whole_dag_preflight() {
+    let first = review_node("review_a");
+    let mut second = review_node("review_b");
+    second.after.insert(first.instance.clone());
+    let original = run(vec![second, first]);
+
+    let mut repeated = original.clone();
+    let OwnerCommandV1::PgTruthReviewReconcileV1(first_command) =
+        &repeated.owner_commands[&OperationInstanceId::from("review_a")];
+    let repeated_admission = first_command.admission_id;
+    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) =
+        repeated.owner_commands.get_mut(&OperationInstanceId::from("review_b")).unwrap();
+    second_command.admission_id = repeated_admission;
+    assert!(matches!(
+        super::super::MixedDagMachineV5::new(&scope().run_id, repeated),
+        Err(EffectDagError::DuplicateOwnerAdmission(_))
+    ));
+
+    let mut mismatched = original;
+    let distinct_context = "different-canonical-context";
+    let distinct_artifact_id: ArtifactId = "distinct_review_scope".into();
+    let source = mismatched.admitted[&ArtifactId::from("review_scope")].clone();
+    let mut distinct_source = source;
+    distinct_source.provenance = "declared-only:distinct-review-source".into();
+    distinct_source.payload = serde_json::to_vec(&TruthReviewScopeArtifactV1 {
+        run_id: Uuid::from_u128(RUN_ID),
+        context_key: distinct_context.into(),
+    }).unwrap();
+    mismatched.plan.external_artifacts.insert(
+        distinct_artifact_id.clone(),
+        ExternalArtifact {
+            schema: distinct_source.schema.clone(),
+            scope: distinct_source.scope.clone(),
+            provenance: distinct_source.provenance.clone(),
+        },
+    );
+    mismatched.admitted.insert(distinct_artifact_id.clone(), distinct_source);
+    let second_node = mismatched.plan.nodes.iter_mut()
+        .find(|node| node.instance == OperationInstanceId::from("review_b"))
+        .unwrap();
+    second_node.inputs.insert(PortId::from(INPUT_PORT),
+        ArtifactBinding::External { artifact: distinct_artifact_id });
+    let mut catalog = semantic_extraction_registry().unwrap();
+    catalog.catalog.register::<ReconcileTruthReviewsContractV1>().unwrap();
+    mismatched.plan = mismatched.plan.clone().seal(&catalog.catalog).unwrap();
+    let new_hash = mismatched.plan.hash.as_str().to_owned();
+    for command in mismatched.owner_commands.values_mut() {
+        let OwnerCommandV1::PgTruthReviewReconcileV1(value) = command;
+        value.plan_hash = new_hash.clone();
+    }
+    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) =
+        mismatched.owner_commands.get_mut(&OperationInstanceId::from("review_b")).unwrap();
+    second_command.context_key = distinct_context.into();
+    // Both owner commands now have individually valid typed source envelopes.
+    // Nonetheless a canonical execution_run owns only one context_key, so
+    // V5 must reject BEFORE the first effect instead of failing on child 2.
+    assert!(matches!(
+        super::super::MixedDagMachineV5::new(&scope().run_id, mismatched),
+        Err(EffectDagError::MixedOwnerContext(_))
+    ));
+}
+
+#[test]
+fn v5_ordered_pg_children_use_distinct_dispatches_and_strict_fanin() {
+    use super::super::{MixedDagMachineV5, NativeEffectRouteV5};
+
+    let first = review_node("review_a");
+    let mut second = review_node("review_b");
+    second.after.insert(first.instance.clone());
+    let mut machine = MixedDagMachineV5::new(&scope().run_id, run(vec![second, first])).unwrap();
+    let parent = operation_protocol::TemporalExecutionIdentityV4 {
+        workflow_id: scope().run_id,
+        run_id: "true-temporal-parent-run-id".into(),
+    };
+    let mut keys = Vec::new();
+    for expected in ["review_a", "review_b"] {
+        let ready = machine.next_independent_children(parent.clone()).unwrap();
+        // These effects write one canonical Truth context and therefore MUST
+        // not fan out despite being separate admitted operation instances.
+        assert_eq!(ready.len(), 1);
+        let child = &ready[0];
+        assert_eq!(child.route, NativeEffectRouteV5::PgTruthReviewV4);
+        assert_eq!(child.checked.instance.as_str(), expected);
+        child.invocation.verify_integrity().unwrap();
+        keys.push(child.checked.execution_key.clone());
+        let command: ReconcileTruthReviewsInput =
+            serde_json::from_slice(&child.invocation.owner_command_bytes).unwrap();
+        machine
+            .advance_owner_receipt(truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
+                receipt_id: Uuid::new_v4(),
+                admission_id: command.admission_id,
+                execution_key: child.checked.execution_key.clone(),
+                run_id: command.run_id,
+                context_key: command.context_key,
+                candidate_set_hash: "typed-unit-fixture-not-a-real-pg-hash".into(),
+                created_review_tasks: 0,
+                open_review_tasks: 0,
+            })
+            .unwrap();
+    }
+    assert_ne!(keys[0], keys[1]);
+    let result = machine.finish().unwrap();
+    assert_eq!(result.schema_revision, super::super::ADMITTED_DAG_RECEIPT_SCHEMA_V5);
+    assert_eq!(result.result.owner_receipts.len(), 2);
+    assert_eq!(result.result.artifacts.len(), 3);
+}

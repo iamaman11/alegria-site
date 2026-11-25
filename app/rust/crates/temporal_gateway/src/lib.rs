@@ -26,6 +26,8 @@ pub const PURE_DAG_ORCHESTRATOR_QUEUE: &str = "alegria-pure-dag-v3";
 /// This owner-free worker starts only versioned PG child Workflows, never
 /// executes their PostgreSQL Activities or bypasses independent admissions.
 pub const EFFECT_DAG_ORCHESTRATOR_V4_QUEUE: &str = "alegria-effect-dag-v4";
+/// V5 admitted effect DAG fanout/fanin parent; never poll V4 histories here.
+pub const EFFECT_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-effect-dag-v5";
 
 pub async fn connect_client(
     temporal_url: &str,

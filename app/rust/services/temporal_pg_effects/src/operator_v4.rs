@@ -34,6 +34,8 @@ use uuid::Uuid;
 const MAX_V4_ADMISSION_SECONDS: u32 = 300;
 const PARENT_TYPE: &str = "AlegriaAdmittedEffectDagV2Workflow";
 const PARENT_QUEUE: &str = "alegria-effect-dag-v4";
+const PARENT_TYPE_V5: &str = "AlegriaAdmittedEffectDagV3Workflow";
+const PARENT_QUEUE_V5: &str = "alegria-effect-dag-v5";
 const CHILD_TYPE: &str = "PgTruthReviewReconcileV4Workflow";
 const CHILD_QUEUE: &str = "alegria-pg-command-v3";
 
@@ -120,6 +122,21 @@ fn first_started_payload(
         "V4 Temporal start payload exceeds the operator proof budget"
     );
     Ok(inputs[0].data.to_vec())
+}
+
+fn first_parent_started_payload(parent: &History) -> Result<Vec<u8>> {
+    let first = parent.events.first().context("Temporal parent History is empty")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(start)) = &first.attributes else {
+        bail!("Temporal parent History does not start with WorkflowExecutionStarted");
+    };
+    let parent_type = start.workflow_type.as_ref().map(|value| value.name.as_str());
+    let parent_queue = start.task_queue.as_ref().map(|value| value.name.as_str());
+    let valid_pair = match (parent_type, parent_queue) {
+        (Some(PARENT_TYPE), Some(PARENT_QUEUE)) => (PARENT_TYPE, PARENT_QUEUE),
+        (Some(PARENT_TYPE_V5), Some(PARENT_QUEUE_V5)) => (PARENT_TYPE_V5, PARENT_QUEUE_V5),
+        _ => bail!("Temporal parent did not start on an exact allowed native parent type/queue"),
+    };
+    first_started_payload(parent, valid_pair.0, valid_pair.1)
 }
 
 fn prove_parent_plan_and_command(
@@ -223,7 +240,7 @@ fn prove_reciprocal_temporal_histories(
     child: &History,
     request: &V4IssueRequest,
 ) -> Result<ServerAttestedChild> {
-    let parent_input = first_started_payload(parent, PARENT_TYPE, PARENT_QUEUE)?;
+    let parent_input = first_parent_started_payload(parent)?;
     let child_input = first_started_payload(child, CHILD_TYPE, CHILD_QUEUE)?;
     let invocation: EffectChildInvocationV4 = serde_json::from_slice(&child_input)
         .context("child Workflow History contains invalid V4 invocation bytes")?;
@@ -508,6 +525,7 @@ async fn insert_attested_admission(
     attested: &ServerAttestedChild,
     tenant: &str,
 ) -> Result<()> {
+    super::operator::enforce_authoritative_pg_tenant(pool, tenant).await?;
     ensure!(
         tenant == attested.command.scope.tenant_id && !tenant.trim().is_empty(),
         "V4 issuer configured tenant policy differs from server History scope"
@@ -550,6 +568,18 @@ async fn insert_attested_admission(
         "V4 server-attested parent does not match live canonical PostgreSQL run"
     );
     let source_hash = locked_source_hash(&mut tx, &attested.command.context_key).await?;
+    let tenant_ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(tenant)
+    .bind(&attested.command.context_key)
+    .bind(request.canonical_run_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        tenant_ready,
+        "canonical V4 Truth run, source evidence or HITL rows lack authoritative tenant ownership"
+    );
     let attestation = V4TemporalAttestation {
         parent_workflow_id: request.parent_workflow_id.clone(),
         parent_workflow_run_id: request.parent_workflow_run_id.clone(),
@@ -669,6 +699,7 @@ async fn revoke_once_v4(
     admission_id: Uuid,
     tenant: &str,
 ) -> Result<RevocationOutcomeV4> {
+    super::operator::enforce_authoritative_pg_tenant(pool, tenant).await?;
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '5s'")
         .execute(&mut *tx)

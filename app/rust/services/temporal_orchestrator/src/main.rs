@@ -9,7 +9,8 @@
 use anyhow::{Context, Result};
 use std::env;
 use temporal_gateway::{
-    connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
+    connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+    PURE_DAG_ORCHESTRATOR_QUEUE,
 };
 use temporalio_common::worker::{
     VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
@@ -26,11 +27,13 @@ mod workflow;
 
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
 const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
+const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrchestratorMode {
     PureV3,
     AdmittedEffectV4,
+    AdmittedEffectV5,
 }
 
 impl OrchestratorMode {
@@ -38,6 +41,7 @@ impl OrchestratorMode {
         match self {
             Self::PureV3 => PURE_DAG_ORCHESTRATOR_QUEUE,
             Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+            Self::AdmittedEffectV5 => EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
         }
     }
 }
@@ -60,9 +64,11 @@ fn immutable_source_sha(value: &str) -> bool {
 fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConfig> {
     let pure_opt_in = read(LIVE_OPT_IN);
     let effect_opt_in = read(V4_LIVE_OPT_IN);
+    let v5_effect_opt_in = read(V5_LIVE_OPT_IN);
     for (label, setting) in [
         (LIVE_OPT_IN, &pure_opt_in),
         (V4_LIVE_OPT_IN, &effect_opt_in),
+        (V5_LIVE_OPT_IN, &v5_effect_opt_in),
     ] {
         anyhow::ensure!(
             matches!(setting.as_deref(), None | Some("true") | Some("false")),
@@ -72,10 +78,12 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     let mode = match (
         pure_opt_in.as_deref() == Some("true"),
         effect_opt_in.as_deref() == Some("true"),
+        v5_effect_opt_in.as_deref() == Some("true"),
     ) {
-        (true, false) => OrchestratorMode::PureV3,
-        (false, true) => OrchestratorMode::AdmittedEffectV4,
-        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}=true and {V4_LIVE_OPT_IN}=true"),
+        (true, false, false) => OrchestratorMode::PureV3,
+        (false, true, false) => OrchestratorMode::AdmittedEffectV4,
+        (false, false, true) => OrchestratorMode::AdmittedEffectV5,
+        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}=true, {V4_LIVE_OPT_IN}=true and {V5_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
@@ -136,6 +144,7 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
     match config.mode {
         OrchestratorMode::PureV3 => workflow::register(&mut options)?,
         OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
+        OrchestratorMode::AdmittedEffectV5 => workflow::register_v5(&mut options)?,
     }
     Ok(options)
 }
@@ -148,8 +157,11 @@ async fn main() -> Result<()> {
     if let Some(argument) = args.next() {
         if argument == std::ffi::OsStr::new("--replay-history")
             || argument == std::ffi::OsStr::new("--replay-effect-history")
+            || argument == std::ffi::OsStr::new("--replay-v5-effect-history")
         {
-            let queue = if argument == std::ffi::OsStr::new("--replay-effect-history") {
+            let queue = if argument == std::ffi::OsStr::new("--replay-v5-effect-history") {
+                EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
+            } else if argument == std::ffi::OsStr::new("--replay-effect-history") {
                 EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
             } else {
                 PURE_DAG_ORCHESTRATOR_QUEUE
@@ -278,5 +290,34 @@ mod tests {
             PURE_DAG_ORCHESTRATOR_QUEUE.into(),
         );
         assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
+    }
+
+    #[test]
+    fn v5_ordered_parent_is_separately_gated_and_cannot_claim_v4_queue() {
+        let mut settings = valid_env();
+        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(V4_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(V5_LIVE_OPT_IN.into(), "true".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            EFFECT_DAG_ORCHESTRATOR_V5_QUEUE.into(),
+        );
+        let cfg = checked_live_config(|name| settings.get(name).cloned()).unwrap();
+        assert_eq!(cfg.mode, OrchestratorMode::AdmittedEffectV5);
+        build_worker_options(&cfg).unwrap();
+        let mut versioned = cfg;
+        versioned.versioning = true;
+        build_worker_options(&versioned).unwrap();
+
+        settings.insert(V4_LIVE_OPT_IN.into(), "true".into());
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+        settings.insert(V4_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            EFFECT_DAG_ORCHESTRATOR_V4_QUEUE.into(),
+        );
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+        settings.insert(V5_LIVE_OPT_IN.into(), "1".into());
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
     }
 }

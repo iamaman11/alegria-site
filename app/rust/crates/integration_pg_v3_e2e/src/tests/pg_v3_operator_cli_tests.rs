@@ -6,6 +6,139 @@
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
+async fn pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect() {
+    use postgres_store::truth_review_effect_v3::{contract_fingerprint, execution_key};
+
+    let postgres = PostgresHarness::start()
+        .await
+        .expect("real isolated PostgreSQL tenant RLS database");
+    let fixture = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &fixture).await;
+
+    // A second tenant may legitimately have its own DB login, but can never
+    // impersonate a shared natural visa context claimed by the first tenant.
+    let role = format!("ci_pg_v3_other_tenant_{}", Uuid::new_v4().simple());
+    const PASSWORD: &str = "disposable_cross_tenant_password";
+    let provision = format!(
+        "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         GRANT CONNECT ON DATABASE alegria TO {role};
+         GRANT USAGE ON SCHEMA pipeline, site, raw, extracted TO {role};
+         GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
+                         pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
+                         raw.sections, raw.pages, site.seo_hitl_tasks TO {role};
+         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
+         GRANT EXECUTE ON FUNCTION pipeline.consume_pg_truth_review_v1(
+             UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,SMALLINT,
+             TEXT,TEXT,TEXT,BYTEA,BYTEA,BYTEA
+         ) TO {role};
+         INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
+         VALUES ('{role}', 'different-tenant');"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(provision))
+        .execute(&postgres.pool)
+        .await
+        .expect("DBA provisions second tenant independent of malicious command scope");
+    let restricted_url = postgres.database_url.replacen(
+        "postgres://postgres:postgres_password@",
+        &format!("postgres://{role}:{PASSWORD}@"),
+        1,
+    );
+    let restricted = sqlx::PgPool::connect(&restricted_url)
+        .await
+        .expect("second tenant PostgreSQL login");
+
+    let visible: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.execution_runs WHERE run_id=$1",
+    )
+    .bind(fixture.command.run_id)
+    .fetch_one(&restricted)
+    .await
+    .unwrap();
+    assert_eq!(visible, 0, "RLS must hide another tenant's canonical run");
+    let visible: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.pg_effect_v3_admissions WHERE admission_id=$1",
+    )
+    .bind(fixture.command.admission_id)
+    .fetch_one(&restricted)
+    .await
+    .unwrap();
+    assert_eq!(visible, 0, "RLS must hide another tenant's admitted effect");
+
+    let duplicate_context = sqlx::query(
+        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id)
+         VALUES ($1,'different-tenant')",
+    )
+    .bind(&fixture.command.context_key)
+    .execute(&postgres.pool)
+    .await;
+    assert!(
+        duplicate_context.is_err(),
+        "same natural visa context must not silently acquire a second owner"
+    );
+
+    // Crucially, SECURITY DEFINER bypasses the invoker's RLS. The capability
+    // itself must independently check session_user and deny even a complete
+    // stolen admission/dispatch payload from the other tenant.
+    let wrong_effect = sqlx::query(
+        "SELECT receipt_id FROM pipeline.consume_pg_truth_review_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+    )
+    .bind(fixture.command.admission_id)
+    .bind(fixture.command.run_id)
+    .bind(&fixture.command.scope.tenant_id)
+    .bind(&fixture.command.context_key)
+    .bind(&fixture.workflow_id)
+    .bind(&fixture.workflow_run_id)
+    .bind(&fixture.command.operation_instance)
+    .bind(&fixture.command.plan_hash)
+    .bind(contract_fingerprint().unwrap())
+    .bind(execution_key(&fixture.workflow_id, &fixture.workflow_run_id, &fixture.command).unwrap())
+    .bind(3_i16)
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind(Option::<String>::None)
+    .bind(Option::<Vec<u8>>::None)
+    .bind(Option::<Vec<u8>>::None)
+    .bind(Option::<Vec<u8>>::None)
+    .fetch_one(&restricted)
+    .await
+    .expect_err("cross-tenant SECURITY DEFINER invocation must be denied");
+    assert_eq!(
+        wrong_effect.as_database_error().and_then(|database| database.code()).as_deref(),
+        Some("AV001"),
+        "tenant denial must be typed and independently testable"
+    );
+    let receipts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.pg_effect_v3_receipts WHERE admission_id=$1",
+    )
+    .bind(fixture.command.admission_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .unwrap();
+    assert_eq!(receipts, 0, "denied tenant must not commit any receipt");
+
+    // Historical NULL ownership is quarantined, not opportunistically
+    // reclassified to whichever tenant an operator claims.
+    sqlx::query("UPDATE raw.pages SET tenant_id=NULL WHERE url LIKE $1")
+        .bind(format!("%{}%", fixture.command.context_key.split(':').last().unwrap()))
+        .execute(&postgres.pool)
+        .await
+        .expect("simulate unattributed historical page with DBA test role");
+    let ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(&fixture.command.scope.tenant_id)
+    .bind(&fixture.command.context_key)
+    .bind(fixture.command.run_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .unwrap();
+    assert!(!ready, "NULL historical page must quarantine subsequent effects");
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
 async fn pg_v3_native_operator_cli_least_privilege_issue_revoke() {
     let postgres = PostgresHarness::start()
         .await
@@ -20,7 +153,9 @@ async fn pg_v3_native_operator_cli_least_privilege_issue_revoke() {
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages TO {role};
-         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};"
+         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
+         INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
+         VALUES ('{role}', 'ci-pg-v3-tenant');"
     );
     // Identifier = fixed prefix + UUID hex, in disposable testcontainer only.
     sqlx::raw_sql(sqlx::AssertSqlSafe(provision))
@@ -373,7 +508,9 @@ async fn pg_v3_v4_live_parent_child_operator_attestation_effect_receipt() {
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages TO {role};
-         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};"
+         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
+         INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
+         VALUES ('{role}', 'ci-pg-v3-tenant');"
     ))).execute(&postgres.pool).await.expect("distinct restricted V4 operator role");
     let operator_url = postgres.database_url.replacen(
         "postgres://postgres:postgres_password@",
