@@ -5,6 +5,7 @@
 #[serial]
 async fn qdrant_v8_native_temporal_history_operator_real_effect() {
     use temporalio_client::WorkflowGetResultOptions;
+    use temporalio_common::protos::temporal::api::enums::v1::PendingActivityState;
 
     let pg = PostgresHarness::start().await.expect("real application PostgreSQL");
     let qdrant = QdrantHarness::start().await.expect("real Qdrant REST+gRPC");
@@ -233,41 +234,101 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
         Some("55P03"));
     status_lock.rollback().await.unwrap();
 
-    // Force a real Worker crash with a read-only admission Activity STARTED.
-    // A schedule-to-close-only 300s timeout used to strand the child after
-    // restart, despite committed admission and repeated correct Signals.
-    // The short start-to-close bound on this *read-only* Activity must ensure
-    // Temporal retries it; the provider Activity keeps its distinct fence.
+    // Deterministic fault injection using *real PostgreSQL contention*.
+    // Holding ACCESS EXCLUSIVE on admissions makes the Activity's SELECT
+    // block after Temporal dispatch; otherwise its normal 1s read is too
+    // brief for a reliable History poll, and an extra Signal can coalesce
+    // with a previously pending read. This lock is held by the test DBA,
+    // never by the restricted operator/worker, and is released immediately
+    // after SIGKILL before operator SQL issuance.
+    let mut admission_read_lock = pg.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE pipeline.qdrant_projection_v1_admissions IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *admission_read_lock).await
+        .expect("hold genuine SQL read barrier before forged Temporal Signal");
     child_handle.signal(
         UntypedSignal::<UntypedWorkflow>::new("operator_admission_ready_qdrant_v1"),
         RawValue::default(), WorkflowSignalOptions::default(),
-    ).await.expect("trigger an in-flight pre-admission read-only probe");
-    timeout(Duration::from_secs(12),async {
+    ).await.expect("trigger SQL-blocked pre-admission probe");
+    let started_while_blocked = timeout(Duration::from_secs(12),async {
         loop {
+            // Temporal deliberately writes ActivityTaskStarted into History
+            // only when an Activity attempt closes. For an in-flight attempt,
+            // DescribeWorkflowExecution.pending_activities is the authoritative
+            // server observation, not a History Started-vs-Completed count.
+            let description = child_handle
+                .describe(WorkflowDescribeOptions::builder().build())
+                .await.expect("Describe exact running child during SQL admission block");
+            assert_eq!(description.id(),child_id);
+            assert_eq!(description.run_id(),child_run);
             let events = child_handle
                 .fetch_history(WorkflowFetchHistoryOptions::builder().build())
                 .into_events().await.expect("inspect real pre-crash child History");
-            let last_started = events.iter().filter_map(|event| matches!(
-                event.attributes.as_ref(),
-                Some(Attributes::ActivityTaskStartedEventAttributes(_))
-            ).then_some(event.event_id)).last().unwrap_or(0);
-            let last_terminal = events.iter().filter_map(|event| matches!(
-                event.attributes.as_ref(),
-                Some(Attributes::ActivityTaskCompletedEventAttributes(_))
-                    | Some(Attributes::ActivityTaskFailedEventAttributes(_))
-                    | Some(Attributes::ActivityTaskTimedOutEventAttributes(_))
-                    | Some(Attributes::ActivityTaskCanceledEventAttributes(_))
-            ).then_some(event.event_id)).last().unwrap_or(0);
-            if last_started > last_terminal { break; }
+            let pending_started_scheduled_id = description
+                .raw()
+                .pending_activities
+                .iter()
+                .find_map(|activity| {
+                    if activity.activity_type.is_none()
+                        || activity.state != PendingActivityState::Started as i32
+                        || activity.attempt <= 0
+                        || activity.last_started_time.is_none()
+                    {
+                        return None;
+                    }
+                    events.iter().find_map(|event| {
+                        let Some(Attributes::ActivityTaskScheduledEventAttributes(scheduled)) =
+                            &event.attributes
+                        else {
+                            return None;
+                        };
+                        (scheduled.activity_id == activity.activity_id
+                            && scheduled.activity_type.as_ref().map(|value|value.name.as_str())
+                                == activity.activity_type.as_ref().map(|value|value.name.as_str()))
+                            .then_some(event.event_id)
+                    })
+                });
+            if let Some(scheduled_event_id) = pending_started_scheduled_id {
+                break scheduled_event_id;
+            }
             sleep(Duration::from_millis(50)).await;
         }
-    }).await.expect("no in-flight read-only Activity before forced Worker crash");
+    }).await;
+    if started_while_blocked.is_err() {
+        let description = child_handle
+            .describe(WorkflowDescribeOptions::builder().build())
+            .await.expect("diagnose pending Activities via exact Temporal Describe");
+        let pending = description.raw().pending_activities.iter().map(|activity| format!(
+            "id={},type={:?},state={},attempt={},started={}",
+            activity.activity_id,
+            activity.activity_type.as_ref().map(|value|value.name.as_str()),
+            activity.state,
+            activity.attempt,
+            activity.last_started_time.is_some(),
+        )).collect::<Vec<_>>();
+        let events = child_handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .into_events().await.expect("diagnose SQL-blocked child Activity History");
+        let count = |pred: fn(&Attributes) -> bool| events.iter().filter(|event| {
+            event.attributes.as_ref().is_some_and(pred)
+        }).count();
+        let signals = count(|v| matches!(v, Attributes::WorkflowExecutionSignaledEventAttributes(_)));
+        let scheduled = count(|v| matches!(v, Attributes::ActivityTaskScheduledEventAttributes(_)));
+        let started = count(|v| matches!(v, Attributes::ActivityTaskStartedEventAttributes(_)));
+        let completed = count(|v| matches!(v, Attributes::ActivityTaskCompletedEventAttributes(_)));
+        let timed_out = count(|v| matches!(v, Attributes::ActivityTaskTimedOutEventAttributes(_)));
+        panic!("SQL lock did not produce a provably in-flight admission Activity: Describe pending={pending:?}; History signals={signals},scheduled={scheduled},started={started},completed={completed},timed_out={timed_out}");
+    }
+    let in_flight_scheduled_event_id =
+        started_while_blocked.expect("server Describe attested SQL-blocked started Activity");
 
-    // Both real admission Signals enter server History while this worker is
-    // down. Neither may initiate any provider RPC before recovery.
+    // Kill a provably STARTED Activity from authoritative server Describe
+    // while SQL SELECT remains blocked.
+    // Both real admission Signals later enter server History while this
+    // worker is down; neither may initiate provider RPC before recovery.
     let mut stopped = child_guard.0.take().expect("running Qdrant worker process");
     stopped.kill().expect("stop isolated Qdrant child worker");
     stopped.wait().expect("drain stopped Qdrant child worker");
+    admission_read_lock.rollback().await.expect("release SQL read barrier after crash");
 
     let issued = operator_process().arg("--operator-issue").arg(&operator_request)
         .env("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1","true")
@@ -407,10 +468,21 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
     let completed_child_history = child_handle
         .fetch_history(WorkflowFetchHistoryOptions::builder().build())
         .into_events().await.expect("inspect restarted native child History");
-    assert!(completed_child_history.iter().any(|event| matches!(
-        event.attributes.as_ref(),
-        Some(Attributes::ActivityTaskTimedOutEventAttributes(_))
-    )), "crashed in-flight admission Activity did not cross the start-to-close retry fence");
+    // Temporal omits intermediate attempt timeouts from successful Activity
+    // History. The terminal Started event carries the final retry attempt;
+    // link it and its Completed event to the *same* pre-crash Scheduled ID.
+    let restarted_probe = completed_child_history.iter().find_map(|event| {
+        let Some(Attributes::ActivityTaskStartedEventAttributes(started)) =
+            &event.attributes else { return None; };
+        (started.scheduled_event_id == in_flight_scheduled_event_id
+            && started.attempt >= 2).then_some(event.event_id)
+    }).expect("crashed SQL admission Activity was not retried after start-to-close timeout");
+    assert!(completed_child_history.iter().any(|event| {
+        let Some(Attributes::ActivityTaskCompletedEventAttributes(completed)) =
+            &event.attributes else { return false; };
+        completed.scheduled_event_id == in_flight_scheduled_event_id
+            && completed.started_event_id == restarted_probe
+    }), "retried SQL admission Activity lacked exact matching successful completion");
 
     // Replay the ORIGINAL server-issued parent and child Histories using
     // independent native SDK replay binaries. Synthetic parser fixtures
