@@ -1019,9 +1019,14 @@ jobs:
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
             cargo-registry-${{ runner.os }}-
-      - name: Compile canonical Worker and Outbox runtime binaries
+      # One Cargo feature resolution and dependency build, three independent
+      # binaries. No second historical Cargo invocation or new CI owner.
+      - name: Compile canonical Worker, Outbox and historical Temporal in one Cargo pass
         working-directory: app/rust
-        run: cargo build --locked -p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker
+        run: |
+          cargo build --locked -p temporal_worker -p outbox_worker -p temporal_orchestrator \
+            --bin temporal_worker --bin outbox_worker --bin temporal_orchestrator \
+            --features temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows
       - name: Bind legacy executable artifacts to exact source
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind legacy --source-sha "$GITHUB_SHA" \
@@ -1031,12 +1036,6 @@ jobs:
           name: rust-e2e-legacy-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/legacy/
           if-no-files-found: error
-      # Historical workflows share the site/SDK dependency closure with the
-      # canonical Worker. Build on this already-running owner, in parallel
-      # with the separate generic Temporal + PG binary job.
-      - name: Compile historical Temporal parent using existing legacy dependency cache
-        working-directory: app/rust
-        run: cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows
       - name: Bind historical replay executable to exact source
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \

@@ -329,15 +329,16 @@ def check() -> None:
     assert "- dag-parent-ab" in workflow
     assert "python3 automation/measure_generic_temporal_rebuild.py" in optional_pg_ab
     assert "automation/reports/generic_parent_rebuild_ab.json" in optional_pg_ab
-    assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
+    assert "cargo build --locked -p temporal_worker -p outbox_worker -p temporal_orchestrator" in legacy_job
+    assert "--features temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows" in legacy_job
     assert "cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects" in v3_job
-    # Reuse existing concurrent compiler owners: canonical legacy Worker
-    # warms the historical dependency closure, while the generic DAG+PG
-    # compiler no longer waits for a second feature-variant cargo build.
-    assert 'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows' in legacy_job
+    # Reuse existing concurrent compiler owners: ONE Cargo invocation builds
+    # canonical Worker/Outbox and historical Temporal with shared features;
+    # generic DAG+PG runs separately without waiting for a second Cargo pass.
+    assert legacy_job.count('cargo build --locked') == 1
     assert 'legacy-qdrant-v1,legacy-workflows' not in v3_job
-    assert legacy_job.index('--kind legacy --source-sha "$GITHUB_SHA"') < legacy_job.index(
-        'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows'
+    assert legacy_job.index('--features temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows') < legacy_job.index(
+        '--kind legacy --source-sha "$GITHUB_SHA"'
     ) < legacy_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"')
     assert "CI_TEMPORAL_GENERIC_REPLAY=PASS historical=refused" in v3_job
     assert "CI_TEMPORAL_LEGACY_REPLAY=PASS modes=pure-v3,v4,v5,qdrant-v1" in legacy_job

@@ -39,13 +39,6 @@ JOBS = [
         step=LIVE_E2E_STEPS["manual-temporal"]),
     job("CI", "2026-11-25T14:04:38Z", None, ""),
 ]
-JOBS[2]["steps"][0]["completed_at"] = "2026-11-25T14:02:00Z"
-JOBS[2]["steps"].append({
-    "name": COMPILER_FINAL_STEPS["rust-e2e-legacy-binaries"],
-    "started_at": "2026-11-25T14:02:01Z",
-    "completed_at": "2026-11-25T14:03:15Z",
-    "conclusion": "success",
-})
 
 
 class CriticalPathEvidence(unittest.TestCase):

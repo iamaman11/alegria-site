@@ -43,18 +43,15 @@ E2E_PATHS = {
 # Cargo ran. These are observable GitHub step durations, NOT per-rustc CPU time.
 COMPILER_STEPS = {
     "rust-e2e-temporal-harness": "Compile real Temporal/full-infra owner E2E test executable",
-    "rust-e2e-legacy-binaries": "Compile canonical Worker and Outbox runtime binaries",
+    "rust-e2e-legacy-binaries": "Compile canonical Worker, Outbox and historical Temporal in one Cargo pass",
     "rust-e2e-qdrant-temporal-harness": "Compile distinct live Temporal/PG/Qdrant E2E test executable",
     "rust-e2e-qdrant-effects-binaries": "Compile real Qdrant/PG Activity worker without contaminating pure parent",
     "rust-e2e-v3-binaries": "Compile default provider-free Temporal DAG and independent PostgreSQL Worker",
     "rust-e2e-outbox-harness": "Compile independent exact-source A14 Outbox E2E test executable",
 }
-# The legacy Worker compiler reuses its domain/SDK closure to build the
-# historical Temporal variant. Measure both Cargo intervals as one prerequisite,
-# while the independent default generic DAG compiler runs in parallel.
-COMPILER_FINAL_STEPS = {
-    "rust-e2e-legacy-binaries": "Compile historical Temporal parent using existing legacy dependency cache",
-}
+# No additional Cargo interval: the canonical Worker, Outbox and historical
+# Temporal binary now share one Cargo feature resolution in the existing job.
+COMPILER_FINAL_STEPS = {}
 LIVE_E2E_STEPS = {
     "manual-temporal": "Execute exact selected temporal legacy real E2E shard",
     "native-qdrant": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
