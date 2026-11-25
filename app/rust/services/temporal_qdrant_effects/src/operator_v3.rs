@@ -273,38 +273,13 @@ async fn attest_v2_validation_barrier(
             "foreign ValidateOnly initiated input",
         )?;
         let validated: OwnerValidationRequestV1 = serde_json::from_slice(initiated_bytes)?;
-        validated.validate_shape()?;
+        validated.verify_against_run(&run)?;
         ensure!(
             serde_json::to_vec(&validated)? == initiated_bytes
                 && validated.parent == effect.invocation.parent
-                && validated.plan_hash == run.plan.hash
-                && validated.scope == run.plan.scope
-                && validated.instance == node.instance
-                && validated.operation == node.operation
-                && validated.owner == owner_command.owner
-                && validated.contract_hash == owner_command.contract_hash
-                && validated.command_bytes == owner_command.command_bytes,
+                && validated.instance == node.instance,
             "V2 foreign ValidateOnly Child request differs from exact parent plan"
         );
-        ensure!(
-            validated.external_inputs.len() + validated.produced_input_ports.len()
-                == node.inputs.len(),
-            "V2 foreign ValidateOnly contains extra or missing input ports"
-        );
-        for (port, binding) in &node.inputs {
-            match binding {
-                ArtifactBinding::External { artifact } => ensure!(
-                    validated.external_inputs.get(port) == run.admitted.get(artifact)
-                        && !validated.produced_input_ports.contains(port),
-                    "V2 foreign ValidateOnly External bytes differ from sealed DAG"
-                ),
-                ArtifactBinding::Produced { .. } => ensure!(
-                    validated.produced_input_ports.contains(port)
-                        && !validated.external_inputs.contains_key(port),
-                    "V2 foreign ValidateOnly Produced port differs from sealed DAG"
-                ),
-            }
-        }
         let started = parent
             .events
             .iter()
@@ -462,7 +437,7 @@ async fn attest_v2_validation_barrier(
         "Qdrant ValidateOnly parent initiation differs from child start History"
     );
     let validated: OwnerValidationRequestV1 = serde_json::from_slice(&input)?;
-    validated.validate_shape()?;
+    validated.verify_against_run(&run)?;
     ensure!(
         validated.parent == effect.invocation.parent
             && validated.plan_hash == effect.invocation.checked_dispatch.plan_hash
@@ -472,30 +447,6 @@ async fn attest_v2_validation_barrier(
             && validated.command_bytes == effect.invocation.command_bytes,
         "Qdrant ValidateOnly command/owner/run does not match exact effect Child"
     );
-    let node = run
-        .plan
-        .nodes
-        .iter()
-        .find(|node| node.instance == validated.instance)
-        .context("Qdrant ValidateOnly node absent from immutable plan")?;
-    for (port, binding) in &node.inputs {
-        match binding {
-            ArtifactBinding::External { artifact } => {
-                ensure!(
-                    validated.external_inputs.get(port) == run.admitted.get(artifact)
-                        && !validated.produced_input_ports.contains(port),
-                    "ValidateOnly External artifact differs from canonical DAG admission"
-                );
-            }
-            ArtifactBinding::Produced { .. } => {
-                ensure!(
-                    validated.produced_input_ports.contains(port)
-                        && !validated.external_inputs.contains_key(port),
-                    "ValidateOnly Produced port incorrectly materialized before producer effect"
-                );
-            }
-        }
-    }
     validate_qdrant_owner_pre_effect_v1(&validated)
         .context("Qdrant own ValidateOnly Child didn't validate its actual typed command")?;
     let completed = parent

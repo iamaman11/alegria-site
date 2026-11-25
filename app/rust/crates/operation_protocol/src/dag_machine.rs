@@ -876,6 +876,124 @@ mod tests {
     }
 
     #[test]
+    fn v2_validation_requests_are_exactly_bound_to_immutable_parent_plan() {
+        let (run, routes) = setup();
+        let id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        let machine = OperationDagMachine::new_v2(&id, run.clone(), routes).unwrap();
+        let mut actual_parent = parent();
+        actual_parent.workflow_id = id;
+        let requests = machine
+            .v2_owner_validation_requests(actual_parent)
+            .unwrap();
+        assert_eq!(requests.len(), 2);
+        for (_, request) in &requests {
+            request.verify_against_run(&run).unwrap();
+        }
+
+        let consumer = requests
+            .iter()
+            .find(|(_, request)| request.instance.as_str() == "consumer")
+            .unwrap()
+            .1
+            .clone();
+        let mut wrong = consumer.clone();
+        wrong.command_bytes.push(0);
+        assert!(wrong.verify_against_run(&run).is_err());
+        let mut wrong = consumer.clone();
+        wrong.produced_input_ports.clear();
+        assert!(wrong.verify_against_run(&run).is_err());
+        let mut wrong = consumer.clone();
+        wrong.contract_hash = ContractHash::from("another-contract");
+        assert!(wrong.verify_against_run(&run).is_err());
+        let mut wrong = consumer.clone();
+        wrong.owner = OperationOwnerId::from("foreign-owner");
+        assert!(wrong.verify_against_run(&run).is_err());
+        let mut wrong = consumer.clone();
+        wrong.plan_hash = PlanHash::from("foreign-plan");
+        assert!(wrong.verify_against_run(&run).is_err());
+        let mut wrong_run = run.clone();
+        wrong_run.owner_commands.remove(&consumer.instance);
+        assert!(consumer.verify_against_run(&wrong_run).is_err());
+        let mut wrong_run = run.clone();
+        wrong_run
+            .pinned_routes
+            .retain(|route| route.operation != consumer.operation);
+        assert!(consumer.verify_against_run(&wrong_run).is_err());
+        let mut wrong_run = run.clone();
+        wrong_run
+            .plan
+            .pinned_contracts
+            .retain(|pinned| pinned.reference != consumer.operation);
+        wrong_run.plan.hash = wrong_run.plan.canonical_hash().unwrap();
+        assert!(consumer.verify_against_run(&wrong_run).is_err());
+    }
+
+    #[test]
+    fn v2_validation_rejects_cross_tenant_or_changed_external_artifact() {
+        let (mut run, routes) = setup();
+        let ext: ArtifactId = "external-document".into();
+        run.plan.external_artifacts.insert(
+            ext.clone(),
+            crate::ExternalArtifact {
+                schema: schema(),
+                scope: run.plan.scope.clone(),
+                provenance: "trusted-source".into(),
+            },
+        );
+        run.plan.nodes[1].inputs.insert(
+            "source".into(),
+            ArtifactBinding::External { artifact: ext.clone() },
+        );
+        run.plan = run.plan.seal(routes.catalog()).unwrap();
+        run.admitted.insert(
+            ext,
+            AdmittedArtifactV1 {
+                schema: schema(),
+                scope: run.plan.scope.clone(),
+                provenance: "trusted-source".into(),
+                payload: b"admitted-external-payload".to_vec(),
+            },
+        );
+        let id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        let machine = OperationDagMachine::new_v2(&id, run.clone(), routes).unwrap();
+        let mut actual_parent = parent();
+        actual_parent.workflow_id = id;
+        let requests = machine
+            .v2_owner_validation_requests(actual_parent)
+            .unwrap();
+        let original = requests
+            .iter()
+            .find(|(_, request)| request.instance.as_str() == "consumer")
+            .unwrap()
+            .1
+            .clone();
+        original.verify_against_run(&run).unwrap();
+        let mut forged = original.clone();
+        forged
+            .external_inputs
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .payload
+            .push(0);
+        assert!(forged.verify_against_run(&run).is_err());
+        let mut forged = original.clone();
+        forged
+            .external_inputs
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .scope
+            .tenant_id = "foreign-tenant".into();
+        assert!(forged.verify_against_run(&run).is_err());
+        let mut forged = original;
+        forged
+            .input_schemas
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .revision += 1;
+        assert!(forged.verify_against_run(&run).is_err());
+    }
+
+    #[test]
     fn parallel_v2_rejects_effectful_owner_before_first_child_command() {
         let mut routes = TrustedRouteCatalog::default();
         let mut write = contract("admitted-external-writer", false);

@@ -328,43 +328,12 @@ fn verify_v2_validation_stage(
                 })
                 .context("validation child has no exact request input")?;
             let typed: OwnerValidationRequestV1 = serde_json::from_slice(raw_input)?;
-            typed.validate_shape()?;
+            typed.verify_against_run(run)?;
             ensure!(
                 serde_json::to_vec(&typed)? == raw_input
                     && typed.parent == parent
-                    && typed.scope == run.plan.scope
-                    && typed.plan_hash == run.plan.hash
-                    && typed.instance == node.instance
-                    && typed.operation == node.operation
-                    && typed.owner == owner_wire.owner
-                    && typed.contract_hash == owner_wire.contract_hash
-                    && typed.command_bytes == owner_wire.command_bytes,
+                    && typed.instance == node.instance,
                 "validation Child request is not exact immutable parent typed plan"
-            );
-            let expected_external = node
-                .inputs
-                .iter()
-                .filter_map(|(port, binding)| {
-                    if let ArtifactBinding::External { artifact } = binding {
-                        run.admitted
-                            .get(artifact)
-                            .map(|value| (port.clone(), value.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .collect::<std::collections::BTreeMap<_, _>>();
-            let expected_produced = node
-                .inputs
-                .iter()
-                .filter_map(|(port, binding)| {
-                    matches!(binding, ArtifactBinding::Produced { .. }).then_some(port.clone())
-                })
-                .collect::<std::collections::BTreeSet<_>>();
-            ensure!(
-                typed.external_inputs == expected_external
-                    && typed.produced_input_ports == expected_produced,
-                "validation Child external/provenance sources differ from parent plan"
             );
             let started = history
                 .events
@@ -604,6 +573,7 @@ async fn attest_from_server_with_version(
                 "ValidateChild parent and child independently observed results differ"
             );
             let typed: OwnerValidationRequestV1 = serde_json::from_slice(&own_start_bytes)?;
+            typed.verify_against_run(&dag)?;
             let result: OwnerValidationResultV1 = serde_json::from_slice(own_result)?;
             result.verify_success(&typed)?;
             if typed.owner.as_str() == "postgres_store" {

@@ -14,8 +14,9 @@ use thiserror::Error;
 
 use crate::{
     operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactSchema,
-    ContractHash, OperationInstanceId, OperationOwnerId, OperationRef, PlanHash, PortId, RunScope,
-    TemporalExecutionIdentityV4,
+    ArtifactBinding, ContractHash, OperationDagRunV6, OperationInstanceId, OperationOwnerId,
+    OperationRef, PlanHash, PortId, RunScope, TemporalExecutionIdentityV4,
+    OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 
 pub const OWNER_VALIDATION_CHILD_TYPE_V1: &str = "AlegriaOwnerValidateV1Workflow";
@@ -115,6 +116,90 @@ impl OwnerValidationRequestV1 {
                 .produced_input_ports
                 .iter()
                 .any(|port| !self.input_schemas.contains_key(port))
+        {
+            return Err(OwnerValidationError::InvalidRequest);
+        }
+        Ok(())
+    }
+
+    /// Independently check a server-observed ValidateOnly request against the
+    /// immutable DAG parent start input. This is a *structural* check shared
+    /// by every owner operator, not approval of another owner's business DTO
+    /// or authority to issue an effect admission.
+    pub fn verify_against_run(&self, run: &OperationDagRunV6) -> Result<(), OwnerValidationError> {
+        self.validate_shape()?;
+        if run.schema_revision != OPERATION_DAG_RUN_SCHEMA_REVISION_V6
+            || run.plan.canonical_hash().ok() != Some(run.plan.hash.clone())
+            || self.scope != run.plan.scope
+            || self.plan_hash != run.plan.hash
+        {
+            return Err(OwnerValidationError::InvalidRequest);
+        }
+        let node = run
+            .plan
+            .nodes
+            .iter()
+            .filter(|node| node.instance == self.instance)
+            .collect::<Vec<_>>();
+        if node.len() != 1 {
+            return Err(OwnerValidationError::InvalidRequest);
+        }
+        let node = node[0];
+        let command = run.owner_commands.get(&node.instance);
+        let matching_contracts = run
+            .plan
+            .pinned_contracts
+            .iter()
+            .filter(|pinned| pinned.reference == node.operation)
+            .collect::<Vec<_>>();
+        let matching_routes = run
+            .pinned_routes
+            .iter()
+            .filter(|route| route.operation == node.operation)
+            .collect::<Vec<_>>();
+        if self.operation != node.operation
+            || command.is_none_or(|command| {
+                command.operation != self.operation
+                    || command.owner != self.owner
+                    || command.contract_hash != self.contract_hash
+                    || command.command_bytes != self.command_bytes
+            })
+            || matching_contracts.len() != 1
+            || matching_contracts[0].fingerprint != self.contract_hash
+            || matching_routes.len() != 1
+            || matching_routes[0].owner != self.owner
+            || matching_routes[0].contract_hash != self.contract_hash
+            || matching_routes[0].workflow_type != OWNER_OPERATION_CHILD_TYPE_V1
+            || matching_routes[0].task_queue.trim().is_empty()
+            || matching_routes[0].build_id.trim().is_empty()
+            || node.inputs.len() != self.input_schemas.len()
+            || node.inputs.iter().any(|(port, source)| {
+                if !self.input_schemas.contains_key(port) {
+                    return true;
+                }
+                match source {
+                    ArtifactBinding::External { artifact } => {
+                        let admitted = run.admitted.get(artifact);
+                        let declared = run.plan.external_artifacts.get(artifact);
+                        self.external_inputs.get(port) != admitted
+                            || admitted.is_none_or(|value| {
+                                self.input_schemas.get(port) != Some(&value.schema)
+                            })
+                            || declared.is_none_or(|value| {
+                                admitted.is_none_or(|actual| {
+                                    actual.schema != value.schema
+                                        || actual.scope != value.scope
+                                        || actual.provenance != value.provenance
+                                })
+                            })
+                            || self.produced_input_ports.contains(port)
+                    }
+                    ArtifactBinding::Produced { .. } => {
+                        !self.produced_input_ports.contains(port)
+                            || self.external_inputs.contains_key(port)
+                    }
+                }
+            })
         {
             return Err(OwnerValidationError::InvalidRequest);
         }
