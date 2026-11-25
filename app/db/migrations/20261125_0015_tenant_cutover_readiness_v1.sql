@@ -149,6 +149,48 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Check every authenticated LOGIN *before* the expensive global history
+    -- census. Even a NOBYPASSRLS LOGIN can SET ROLE to an unrelated privileged
+    -- group role and defeat FORCE RLS; direct role flags and membership in
+    -- the protected tables' owner roles are not sufficient.
+    SELECT binding.role_name INTO v_bad_role
+    FROM pipeline.tenant_role_ownership binding
+    LEFT JOIN pg_catalog.pg_roles r ON r.rolname=binding.role_name
+    WHERE r.oid IS NULL OR NOT r.rolcanlogin OR r.rolsuper OR r.rolbypassrls
+       OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.pg_roles elevated
+           WHERE (elevated.rolsuper OR elevated.rolbypassrls
+                  OR elevated.rolcreaterole OR elevated.rolcreatedb
+                  OR elevated.rolreplication)
+             AND pg_catalog.pg_has_role(r.oid,elevated.oid,'MEMBER'))
+       OR EXISTS (
+           SELECT 1 FROM pg_catalog.pg_class rel
+           WHERE rel.oid=ANY(ARRAY[
+               'raw.pages'::regclass,'raw.sections'::regclass,
+               'extracted.rule_candidates'::regclass,'pipeline.execution_runs'::regclass,
+               'site.seo_hitl_tasks'::regclass,'pipeline.pg_effect_v3_admissions'::regclass,
+               'pipeline.pg_effect_v3_receipts'::regclass,
+               'pipeline.qdrant_projection_v1_admissions'::regclass,
+               'pipeline.qdrant_projection_v1_attempts'::regclass,
+               'pipeline.qdrant_projection_v1_receipts'::regclass,
+               -- Unscoped authority registries are not protected by tenant
+               -- RLS: owner membership can mint new role/context bindings or
+               -- promote a source to canonical Truth without UPDATE rights.
+               'pipeline.tenant_role_ownership'::regclass,
+               'pipeline.tenant_context_ownership'::regclass,
+               'kb.sources'::regclass,'kb.visa_contexts'::regclass])
+             AND pg_catalog.pg_has_role(r.oid,rel.relowner,'MEMBER'))
+    LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'tenant-bound LOGIN % still has unsafe owner/bypass privileges',v_bad_role
+            USING ERRCODE='AV001';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pipeline.tenant_role_ownership) THEN
+        RAISE EXCEPTION 'no authenticated tenant LOGINs have been provisioned'
+            USING ERRCODE='AV001';
+    END IF;
+
     -- No extra permissive policy may silently turn an exact tenant predicate
     -- into a broader OR. Compare the canonical expression, not merely the
     -- policy name; parentheses/whitespace are PostgreSQL pretty-print detail.
@@ -196,34 +238,6 @@ BEGIN
             USING ERRCODE='AV001';
     END IF;
     PERFORM pipeline.assert_no_tenant_quarantine_v1();
-
-    -- Every already provisioned tenant identity must remain a real LOGIN
-    -- without BYPASSRLS or membership in a protected table-owner role.
-    SELECT binding.role_name INTO v_bad_role
-    FROM pipeline.tenant_role_ownership binding
-    LEFT JOIN pg_catalog.pg_roles r ON r.rolname=binding.role_name
-    WHERE r.oid IS NULL OR NOT r.rolcanlogin OR r.rolsuper OR r.rolbypassrls
-       OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication
-       OR EXISTS (
-           SELECT 1 FROM pg_catalog.pg_class rel
-           WHERE rel.oid=ANY(ARRAY[
-               'raw.pages'::regclass,'raw.sections'::regclass,
-               'extracted.rule_candidates'::regclass,'pipeline.execution_runs'::regclass,
-               'site.seo_hitl_tasks'::regclass,'pipeline.pg_effect_v3_admissions'::regclass,
-               'pipeline.pg_effect_v3_receipts'::regclass,
-               'pipeline.qdrant_projection_v1_admissions'::regclass,
-               'pipeline.qdrant_projection_v1_attempts'::regclass,
-               'pipeline.qdrant_projection_v1_receipts'::regclass])
-             AND pg_catalog.pg_has_role(r.oid,rel.relowner,'MEMBER'))
-    LIMIT 1;
-    IF FOUND THEN
-        RAISE EXCEPTION 'tenant-bound LOGIN % still has unsafe owner/bypass privileges',v_bad_role
-            USING ERRCODE='AV001';
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pipeline.tenant_role_ownership) THEN
-        RAISE EXCEPTION 'no authenticated tenant LOGINs have been provisioned'
-            USING ERRCODE='AV001';
-    END IF;
 
     RETURN TRUE; -- narrow DBA policy/history preflight, NEVER cutover authorization
 END;

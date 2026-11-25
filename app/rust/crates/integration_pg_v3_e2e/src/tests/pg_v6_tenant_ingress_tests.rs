@@ -755,6 +755,96 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
             .expect_err("unattributed historical evidence must block attested cutover preflight"),
         "historical NULL quarantine preflight",
     );
+    // A NOBYPASSRLS LOGIN can still SET ROLE to a separate privileged group.
+    // The global FORCE preflight must reject this even before policy/history
+    // checks (which intentionally fail separately in this pre-cutover test).
+    let privileged_roles = [("bypass", "NOLOGIN BYPASSRLS"), ("super", "NOLOGIN SUPERUSER")];
+    for (suffix, privileged_attributes) in privileged_roles {
+        let elevated_role = format!("ci_force_{suffix}_{marker}");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE ROLE {elevated_role} {privileged_attributes};
+             GRANT {elevated_role} TO {login_b} WITH SET TRUE;"
+        )))
+        .execute(&postgres.pool)
+        .await
+        .expect("DBA models a dangerous SET ROLE path into an unrelated privileged role");
+        let can_set_elevated: bool = sqlx::query_scalar(
+            "SELECT pg_catalog.pg_has_role($1::text,$2::text,'SET')",
+        )
+        .bind(&login_b)
+        .bind(&elevated_role)
+        .fetch_one(&postgres.pool)
+        .await
+        .expect("inspect the exact PostgreSQL SET ROLE membership");
+        assert!(
+            can_set_elevated,
+            "tenant LOGIN must actually be able to SET ROLE {suffix}"
+        );
+        let inherited_elevation =
+            sqlx::query("SELECT pipeline.assert_tenant_force_rls_preflight_v1()")
+                .execute(&postgres.pool)
+                .await
+                .expect_err("a SET ROLE privilege escalation must block global FORCE cutover");
+        assert!(
+            inherited_elevation.as_database_error().is_some_and(|database| {
+                database.message().contains("unsafe owner/bypass privileges")
+            }),
+            "global FORCE preflight must reject SET ROLE {suffix} itself, before unrelated history/policy NO-GO: {inherited_elevation}"
+        );
+        pg_v6_expect_provenance_rejection(
+            inherited_elevation,
+            "inherited privileged role membership",
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "REVOKE {elevated_role} FROM {login_b};
+             DROP ROLE {elevated_role};"
+        )))
+        .execute(&postgres.pool)
+        .await
+        .expect("DBA clears the disposable privilege escalation before other preflight checks");
+    }
+    // The role/context/source authority registries are not tenant-RLS tables.
+    // Owning one of them is a separate bypass, even with no SUPERUSER or
+    // BYPASSRLS attribute and even if ten scoped FORCE policies are perfect.
+    let registry_owner = format!("ci_force_registry_{marker}");
+    let original_registry_owner: String = sqlx::query_scalar(
+        "SELECT pg_catalog.quote_ident(pg_catalog.pg_get_userbyid(relowner))
+         FROM pg_catalog.pg_class WHERE oid='pipeline.tenant_role_ownership'::regclass",
+    )
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("capture authoritative registry owner for exact E2E restoration");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {registry_owner} NOLOGIN;
+         GRANT {registry_owner} TO {login_b} WITH SET TRUE;
+         ALTER TABLE pipeline.tenant_role_ownership OWNER TO {registry_owner};"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("DBA models membership in a non-bypass unscoped authority registry owner");
+    let registry_ownership_denied =
+        sqlx::query("SELECT pipeline.assert_tenant_force_rls_preflight_v1()")
+            .execute(&postgres.pool)
+            .await
+            .expect_err("global FORCE preflight must reject authority registry owner membership");
+    assert!(
+        registry_ownership_denied.as_database_error().is_some_and(|database| {
+            database.message().contains("unsafe owner/bypass privileges")
+        }),
+        "registry ownership, not unrelated historical NO-GO, must cause the rejection: {registry_ownership_denied}"
+    );
+    pg_v6_expect_provenance_rejection(
+        registry_ownership_denied,
+        "unscoped authority registry owner membership",
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "ALTER TABLE pipeline.tenant_role_ownership OWNER TO {original_registry_owner};
+         REVOKE {registry_owner} FROM {login_b};
+         DROP ROLE {registry_owner};"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("restore exact authority registry owner and revoke E2E group role");
     let preflight_denied = sqlx::query_scalar::<_, bool>(
         "SELECT pipeline.assert_tenant_force_rls_preflight_v1()",
     )
