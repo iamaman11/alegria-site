@@ -55,9 +55,7 @@ impl IssueRequest {
 /// tenant on the canonical run or source tables, so this is NOT PostgreSQL RLS.
 fn enforce_operator_tenant(configured: &str, claimed: &str) -> Result<()> {
     ensure!(
-        !configured.is_empty()
-            && configured.trim() == configured
-            && configured == claimed,
+        !configured.is_empty() && configured.trim() == configured && configured == claimed,
         "operator tenant policy does not match typed command scope"
     );
     Ok(())
@@ -73,7 +71,10 @@ struct OperatorResult {
 
 async fn operator_pool() -> Result<(PgPool, String)> {
     ensure!(
-        env::var("ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3").ok().as_deref() == Some("true"),
+        env::var("ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3")
+            .ok()
+            .as_deref()
+            == Some("true"),
         "operator command disabled; set ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3=true"
     );
     let operator_url = env::var("PG_EFFECT_OPERATOR_DATABASE_URL")
@@ -187,7 +188,8 @@ async fn assert_operator_role(pool: &PgPool) -> Result<String> {
 }
 
 pub async fn issue_from_file(path: &Path) -> Result<()> {
-    let bytes = fs::read(path).with_context(|| format!("read operator request {}", path.display()))?;
+    let bytes =
+        fs::read(path).with_context(|| format!("read operator request {}", path.display()))?;
     let request: IssueRequest =
         serde_json::from_slice(&bytes).context("decode strict V3 operator issue request")?;
     // Tenant is an operationally provisioned issuer scope, not independent
@@ -258,16 +260,15 @@ async fn issue_with_pool(
     // page/section writers use separate source-ID locks. Share the Activity's
     // stable lock order when computing the issuance snapshot, without ever
     // granting the operator UPDATE/FOR SHARE on source evidence.
-    const SOURCE_REFS_SQL: &str =
-        "SELECT DISTINCT s.id AS section_id, s.page_id
+    const SOURCE_REFS_SQL: &str = "SELECT DISTINCT s.id AS section_id, s.page_id
          FROM extracted.rule_candidates AS c
          JOIN raw.sections AS s
            ON s.id IN (c.raw_section_id, c.evidence_section_id)
          WHERE c.context_key = $1 ORDER BY s.id, s.page_id";
     let evidence_refs = sqlx::query(SOURCE_REFS_SQL)
-    .bind(&request.command.context_key)
-    .fetch_all(&mut *tx)
-    .await?;
+        .bind(&request.command.context_key)
+        .fetch_all(&mut *tx)
+        .await?;
     let mut initial_refs = BTreeSet::new();
     let mut page_ids = BTreeSet::new();
     let mut section_ids = BTreeSet::new();
@@ -298,7 +299,12 @@ async fn issue_with_pool(
         .await?;
     let locked_refs: BTreeSet<(i64, i64)> = post_lock_refs
         .into_iter()
-        .map(|row| (row.get::<i64, _>("section_id"), row.get::<i64, _>("page_id")))
+        .map(|row| {
+            (
+                row.get::<i64, _>("section_id"),
+                row.get::<i64, _>("page_id"),
+            )
+        })
         .collect();
     ensure!(
         locked_refs == initial_refs,
@@ -360,12 +366,11 @@ async fn revoke_once(pool: &PgPool, admission_id: Uuid, tenant: &str) -> Result<
     // Activity takes the same xact lock before its admission/receipt checks.
     // This prevents the race where a receipt commits after a precheck but
     // before operator UPDATE, which could otherwise falsely report revoke.
-    let acquired: bool = sqlx::query_scalar(
-        "SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0))",
-    )
-    .bind(format!("pg-v3-admission|{admission_id}"))
-    .fetch_one(&mut *tx)
-    .await?;
+    let acquired: bool =
+        sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("pg-v3-admission|{admission_id}"))
+            .fetch_one(&mut *tx)
+            .await?;
     if !acquired {
         return Err(RevocationBusy.into());
     }
@@ -378,7 +383,10 @@ async fn revoke_once(pool: &PgPool, admission_id: Uuid, tenant: &str) -> Result<
     .bind(tenant)
     .fetch_one(&mut *tx)
     .await?;
-    ensure!(!committed, "effect already committed; revocation cannot undo it");
+    ensure!(
+        !committed,
+        "effect already committed; revocation cannot undo it"
+    );
     let revoked: Option<Uuid> = sqlx::query_scalar(
         "UPDATE pipeline.pg_effect_v3_admissions
          SET revoked_at = clock_timestamp()
@@ -572,8 +580,8 @@ mod tests {
         sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
             "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{password}'"
         )))
-            .execute(&admin)
-            .await?;
+        .execute(&admin)
+        .await?;
         let grants = [
             format!("GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role}"),
             format!(
@@ -665,28 +673,28 @@ mod tests {
         assert_eq!(issuer, role);
 
         // Neither canonical run state nor receipts are writable by operator.
-        let denied_run = sqlx::query(
-            "UPDATE pipeline.execution_runs SET status = 'done' WHERE run_id = $1",
-        )
-        .bind(accepted.command.run_id)
-        .execute(&operator)
-        .await
-        .expect_err("operator cannot update canonical run");
+        let denied_run =
+            sqlx::query("UPDATE pipeline.execution_runs SET status = 'done' WHERE run_id = $1")
+                .bind(accepted.command.run_id)
+                .execute(&operator)
+                .await
+                .expect_err("operator cannot update canonical run");
         assert!(matches!(denied_run, sqlx::Error::Database(ref db)
             if db.code().as_deref() == Some("42501")));
-        let denied_receipt = sqlx::query(
-            "INSERT INTO pipeline.pg_effect_v3_receipts(admission_id) VALUES ($1)",
-        )
-        .bind(issued.admission_id)
-        .execute(&operator)
-        .await
-        .expect_err("operator cannot forge a receipt");
+        let denied_receipt =
+            sqlx::query("INSERT INTO pipeline.pg_effect_v3_receipts(admission_id) VALUES ($1)")
+                .bind(issued.admission_id)
+                .execute(&operator)
+                .await
+                .expect_err("operator cannot forge a receipt");
         assert!(matches!(denied_receipt, sqlx::Error::Database(ref db)
             if db.code().as_deref() == Some("42501")));
 
-        assert!(revoke_with_pool(&operator, &role, "other-tenant", issued.admission_id)
-            .await
-            .is_err());
+        assert!(
+            revoke_with_pool(&operator, &role, "other-tenant", issued.admission_id)
+                .await
+                .is_err()
+        );
         assert_eq!(
             revoke_with_pool(&operator, &role, "test-tenant", issued.admission_id)
                 .await?
@@ -713,7 +721,11 @@ mod tests {
         .bind(committed.command.admission_id)
         .fetch_one(&operator)
         .await?;
-        let key = execution_key(&committed.workflow_id, &committed.workflow_run_id, &committed.command)?;
+        let key = execution_key(
+            &committed.workflow_id,
+            &committed.workflow_run_id,
+            &committed.command,
+        )?;
         sqlx::query(
             "INSERT INTO pipeline.pg_effect_v3_receipts
              (admission_id, execution_key, operation_id, operation_revision,
@@ -727,9 +739,14 @@ mod tests {
         .bind(snapshot)
         .execute(&admin)
         .await?;
-        assert!(revoke_with_pool(&operator, &role, "test-tenant", committed.command.admission_id)
-            .await
-            .is_err());
+        assert!(revoke_with_pool(
+            &operator,
+            &role,
+            "test-tenant",
+            committed.command.admission_id
+        )
+        .await
+        .is_err());
         Ok(())
     }
 }

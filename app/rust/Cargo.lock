@@ -5342,6 +5342,7 @@ dependencies = [
  "futures",
  "futures-util",
  "postgres_store",
+ "serde",
  "serde_json",
  "sqlx",
  "temporal_gateway",
@@ -5354,6 +5355,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

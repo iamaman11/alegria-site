@@ -174,7 +174,9 @@ fn run(nodes: Vec<OperationNode>) -> EffectDagRunV1 {
     let allowed_effects = if effect_instances.is_empty() {
         BTreeSet::new()
     } else {
-        BTreeSet::from([EffectId::from(truth_domain::review_effect_contract::EFFECT_ID)])
+        BTreeSet::from([EffectId::from(
+            truth_domain::review_effect_contract::EFFECT_ID,
+        )])
     };
     let plan = ExecutionPlan {
         schema_revision: PLAN_SCHEMA_REVISION,
@@ -227,8 +229,14 @@ fn three_real_distinct_pure_effect_dag_topologies_preflight_but_never_start_effe
     review.after.insert(route.instance.clone());
     let first = run(vec![review, route]); // intentionally reverse the input order
     let first_checked = preflight_effect_dag_v1(&scope().run_id, &first).unwrap();
-    assert!(matches!(&first_checked.steps[0], PreparedDagStepV1::Pure { .. }));
-    assert!(matches!(&first_checked.steps[1], PreparedDagStepV1::Owner { .. }));
+    assert!(matches!(
+        &first_checked.steps[0],
+        PreparedDagStepV1::Pure { .. }
+    ));
+    assert!(matches!(
+        &first_checked.steps[1],
+        PreparedDagStepV1::Owner { .. }
+    ));
     no_durable_effects(&first);
 
     // (2) Effect before an independently sourced editorial extraction.
@@ -237,8 +245,14 @@ fn three_real_distinct_pure_effect_dag_topologies_preflight_but_never_start_effe
     editorial.after.insert(review.instance.clone());
     let second = run(vec![editorial, review]);
     let second_checked = preflight_effect_dag_v1(&scope().run_id, &second).unwrap();
-    assert!(matches!(&second_checked.steps[0], PreparedDagStepV1::Owner { .. }));
-    assert!(matches!(&second_checked.steps[1], PreparedDagStepV1::Pure { .. }));
+    assert!(matches!(
+        &second_checked.steps[0],
+        PreparedDagStepV1::Owner { .. }
+    ));
+    assert!(matches!(
+        &second_checked.steps[1],
+        PreparedDagStepV1::Pure { .. }
+    ));
     no_durable_effects(&second);
 
     // (3) Two independent real extraction branches converge on a review
@@ -251,7 +265,10 @@ fn three_real_distinct_pure_effect_dag_topologies_preflight_but_never_start_effe
     let third = run(vec![review, editorial, route]);
     let third_checked = preflight_effect_dag_v1(&scope().run_id, &third).unwrap();
     assert_eq!(third_checked.steps.len(), 3);
-    assert!(matches!(&third_checked.steps[2], PreparedDagStepV1::Owner { .. }));
+    assert!(matches!(
+        &third_checked.steps[2],
+        PreparedDagStepV1::Owner { .. }
+    ));
     no_durable_effects(&third);
 }
 
@@ -264,7 +281,10 @@ fn changed_actual_external_bytes_change_checked_dispatch_key_not_operator_author
         _ => panic!("expected owner"),
     };
     let mut changed = original.clone();
-    let value = changed.admitted.get_mut(&ArtifactId::from("review_scope")).unwrap();
+    let value = changed
+        .admitted
+        .get_mut(&ArtifactId::from("review_scope"))
+        .unwrap();
     value.payload =
         format!("  {} ", String::from_utf8(value.payload.clone()).unwrap()).into_bytes();
     let prepared = preflight_effect_dag_v1(&scope().run_id, &changed).unwrap();
@@ -280,8 +300,10 @@ fn changed_actual_external_bytes_change_checked_dispatch_key_not_operator_author
 fn malformed_owner_command_and_cross_scope_are_rejected_before_any_activity() {
     let valid = run(vec![review_node("review")]);
     let mut cross_run = valid.clone();
-    let OwnerCommandV1::PgTruthReviewReconcileV1(input) =
-        cross_run.owner_commands.get_mut(&OperationInstanceId::from("review")).unwrap();
+    let OwnerCommandV1::PgTruthReviewReconcileV1(input) = cross_run
+        .owner_commands
+        .get_mut(&OperationInstanceId::from("review"))
+        .unwrap();
     input.run_id = Uuid::from_u128(RUN_ID + 1);
     assert!(matches!(
         preflight_effect_dag_v1(&scope().run_id, &cross_run),
@@ -292,8 +314,10 @@ fn malformed_owner_command_and_cross_scope_are_rejected_before_any_activity() {
     ));
 
     let mut stale_plan = valid.clone();
-    let OwnerCommandV1::PgTruthReviewReconcileV1(input) =
-        stale_plan.owner_commands.get_mut(&OperationInstanceId::from("review")).unwrap();
+    let OwnerCommandV1::PgTruthReviewReconcileV1(input) = stale_plan
+        .owner_commands
+        .get_mut(&OperationInstanceId::from("review"))
+        .unwrap();
     input.plan_hash = "forged-contract-fingerprint".into();
     assert!(matches!(
         preflight_effect_dag_v1(&scope().run_id, &stale_plan),
@@ -309,10 +333,10 @@ fn malformed_owner_command_and_cross_scope_are_rejected_before_any_activity() {
         .get_mut(&ArtifactId::from("review_scope"))
         .unwrap()
         .payload = serde_json::to_vec(&TruthReviewScopeArtifactV1 {
-            run_id: Uuid::from_u128(RUN_ID),
-            context_key: "different-source".into(),
-        })
-        .unwrap();
+        run_id: Uuid::from_u128(RUN_ID),
+        context_key: "different-source".into(),
+    })
+    .unwrap();
     assert!(matches!(
         preflight_effect_dag_v1(&scope().run_id, &mutated_source),
         Err(EffectDagError::InvalidOwnerCommand {
@@ -324,10 +348,9 @@ fn malformed_owner_command_and_cross_scope_are_rejected_before_any_activity() {
     let mut extra_command = valid.clone();
     let unplanned_command =
         extra_command.owner_commands[&OperationInstanceId::from("review")].clone();
-    extra_command.owner_commands.insert(
-        "unplanned".into(),
-        unplanned_command,
-    );
+    extra_command
+        .owner_commands
+        .insert("unplanned".into(), unplanned_command);
     assert!(matches!(
         preflight_effect_dag_v1(&scope().run_id, &extra_command),
         Err(EffectDagError::UnexpectedOwnerCommand(_))
@@ -389,10 +412,13 @@ fn malicious_plan_changes_rejected_without_repining_and_no_bypass_via_pure_dag()
         .admitted
         .get_mut(&ArtifactId::from("review_scope"))
         .unwrap()
-        .scope.tenant_id = "another-tenant".into();
+        .scope
+        .tenant_id = "another-tenant".into();
     assert!(matches!(
         preflight_effect_dag_v1(&scope().run_id, &foreign_artifact),
-        Err(EffectDagError::Run(OperationRunError::InvalidArtifactEnvelope(_)))
+        Err(EffectDagError::Run(
+            OperationRunError::InvalidArtifactEnvelope(_)
+        ))
     ));
 
     assert!(execute_pure_dag(

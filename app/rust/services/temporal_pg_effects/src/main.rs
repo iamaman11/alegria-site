@@ -190,14 +190,19 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue") {
-            let path = args.next().context("--operator-issue requires one JSON file")?;
+            let path = args
+                .next()
+                .context("--operator-issue requires one JSON file")?;
             anyhow::ensure!(args.next().is_none(), "unexpected operator issue arguments");
             operator::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-revoke") {
             let id = args.next().context("--operator-revoke requires one UUID")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected operator revoke arguments");
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected operator revoke arguments"
+            );
             operator::revoke_by_id(&id.to_string_lossy()).await?;
             return Ok(());
         }

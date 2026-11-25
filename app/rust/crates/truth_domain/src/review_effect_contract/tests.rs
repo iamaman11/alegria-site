@@ -6,7 +6,10 @@ fn contract_retain_exact_v3_owner_effect_and_truth_invalidation() {
     assert_eq!(contract.reference.id.as_str(), OPERATION_ID);
     assert_eq!(contract.reference.revision, OPERATION_REVISION);
     assert_eq!(contract.owner.as_str(), OWNER_ID);
-    assert_eq!(contract.effects, BTreeSet::from([EffectId::from(EFFECT_ID)]));
+    assert_eq!(
+        contract.effects,
+        BTreeSet::from([EffectId::from(EFFECT_ID)])
+    );
     assert_eq!(contract.idempotency, IdempotencyPolicy::Idempotent);
     assert!(contract
         .invalidates

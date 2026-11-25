@@ -153,7 +153,9 @@ pub fn preflight_effect_dag_v1(
     enforce_json_budget(run, PURE_DAG_MAX_INPUT_BYTES, "effect_dag_input_bytes")?;
 
     let mut registry = semantic_extraction_registry()?;
-    registry.catalog.register::<ReconcileTruthReviewsContractV1>()?;
+    registry
+        .catalog
+        .register::<ReconcileTruthReviewsContractV1>()?;
     // Reject changed contract fingerprints, undeclared effects, stale
     // artifacts, missing dependencies, cycles and unauthorized scopes.
     // Never call seal() on a resumed/untrusted plan.
@@ -242,12 +244,10 @@ pub fn preflight_effect_dag_v1(
             .admitted
             .get(bound_input)
             .ok_or_else(|| OperationRunError::MissingArtifact(bound_input.clone()))?;
-        let review_scope: TruthReviewScopeArtifactV1 =
-            serde_json::from_slice(&admitted.payload).map_err(|error| {
-                EffectDagError::InvalidReviewScope {
-                    artifact: bound_input.clone(),
-                    reason: error.to_string(),
-                }
+        let review_scope: TruthReviewScopeArtifactV1 = serde_json::from_slice(&admitted.payload)
+            .map_err(|error| EffectDagError::InvalidReviewScope {
+                artifact: bound_input.clone(),
+                reason: error.to_string(),
             })?;
         if review_scope.run_id != input.run_id || review_scope.context_key != input.context_key {
             return Err(invalid_command(
@@ -260,11 +260,8 @@ pub fn preflight_effect_dag_v1(
         // artifact's producer or grant PG authority; the PG owner must do so.
         let actual_input_bytes = serde_json::to_vec(&(bound_input, &admitted.payload, command))
             .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
-        let dispatch = checked_plan.checked_dispatch(
-            instance,
-            &actual_input_bytes,
-            DispatchAttempt::First,
-        )?;
+        let dispatch =
+            checked_plan.checked_dispatch(instance, &actual_input_bytes, DispatchAttempt::First)?;
         used_commands.insert(instance.clone());
         steps.push(PreparedDagStepV1::Owner {
             instance: instance.clone(),

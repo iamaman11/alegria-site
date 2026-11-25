@@ -111,13 +111,12 @@ pub async fn assert_unprivileged_pg_effect_role(
     // `SET ROLE restricted_worker`, pass every effective privilege check,
     // and `RESET ROLE` back to owner/superuser later on the same connection.
     // Require a genuine restricted LOGIN as the connection's session identity.
-    let (effective_identity, login_identity, can_login): (String, String, bool) =
-        sqlx::query_as(
-            "SELECT current_user::text, session_user::text, r.rolcanlogin
+    let (effective_identity, login_identity, can_login): (String, String, bool) = sqlx::query_as(
+        "SELECT current_user::text, session_user::text, r.rolcanlogin
              FROM pg_catalog.pg_roles r WHERE r.rolname = current_user",
-        )
-        .fetch_one(pool)
-        .await?;
+    )
+    .fetch_one(pool)
+    .await?;
     if effective_identity != login_identity || !can_login {
         return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
             target: format!(
@@ -458,16 +457,15 @@ pub async fn execute_admitted_reconcile(
     // database-side writer trigger acquires the SAME keys before UPDATE/DELETE,
     // rejecting concurrent mutation with SQLSTATE 55P03. An Activity needs
     // SELECT only, never UPDATE/FOR SHARE rights on raw evidence.
-    const SOURCE_REFS_SQL: &str =
-        "SELECT DISTINCT s.id AS section_id, s.page_id
+    const SOURCE_REFS_SQL: &str = "SELECT DISTINCT s.id AS section_id, s.page_id
          FROM extracted.rule_candidates AS c
          JOIN raw.sections AS s
            ON s.id IN (c.raw_section_id, c.evidence_section_id)
          WHERE c.context_key = $1 ORDER BY s.id, s.page_id";
     let evidence_refs = sqlx::query(SOURCE_REFS_SQL)
-    .bind(&input.context_key)
-    .fetch_all(&mut *tx)
-    .await?;
+        .bind(&input.context_key)
+        .fetch_all(&mut *tx)
+        .await?;
     let mut initial_refs = BTreeSet::new();
     let mut page_ids = BTreeSet::new();
     let mut section_ids = BTreeSet::new();
@@ -503,7 +501,12 @@ pub async fn execute_admitted_reconcile(
         .await?;
     let locked_refs: BTreeSet<(i64, i64)> = post_lock_refs
         .into_iter()
-        .map(|row| (row.get::<i64, _>("section_id"), row.get::<i64, _>("page_id")))
+        .map(|row| {
+            (
+                row.get::<i64, _>("section_id"),
+                row.get::<i64, _>("page_id"),
+            )
+        })
         .collect();
     if locked_refs != initial_refs {
         return Err(ReconcileTruthReviewsError::CandidateSetChanged);
@@ -579,8 +582,8 @@ fn receipt_from_row(row: &sqlx::postgres::PgRow) -> ReconcileTruthReviewsReceipt
 mod tests {
     use super::*;
     use operation_protocol::{
-        ContractCatalog, EffectId, ExecutionPlan, IdempotencyPolicy, PlanHash,
-        RunScope, PLAN_SCHEMA_REVISION,
+        ContractCatalog, EffectId, ExecutionPlan, IdempotencyPolicy, PlanHash, RunScope,
+        PLAN_SCHEMA_REVISION,
     };
 
     fn input() -> ReconcileTruthReviewsInput {

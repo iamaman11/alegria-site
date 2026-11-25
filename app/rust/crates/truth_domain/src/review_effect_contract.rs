@@ -93,9 +93,7 @@ pub fn operation_contract() -> OperationContract {
                 revision: 1,
             },
         )]),
-        invalidates: BTreeSet::from([ArtifactTypeId(
-            "truth.review_queue_snapshot".to_owned(),
-        )]),
+        invalidates: BTreeSet::from([ArtifactTypeId("truth.review_queue_snapshot".to_owned())]),
         effects: BTreeSet::from([EffectId(EFFECT_ID.to_owned())]),
         idempotency: IdempotencyPolicy::Idempotent,
     }
