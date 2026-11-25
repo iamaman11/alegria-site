@@ -275,15 +275,15 @@ pub async fn upsert_page_node(graph: &Graph, row: PageNodeProjection) -> Result<
     graph
         .run(
             query(PAGE_NODE_SNAPSHOT_CYPHER)
-            .param("page_node_key", row.page_node_key)
-            .param("scope_signature", row.scope_signature)
-            .param("page_type_key", row.page_type_key)
-            .param("dominant_intent", row.dominant_intent)
-            .param("canonical_slug", row.canonical_slug)
-            .param("canonical_url_path", row.canonical_url_path)
-            .param("lifecycle_state", row.lifecycle_state)
-            .param("keyword_cluster_key", keyword_cluster_key)
-            .param("blueprint_key", blueprint_key),
+                .param("page_node_key", row.page_node_key)
+                .param("scope_signature", row.scope_signature)
+                .param("page_type_key", row.page_type_key)
+                .param("dominant_intent", row.dominant_intent)
+                .param("canonical_slug", row.canonical_slug)
+                .param("canonical_url_path", row.canonical_url_path)
+                .param("lifecycle_state", row.lifecycle_state)
+                .param("keyword_cluster_key", keyword_cluster_key)
+                .param("blueprint_key", blueprint_key),
         )
         .await?;
     Ok(())
@@ -321,12 +321,12 @@ pub async fn upsert_content_gap(graph: &Graph, row: ContentGapProjection) -> Res
     graph
         .run(
             query(CONTENT_GAP_SNAPSHOT_CYPHER)
-            .param("content_gap_key", row.content_gap_key)
-            .param("scope_signature", row.scope_signature)
-            .param("missing_topic", row.missing_topic)
-            .param("severity", row.severity)
-            .param("status", row.status)
-            .param("page_node_key", page_node_key),
+                .param("content_gap_key", row.content_gap_key)
+                .param("scope_signature", row.scope_signature)
+                .param("missing_topic", row.missing_topic)
+                .param("severity", row.severity)
+                .param("status", row.status)
+                .param("page_node_key", page_node_key),
         )
         .await?;
     Ok(())

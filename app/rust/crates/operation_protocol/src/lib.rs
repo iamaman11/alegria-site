@@ -374,7 +374,9 @@ pub enum PlanError {
         instance: OperationInstanceId,
         effect: EffectId,
     },
-    #[error("ambiguous outcome at at-most-once operation {0:?}: retry requires operator reconciliation")]
+    #[error(
+        "ambiguous outcome at at-most-once operation {0:?}: retry requires operator reconciliation"
+    )]
     AmbiguousEffectRetry(OperationInstanceId),
     #[error("reader {consumer:?} of artifact type {artifact_type:?} is unordered relative to invalidator {invalidator:?}")]
     UnorderedArtifactHazard {

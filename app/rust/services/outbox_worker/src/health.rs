@@ -144,7 +144,10 @@ mod tests {
             anyhow::bail!("simulated PostgreSQL ACK error");
         };
         assert!(worker_attempt().is_err());
-        assert!(!ready(&path), "early error must revoke readiness immediately");
+        assert!(
+            !ready(&path),
+            "early error must revoke readiness immediately"
+        );
 
         let lease = ReadinessLease::acquire(Some(path.clone())).unwrap();
         assert!(!ready(&path));
