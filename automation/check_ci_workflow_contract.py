@@ -331,23 +331,26 @@ def check() -> None:
     assert "automation/reports/generic_parent_rebuild_ab.json" in optional_pg_ab
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects" in v3_job
-    # Distinct exact-source artifacts for provider-free default and one shared
-    # historical Pure V3/Qdrant V1 parent: generic is packed before legacy.
-    assert v3_job.index('--kind v3 --source-sha "$GITHUB_SHA"') < v3_job.index(
+    # Reuse existing concurrent compiler owners: canonical legacy Worker
+    # warms the historical dependency closure, while the generic DAG+PG
+    # compiler no longer waits for a second feature-variant cargo build.
+    assert 'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows' in legacy_job
+    assert 'legacy-qdrant-v1,legacy-workflows' not in v3_job
+    assert legacy_job.index('--kind legacy --source-sha "$GITHUB_SHA"') < legacy_job.index(
         'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows'
-    ) < v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"')
-    assert "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1,pure-v3,v4,v5" in v3_job
-    assert v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"') < v3_job.index(
-        "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1,pure-v3,v4,v5"
-    ) < v3_job.index("uses: actions/upload-artifact@v7")
+    ) < legacy_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"')
+    assert "CI_TEMPORAL_GENERIC_REPLAY=PASS historical=refused" in v3_job
+    assert "CI_TEMPORAL_LEGACY_REPLAY=PASS modes=pure-v3,v4,v5,qdrant-v1" in legacy_job
+    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in legacy_job
+    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' not in v3_job
     for historical_replay in (
         "--replay-history", "--replay-effect-history", "--replay-v5-effect-history",
         "--replay-qdrant-effect-history",
     ):
         assert historical_replay in v3_job
+        assert historical_replay in legacy_job
     assert 'grep -F \'requires legacy-\'' in v3_job
-    assert "grep -F 'read actual Temporal history'" in v3_job
-    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in v3_job
+    assert "grep -F 'read actual Temporal history'" in legacy_job
     assert "cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects" in qdrant_effects_job
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_effects_job
     for block in (truth_compiler, pg_compiler, outbox_compiler, legacy_job, v3_job, qdrant_effects_job):
@@ -405,6 +408,7 @@ def check() -> None:
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in runner_blocks["rust-pg-e2e"]
     for historical_runner in ("rust-temporal-v3-e2e", "rust-pg-e2e"):
         runner = runner_blocks[historical_runner]
+        assert "needs.rust-e2e-legacy-binaries.result == 'success'" in runner
         assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in runner
         assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in runner
     pure_runner = runner_blocks["rust-temporal-v3-e2e"]
@@ -414,6 +418,7 @@ def check() -> None:
     qdrant_runner = runner_blocks["rust-qdrant-temporal-e2e"]
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
+    assert "needs.rust-e2e-legacy-binaries.result == 'success'" in qdrant_runner
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' in qdrant_runner
     assert 'name: rust-e2e-v3-${{ github.sha }}' in qdrant_runner
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_runner

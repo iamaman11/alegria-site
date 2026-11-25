@@ -30,6 +30,7 @@ E2E_PATHS = {
             "rust-e2e-qdrant-temporal-harness",
             "rust-e2e-qdrant-effects-binaries",
             "rust-e2e-v3-binaries",
+            "rust-e2e-legacy-binaries",
         ),
     ),
     "outbox": (
@@ -48,12 +49,11 @@ COMPILER_STEPS = {
     "rust-e2e-v3-binaries": "Compile default provider-free Temporal DAG and independent PostgreSQL Worker",
     "rust-e2e-outbox-harness": "Compile independent exact-source A14 Outbox E2E test executable",
 }
-# The V3 compiler builds the provider-free generic executable first and the
-# frozen legacy-feature variant *after packaging* it, on the same runner.
-# Both actual Cargo intervals belong to the critical-path prerequisite; never
-# report only the first as though the second link were free.
+# The legacy Worker compiler reuses its domain/SDK closure to build the
+# historical Temporal variant. Measure both Cargo intervals as one prerequisite,
+# while the independent default generic DAG compiler runs in parallel.
 COMPILER_FINAL_STEPS = {
-    "rust-e2e-v3-binaries": "Compile frozen Qdrant V1 parent explicitly, without altering generic artifact",
+    "rust-e2e-legacy-binaries": "Compile historical Temporal parent using existing legacy dependency cache",
 }
 LIVE_E2E_STEPS = {
     "manual-temporal": "Execute exact selected temporal legacy real E2E shard",
@@ -97,7 +97,7 @@ def observed_compiler_span(job: dict, owner: str) -> tuple[datetime, datetime]:
     if additional is not None:
         later_started, later_finished = observed_step(job, additional)
         if later_started < finished:
-            raise ValueError(f"feature-enabled historical parent started before provider-free compile completed in {owner}")
+            raise ValueError(f"historical Temporal compile started before canonical Worker compile completed in {owner}")
         finished = later_finished
     return first, finished
 

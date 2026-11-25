@@ -39,6 +39,13 @@ JOBS = [
         step=LIVE_E2E_STEPS["manual-temporal"]),
     job("CI", "2026-11-25T14:04:38Z", None, ""),
 ]
+JOBS[2]["steps"][0]["completed_at"] = "2026-11-25T14:02:00Z"
+JOBS[2]["steps"].append({
+    "name": COMPILER_FINAL_STEPS["rust-e2e-legacy-binaries"],
+    "started_at": "2026-11-25T14:02:01Z",
+    "completed_at": "2026-11-25T14:03:15Z",
+    "conclusion": "success",
+})
 
 
 class CriticalPathEvidence(unittest.TestCase):
@@ -127,27 +134,19 @@ class CriticalPathEvidence(unittest.TestCase):
                 "2026-11-25T14:02:35Z", step=COMPILER_STEPS["rust-e2e-qdrant-effects-binaries"]),
             job("rust-e2e-v3-binaries", "2026-11-25T14:00:25Z",
                 "2026-11-25T14:02:33Z", step=COMPILER_STEPS["rust-e2e-v3-binaries"]),
-            job("rust-qdrant-temporal-e2e (temporal_qdrant)", "2026-11-25T14:02:40Z",
-                "2026-11-25T14:03:20Z", step=LIVE_E2E_STEPS["native-qdrant"]),
+            job("rust-qdrant-temporal-e2e (temporal_qdrant)", "2026-11-25T14:03:20Z",
+                "2026-11-25T14:04:20Z", step=LIVE_E2E_STEPS["native-qdrant"]),
             job("rust-e2e-outbox-harness", "2026-11-25T14:00:22Z",
                 "2026-11-25T14:02:31Z", step=COMPILER_STEPS["rust-e2e-outbox-harness"]),
             job("rust-outbox-e2e (outbox)", "2026-11-25T14:03:20Z",
                 "2026-11-25T14:04:15Z", step=LIVE_E2E_STEPS["outbox"]),
         ]
-        v3 = next(row for row in complete if row["name"] == "rust-e2e-v3-binaries")
-        v3["steps"][0]["completed_at"] = "2026-11-25T14:02:20Z"
-        v3["steps"].append({
-            "name": COMPILER_FINAL_STEPS["rust-e2e-v3-binaries"],
-            "started_at": "2026-11-25T14:02:21Z",
-            "completed_at": "2026-11-25T14:02:33Z",
-            "conclusion": "success",
-        })
         report = analyze(RUN, complete, NOW, checkout_sha="f" * 40, expected_attempt=1)
         routes = {path["route"]: path for path in report["measured_paths"]}
         self.assertEqual(set(routes), {"manual-temporal", "native-qdrant", "outbox"})
-        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 3)
+        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 4)
         self.assertEqual(routes["native-qdrant"]["last_compiler"],
-                         "rust-e2e-qdrant-effects-binaries")
+                         "rust-e2e-legacy-binaries")
         self.assertEqual(routes["outbox"]["last_compiler"], "rust-e2e-legacy-binaries")
         self.assertFalse(report["event_to_green_180_confirmed"])
 
