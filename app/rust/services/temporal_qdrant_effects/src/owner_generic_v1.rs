@@ -361,8 +361,8 @@ pub(crate) async fn replay_history(path: &Path) -> Result<()> {
     let history = WorkflowHistory::from_json(&std::fs::read(path)?)
         .map_err(|error| anyhow::anyhow!("invalid real Qdrant generic History: {error}"))?;
     let mut options = WorkflowReplayerOptions::new()
-        .namespace("default".into())
-        .task_queue(QDRANT_GENERIC_OWNER_QUEUE_V1.into())
+        .namespace("default".to_owned())
+        .task_queue(QDRANT_GENERIC_OWNER_QUEUE_V1.to_owned())
         .build();
     options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
     WorkflowReplayer::new(options)

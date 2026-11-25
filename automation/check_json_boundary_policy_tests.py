@@ -18,12 +18,16 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
-    def test_native_v6_json_exceptions_are_only_four_typed_wire_boundaries(self) -> None:
+    def test_native_v6_json_exceptions_are_only_eight_typed_wire_boundaries(self) -> None:
         self.assertEqual(NATIVE_OWNER_V6_JSON_BOUNDARIES, {
             "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v2.rs",
             "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
             "app/rust/services/temporal_pg_effects/src/operator_owner_v1.rs",
             "app/rust/services/temporal_qdrant_effects/src/operator_v2.rs",
+            "app/rust/crates/qdrant_contracts/src/qdrant_owner_generic_v1.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_governance.rs",
+            "app/rust/services/temporal_qdrant_effects/src/operator_v3.rs",
         })
         for relative in NATIVE_OWNER_V6_JSON_BOUNDARIES:
             with self.subTest(relative=relative):
@@ -33,14 +37,18 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/crates/qdrant_contracts/src/lib.rs",
             "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v1.rs",
             "app/rust/crates/qdrant_contracts/src/future_json.rs",
+            "app/rust/crates/qdrant_contracts/src/qdrant_owner_generic_v2.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/future_mixed_owner_json_tests.rs",
             "app/rust/crates/operation_protocol/src/owner_dispatch.rs",
             "app/rust/crates/seo_application/src/operation_adapter/generic_dag_v1.rs",
             "app/rust/services/temporal_orchestrator/src/workflow.rs",
             "app/rust/services/temporal_orchestrator/src/owner_catalog_v2.rs",
             "app/rust/services/temporal_pg_effects/src/main.rs",
             "app/rust/services/temporal_pg_effects/src/owner_v2.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
             "app/rust/services/temporal_qdrant_effects/src/owner_v2.rs",
-            "app/rust/services/temporal_qdrant_effects/src/operator_v3.rs",
+            "app/rust/services/temporal_qdrant_effects/src/operator_v4.rs",
+            "app/rust/services/temporal_qdrant_effects/src/nested/operator_v3.rs",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))

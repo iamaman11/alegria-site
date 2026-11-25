@@ -98,7 +98,7 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
 })
 
-# Native V6's only new typed JSON ingress points. These are exact, reviewed
+# Native V6's reviewed typed JSON ingress points. These are exact, reviewed
 # wire/config adapters, not a grant to the provider-free DAG runner, domain
 # contracts generally, owner Activities, or any future sibling module.
 NATIVE_OWNER_V6_JSON_BOUNDARIES = frozenset({
@@ -114,6 +114,22 @@ NATIVE_OWNER_V6_JSON_BOUNDARIES = frozenset({
     # Separately credentialed Qdrant operator performs the equivalent strict
     # typed CLI/History decoding for its V2 child and issuer admission.
     "app/rust/services/temporal_qdrant_effects/src/operator_v2.rs",
+    # Shared V1 Qdrant owner adapter decodes a concrete externally admitted
+    # keyword command and emits an explicitly typed receipt. It does not
+    # authorize Produced dataflow or offer a general domain JSON entrypoint.
+    "app/rust/crates/qdrant_contracts/src/qdrant_owner_generic_v1.rs",
+    # This exact opt-in native multi-owner E2E serializes the immutable DAG
+    # Start and checks real Temporal History, separate SQL receipt and Qdrant
+    # readback. Its sibling or future test files remain deny-by-default.
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+    # The isolated platform governance operator parses strict typed locators,
+    # operator-owned route catalogs and the actual Temporal parent Start.
+    # It has no grant to decode arbitrary owner effects or use-case inputs.
+    "app/rust/services/temporal_pg_effects/src/operator_dag_governance.rs",
+    # The Qdrant V3 issuer binds its concrete typed command to reciprocal
+    # parent/child server Histories and tenant-bound immutable SQL authority.
+    # This grants no JSON parsing to the Qdrant Activity or other owners.
+    "app/rust/services/temporal_qdrant_effects/src/operator_v3.rs",
 })
 
 FORBIDDEN_PATTERNS = {
