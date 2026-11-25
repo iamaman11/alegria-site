@@ -625,8 +625,9 @@ fn v5_unordered_same_context_effects_fail_before_any_child_invocation() {
     // owners that share a canonical PostgreSQL write scope.
     assert!(matches!(
         denied,
-        Err(EffectDagError::Plan(PlanError::UnorderedInvalidations { .. }))
-            | Err(EffectDagError::ConflictingOwnerWriteScope { .. })
+        Err(EffectDagError::Plan(
+            PlanError::UnorderedInvalidations { .. }
+        )) | Err(EffectDagError::ConflictingOwnerWriteScope { .. })
     ));
 }
 
