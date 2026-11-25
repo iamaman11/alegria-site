@@ -84,14 +84,13 @@ pub async fn reconcile_truth_candidate_reviews_in_tx(
     // One canonical SQL policy is shared by the existing app writer and the
     // admission-gated SECURITY DEFINER owner function. The SQL helper is
     // SECURITY INVOKER: calling it alone never elevates a restricted worker.
-    let created: i64 = sqlx::query_scalar(
-        "SELECT site.reconcile_truth_candidate_reviews_v1($1, $2)",
-    )
-    .bind(context_key)
-    .bind(run_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
+    let created: i64 =
+        sqlx::query_scalar("SELECT site.reconcile_truth_candidate_reviews_v1($1, $2)")
+            .bind(context_key)
+            .bind(run_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(created as u64)
 }
 

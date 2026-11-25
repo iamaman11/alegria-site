@@ -12,14 +12,14 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use futures::FutureExt;
 use operation_protocol::{EffectChildInvocationV4, EffectChildResultV4};
 use postgres_store::truth_review_effect_v3::{
-    assert_unprivileged_pg_effect_role, execute_admitted_reconcile,
-    execute_admitted_reconcile_v4, ReconcileTruthReviewsError, ReconcileTruthReviewsInput,
-    ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE, PG_EFFECT_WORKFLOW_TYPE,
-    PG_EFFECT_WORKFLOW_TYPE_V4,
+    assert_unprivileged_pg_effect_role, execute_admitted_reconcile, execute_admitted_reconcile_v4,
+    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
+    PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4,
 };
+#[cfg(test)]
+use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
@@ -70,10 +70,7 @@ fn worker_database_url() -> Result<String> {
         ),
     };
     anyhow::ensure!(
-        !url.trim().is_empty()
-            && url.trim() == url
-            && !url.contains('\r')
-            && !url.contains('\n'),
+        !url.trim().is_empty() && url.trim() == url && !url.contains('\r') && !url.contains('\n'),
         "PG effect Worker DSN is blank or contains unsafe whitespace"
     );
     Ok(url)
@@ -147,10 +144,12 @@ impl PgTruthReviewActivities {
         invocation: EffectChildInvocationV4,
     ) -> Result<ReconcileTruthReviewsReceipt, ActivityError> {
         let info = ctx.info();
-        let workflow_id = info.workflow_id.as_deref().ok_or_else(||
-            activity_terminal("V4 effect requires server-attested child Workflow ID"))?;
-        let run_id = info.workflow_run_id.as_deref().ok_or_else(||
-            activity_terminal("V4 effect requires server-attested child Workflow Run ID"))?;
+        let workflow_id = info.workflow_id.as_deref().ok_or_else(|| {
+            activity_terminal("V4 effect requires server-attested child Workflow ID")
+        })?;
+        let run_id = info.workflow_run_id.as_deref().ok_or_else(|| {
+            activity_terminal("V4 effect requires server-attested child Workflow Run ID")
+        })?;
         if info.workflow_type.as_deref() != Some(PG_EFFECT_WORKFLOW_TYPE_V4)
             || info.task_queue != PG_EFFECT_TASK_QUEUE
         {
@@ -162,12 +161,12 @@ impl PgTruthReviewActivities {
             .await
             .map_err(|err| {
                 let failure = match err.retry_class() {
-                    RetryClass::Never => ApplicationFailure::non_retryable(
-                        std::io::Error::other(err.to_string()),
-                    ),
-                    RetryClass::RetryWithSameAdmission => ApplicationFailure::new(
-                        std::io::Error::other(err.to_string()),
-                    ),
+                    RetryClass::Never => {
+                        ApplicationFailure::non_retryable(std::io::Error::other(err.to_string()))
+                    }
+                    RetryClass::RetryWithSameAdmission => {
+                        ApplicationFailure::new(std::io::Error::other(err.to_string()))
+                    }
                 };
                 ActivityError::application(failure)
             })
@@ -198,7 +197,10 @@ struct PgTruthReviewReconcileV4Workflow {
 impl PgTruthReviewReconcileV4Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, invocation: EffectChildInvocationV4) -> Self {
-        Self { immutable_invocation: invocation, admission_signal_received: false }
+        Self {
+            immutable_invocation: invocation,
+            admission_signal_received: false,
+        }
     }
 
     #[run]
@@ -209,7 +211,8 @@ impl PgTruthReviewReconcileV4Workflow {
                 ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
             )
         })?;
-        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        ctx.wait_condition(|state| state.admission_signal_received)
+            .await?;
         let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
         options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
         let receipt: ReconcileTruthReviewsReceipt = ctx
@@ -338,8 +341,13 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-v4") {
-            let path = args.next().context("--operator-issue-v4 requires one JSON file")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected V4 operator issue arguments");
+            let path = args
+                .next()
+                .context("--operator-issue-v4 requires one JSON file")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected V4 operator issue arguments"
+            );
             operator_v4::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
@@ -353,8 +361,13 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-revoke-v4") {
-            let id = args.next().context("--operator-revoke-v4 requires one UUID")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected V4 operator revoke arguments");
+            let id = args
+                .next()
+                .context("--operator-revoke-v4 requires one UUID")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected V4 operator revoke arguments"
+            );
             operator_v4::revoke_by_id(&id.to_string_lossy()).await?;
             return Ok(());
         }

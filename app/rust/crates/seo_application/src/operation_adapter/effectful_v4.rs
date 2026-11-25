@@ -9,14 +9,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    ArtifactBinding, ArtifactId, BoundEffectInputV4, EffectChildInvocationV4,
-    OperationInstanceId, PlanHash, PortId, TemporalExecutionIdentityV4,
-    EFFECT_CHILD_SCHEMA_REVISION,
+    ArtifactBinding, ArtifactId, BoundEffectInputV4, EffectChildInvocationV4, OperationInstanceId,
+    PlanHash, PortId, TemporalExecutionIdentityV4, EFFECT_CHILD_SCHEMA_REVISION,
 };
 use serde::{Deserialize, Serialize};
-use truth_domain::review_effect_contract::{
-    ReconcileTruthReviewsReceipt, OUTPUT_PORT,
-};
+use truth_domain::review_effect_contract::{ReconcileTruthReviewsReceipt, OUTPUT_PORT};
 
 use super::effectful_v1::{
     preflight_effect_dag_v1, require_canonical_owner_inputs_v4, EffectDagError, EffectDagRunV1,
@@ -97,9 +94,10 @@ impl MixedDagMachineV4 {
     /// receives the same canonical schema/scope/provenance as the pure runner.
     pub fn advance_pure(&mut self) -> Result<(), EffectDagError> {
         let (instance, operation) = match self.next_step() {
-            Some(PreparedDagStepV1::Pure { instance, operation }) => {
-                (instance.clone(), operation.clone())
-            }
+            Some(PreparedDagStepV1::Pure {
+                instance,
+                operation,
+            }) => (instance.clone(), operation.clone()),
             _ => return Err(EffectDagError::WrongStepKind),
         };
         let node = self
@@ -138,7 +136,12 @@ impl MixedDagMachineV4 {
                 .keys()
                 .find(|port| !ports.contains(*port))
                 .cloned()
-                .or_else(|| ports.iter().find(|port| !outputs.contains_key(*port)).cloned())
+                .or_else(|| {
+                    ports
+                        .iter()
+                        .find(|port| !outputs.contains_key(*port))
+                        .cloned()
+                })
                 .expect("different output port sets have a difference");
             return Err(OperationRunError::InvalidOutputPort {
                 operation,

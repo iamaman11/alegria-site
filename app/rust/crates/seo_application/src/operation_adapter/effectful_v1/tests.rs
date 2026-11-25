@@ -489,9 +489,15 @@ fn v4_native_child_invocation_roundtrips_exact_plan_derived_dispatch() {
         })
         .unwrap();
     invocation.verify_integrity().unwrap();
-    assert_eq!(invocation.schema_revision, operation_protocol::EFFECT_CHILD_SCHEMA_REVISION);
+    assert_eq!(
+        invocation.schema_revision,
+        operation_protocol::EFFECT_CHILD_SCHEMA_REVISION
+    );
     assert_eq!(invocation.checked_dispatch.plan_hash, run.plan.hash);
-    assert_eq!(invocation.checked_dispatch.instance.as_str(), "review_after_route");
+    assert_eq!(
+        invocation.checked_dispatch.instance.as_str(),
+        "review_after_route"
+    );
     let typed: ReconcileTruthReviewsInput =
         serde_json::from_slice(&invocation.owner_command_bytes).unwrap();
     assert_eq!(typed.operation_instance, "review_after_route");
@@ -520,7 +526,10 @@ fn v4_interpreter_rejects_forged_pg_receipt_and_unfinished_graph() {
         machine.advance_owner_receipt(forged),
         Err(EffectDagError::InvalidOwnerReceipt(_))
     ));
-    assert!(matches!(machine.finish(), Err(EffectDagError::IncompleteDag)));
+    assert!(matches!(
+        machine.finish(),
+        Err(EffectDagError::IncompleteDag)
+    ));
 }
 
 #[test]
@@ -547,20 +556,21 @@ fn v4_typed_child_result_boundary_rejects_wrong_version_and_dispatch_key() {
         pg_receipt: receipt.clone(),
     };
     let wire = serde_json::to_string(&child_result).unwrap();
-    assert_eq!(decode_owner_child_result_v4(&wire, checked).unwrap(), receipt);
+    assert_eq!(
+        decode_owner_child_result_v4(&wire, checked).unwrap(),
+        receipt
+    );
     child_result.schema_revision = 3;
-    assert!(decode_owner_child_result_v4(
-        &serde_json::to_string(&child_result).unwrap(),
-        checked,
-    )
-    .is_err());
+    assert!(
+        decode_owner_child_result_v4(&serde_json::to_string(&child_result).unwrap(), checked,)
+            .is_err()
+    );
     child_result.schema_revision = operation_protocol::EFFECT_CHILD_SCHEMA_REVISION;
     child_result.dispatch_execution_key = "forged-dispatch-key".into();
-    assert!(decode_owner_child_result_v4(
-        &serde_json::to_string(&child_result).unwrap(),
-        checked,
-    )
-    .is_err());
+    assert!(
+        decode_owner_child_result_v4(&serde_json::to_string(&child_result).unwrap(), checked,)
+            .is_err()
+    );
 }
 
 #[test]

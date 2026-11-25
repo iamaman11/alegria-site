@@ -5,20 +5,17 @@
 //! artifact contracts are reused from `seo_application`, not reimplemented.
 //! This process cannot execute Activities, access provider SDKs or publish.
 
+use operation_protocol::{EffectChildInvocationV4, TemporalExecutionIdentityV4};
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
-    MixedDagMachineV4,
-    PreparedDagStepV1, PureDagRun,
-};
-use operation_protocol::{
-    EffectChildInvocationV4, TemporalExecutionIdentityV4,
+    MixedDagMachineV4, PreparedDagStepV1, PureDagRun,
 };
 use temporalio_common::WorkflowDefinition;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
 use temporalio_sdk::{
-    ApplicationFailure, ChildWorkflowOptions, SyncWorkflowContext, WorkerOptions,
-    WorkflowContext, WorkflowContextView, WorkflowResult, WorkflowTermination,
+    ApplicationFailure, ChildWorkflowOptions, WorkerOptions, WorkflowContext,
+    WorkflowContextView, WorkflowResult, WorkflowTermination,
 };
 
 pub(crate) const PG_V4_CHILD_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV4Workflow";
@@ -86,9 +83,7 @@ pub(crate) fn register_v4(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn register_for_replay_v4(
-    opts: &mut WorkflowReplayerOptions,
-) -> anyhow::Result<()> {
+pub(crate) fn register_for_replay_v4(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV2Workflow>()?;
     Ok(())
 }
@@ -111,8 +106,7 @@ impl AlegriaAdmittedEffectDagV2Workflow {
             run_id: ctx.run_id().to_string(),
         };
         // Complete contract, owner and input preflight BEFORE first child.
-        let mut machine = MixedDagMachineV4::new(&workflow_id, input)
-            .map_err(workflow_failure)?;
+        let mut machine = MixedDagMachineV4::new(&workflow_id, input).map_err(workflow_failure)?;
         while let Some(step) = machine.next_step().cloned() {
             match step {
                 PreparedDagStepV1::Pure { .. } => {
@@ -128,8 +122,8 @@ impl AlegriaAdmittedEffectDagV2Workflow {
                     // History's reciprocal parent execution before admission.
                     let child_id = format!("alegria-pg-effect-v4-{}", checked.execution_key);
                     let options = ChildWorkflowOptions::builder()
-                        .workflow_id(Some(child_id))
-                        .task_queue(Some(PG_V4_CHILD_COMMAND_QUEUE.to_string()))
+                        .workflow_id(child_id)
+                        .task_queue(PG_V4_CHILD_COMMAND_QUEUE.to_string())
                         .build();
                     let started = ctx
                         .start_child_workflow(
@@ -142,8 +136,7 @@ impl AlegriaAdmittedEffectDagV2Workflow {
                     // Wait for a genuine typed child result. The child stays
                     // blocked on operator_admission_ready_v4 until a separate
                     // privileged process commits V4 PG admission and signals.
-                    let result_json: String =
-                        started.result().await.map_err(workflow_failure)?;
+                    let result_json: String = started.result().await.map_err(workflow_failure)?;
                     let receipt = decode_owner_child_result_v4(&result_json, &checked)
                         .map_err(workflow_failure)?;
                     machine

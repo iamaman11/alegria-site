@@ -60,7 +60,10 @@ fn immutable_source_sha(value: &str) -> bool {
 fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConfig> {
     let pure_opt_in = read(LIVE_OPT_IN);
     let effect_opt_in = read(V4_LIVE_OPT_IN);
-    for (label, setting) in [(LIVE_OPT_IN, &pure_opt_in), (V4_LIVE_OPT_IN, &effect_opt_in)] {
+    for (label, setting) in [
+        (LIVE_OPT_IN, &pure_opt_in),
+        (V4_LIVE_OPT_IN, &effect_opt_in),
+    ] {
         anyhow::ensure!(
             matches!(setting.as_deref(), None | Some("true") | Some("false")),
             "{label} must be exactly true or false"
@@ -72,9 +75,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     ) {
         (true, false) => OrchestratorMode::PureV3,
         (false, true) => OrchestratorMode::AdmittedEffectV4,
-        _ => anyhow::bail!(
-            "select exactly one of {LIVE_OPT_IN}=true and {V4_LIVE_OPT_IN}=true"
-        ),
+        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}=true and {V4_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
@@ -272,7 +273,10 @@ mod tests {
         settings.insert(LIVE_OPT_IN.into(), "true".into());
         assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
         settings.insert(LIVE_OPT_IN.into(), "false".into());
-        settings.insert("TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(), PURE_DAG_ORCHESTRATOR_QUEUE.into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            PURE_DAG_ORCHESTRATOR_QUEUE.into(),
+        );
         assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
     }
 }

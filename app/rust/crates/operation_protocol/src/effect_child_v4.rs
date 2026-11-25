@@ -76,9 +76,7 @@ impl EffectChildInvocationV4 {
     /// Wire- and history-stable SHA input in THIS order. Include the schema
     /// revision, complete input envelope and typed command bytes: neither a
     /// claimed digest nor mutable admission state may replace these bytes.
-    pub fn canonical_dispatch_input_bytes(
-        &self,
-    ) -> Result<Vec<u8>, EffectChildProtocolError> {
+    pub fn canonical_dispatch_input_bytes(&self) -> Result<Vec<u8>, EffectChildProtocolError> {
         canonical_effect_dispatch_input_bytes(&self.bound_input, &self.owner_command_bytes)
     }
 
@@ -94,7 +92,10 @@ impl EffectChildInvocationV4 {
             ("parent.workflow_id", self.parent.workflow_id.as_str()),
             ("parent.run_id", self.parent.run_id.as_str()),
             ("artifact.provenance", self.bound_input.provenance.as_str()),
-            ("checked.plan_hash", self.checked_dispatch.plan_hash.as_str()),
+            (
+                "checked.plan_hash",
+                self.checked_dispatch.plan_hash.as_str(),
+            ),
             ("checked.instance", self.checked_dispatch.instance.as_str()),
         ] {
             if value.trim().is_empty() {
@@ -112,10 +113,7 @@ impl EffectChildInvocationV4 {
         if actual_input_hash != self.checked_dispatch.input_hash {
             return Err(EffectChildProtocolError::InputHashMismatch);
         }
-        let expected_key = checked_execution_key(
-            &self.checked_dispatch,
-            &actual_input_hash,
-        )?;
+        let expected_key = checked_execution_key(&self.checked_dispatch, &actual_input_hash)?;
         if expected_key != self.checked_dispatch.execution_key {
             return Err(EffectChildProtocolError::ExecutionKeyMismatch);
         }
@@ -204,11 +202,10 @@ mod tests {
             bound_input,
             owner_command_bytes: br#"{"operation_instance":"review"}"#.to_vec(),
         };
-        invocation.checked_dispatch.input_hash = blake3::hash(
-            &invocation.canonical_dispatch_input_bytes().unwrap(),
-        )
-        .to_hex()
-        .to_string();
+        invocation.checked_dispatch.input_hash =
+            blake3::hash(&invocation.canonical_dispatch_input_bytes().unwrap())
+                .to_hex()
+                .to_string();
         invocation.checked_dispatch.execution_key = checked_execution_key(
             &invocation.checked_dispatch,
             &invocation.checked_dispatch.input_hash,

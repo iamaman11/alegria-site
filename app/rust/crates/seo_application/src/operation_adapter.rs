@@ -23,8 +23,8 @@ mod effectful_v1;
 mod effectful_v4;
 pub use effectful_v1::{
     decode_owner_child_result_v4, execute_checked_dag_v1, preflight_effect_dag_v1,
-    CheckedDagOutcomeV1, EffectDagError,
-    EffectDagRunV1, OwnerCommandV1, PreparedDagStepV1, PreparedDagV1,
+    CheckedDagOutcomeV1, EffectDagError, EffectDagRunV1, OwnerCommandV1, PreparedDagStepV1,
+    PreparedDagV1,
 };
 pub use effectful_v4::{MixedDagMachineV4, MixedDagReceiptV4};
 

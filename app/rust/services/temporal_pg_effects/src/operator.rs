@@ -348,7 +348,11 @@ async fn issue_with_pool(
     .bind(contract_fingerprint()?)
     .bind(source_hash)
     .bind(request.expires_in_seconds as i32)
-    .bind(execution_key(&request.workflow_id, &request.workflow_run_id, &request.command)?)
+    .bind(execution_key(
+        &request.workflow_id,
+        &request.workflow_run_id,
+        &request.command,
+    )?)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;

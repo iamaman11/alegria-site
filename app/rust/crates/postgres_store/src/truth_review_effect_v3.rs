@@ -256,8 +256,7 @@ pub async fn assert_unprivileged_pg_effect_role(
 // reconciler reads direct section->page identity and never resolves aliases.
 // Any future alias-aware Truth operation needs a new admitted revision and
 // corresponding alias writer locks/fingerprint, not an implicit V3 expansion.
-pub const CANDIDATE_SET_HASH_SQL: &str =
-    "SELECT pipeline.pg_truth_candidate_set_hash_v1($1)";
+pub const CANDIDATE_SET_HASH_SQL: &str = "SELECT pipeline.pg_truth_candidate_set_hash_v1($1)";
 
 fn validate(input: &ReconcileTruthReviewsInput) -> Result<(), ReconcileTruthReviewsError> {
     if input.scope.tenant_id.is_empty() || input.scope.tenant_id.trim() != input.scope.tenant_id {
@@ -312,7 +311,11 @@ pub fn execution_key(
 /// The *only* V3 effect executor: one PG transaction, one consumed immutable
 /// admission, one receipt. No Temporal workflow calls this without admission.
 fn map_owner_sql_error(error: sqlx::Error) -> ReconcileTruthReviewsError {
-    match error.as_database_error().and_then(|db| db.code()).as_deref() {
+    match error
+        .as_database_error()
+        .and_then(|db| db.code())
+        .as_deref()
+    {
         Some("AV001") => ReconcileTruthReviewsError::AdmissionDenied,
         Some("TR001") => ReconcileTruthReviewsError::StaleTruthRun,
         Some("CS001") => ReconcileTruthReviewsError::CandidateSetChanged,
@@ -380,7 +383,9 @@ pub async fn execute_admitted_reconcile_v4(
         serde_json::from_slice(&invocation.owner_command_bytes)?;
     validate(&input)?;
     if serde_json::to_vec(&input)? != invocation.owner_command_bytes {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("v4.canonical_owner_command"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v4.canonical_owner_command",
+        ));
     }
     let artifact: TruthReviewScopeArtifactV1 =
         serde_json::from_slice(&invocation.bound_input.payload)?;
@@ -402,7 +407,9 @@ pub async fn execute_admitted_reconcile_v4(
         || Uuid::parse_str(child_workflow_run_id).is_err()
         || child_workflow_id.trim().is_empty()
     {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("v4.owner_contract_binding"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v4.owner_contract_binding",
+        ));
     }
     assert_unprivileged_pg_effect_role(pool).await?;
     let fingerprint = contract_fingerprint()?;

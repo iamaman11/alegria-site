@@ -9,15 +9,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     canonical_effect_dispatch_input_bytes, ArtifactBinding, ArtifactId, BoundEffectInputV4,
-    CheckedDispatch, DispatchAttempt, EffectChildResultV4, ExecutionPlan, IdempotencyPolicy, Operation,
-    OperationInstanceId, OperationRef, PlanError, PlanHash, PortId,
+    CheckedDispatch, DispatchAttempt, EffectChildResultV4, ExecutionPlan, IdempotencyPolicy,
+    Operation, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use truth_domain::review_effect_contract::{
     ReconcileTruthReviewsContractV1, ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt,
-    TruthReviewScopeArtifactV1,
-    INPUT_PORT,
+    TruthReviewScopeArtifactV1, INPUT_PORT,
 };
 
 use super::{
@@ -148,10 +147,12 @@ pub(super) fn require_canonical_owner_inputs_v4(
             .admitted
             .get(bound_input)
             .ok_or_else(|| OperationRunError::MissingArtifact(bound_input.clone()))?;
-        let typed: TruthReviewScopeArtifactV1 = serde_json::from_slice(&actual.payload)
-            .map_err(|error| EffectDagError::InvalidReviewScope {
-                artifact: bound_input.clone(),
-                reason: error.to_string(),
+        let typed: TruthReviewScopeArtifactV1 =
+            serde_json::from_slice(&actual.payload).map_err(|error| {
+                EffectDagError::InvalidReviewScope {
+                    artifact: bound_input.clone(),
+                    reason: error.to_string(),
+                }
             })?;
         let canonical = serde_json::to_vec(&typed)
             .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
@@ -169,8 +170,8 @@ pub fn decode_owner_child_result_v4(
     wire: &str,
     expected: &CheckedDispatch,
 ) -> Result<ReconcileTruthReviewsReceipt, EffectDagError> {
-    let result: EffectChildResultV4<ReconcileTruthReviewsReceipt> =
-        serde_json::from_str(wire).map_err(|error| {
+    let result: EffectChildResultV4<ReconcileTruthReviewsReceipt> = serde_json::from_str(wire)
+        .map_err(|error| {
             EffectDagError::InvalidInvocation(format!("invalid typed child receipt: {error}"))
         })?;
     if result.schema_revision != operation_protocol::EFFECT_CHILD_SCHEMA_REVISION
@@ -331,8 +332,9 @@ pub fn preflight_effect_dag_v1(
         };
         let owner_command_bytes = serde_json::to_vec(input)
             .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
-        let actual_input_bytes = canonical_effect_dispatch_input_bytes(&bound, &owner_command_bytes)
-            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+        let actual_input_bytes =
+            canonical_effect_dispatch_input_bytes(&bound, &owner_command_bytes)
+                .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
         let dispatch =
             checked_plan.checked_dispatch(instance, &actual_input_bytes, DispatchAttempt::First)?;
         used_commands.insert(instance.clone());
