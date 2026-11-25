@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import unittest
 import json
+import re
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import patch
 
 from ci_impact import (
-    CI_PR_OWNERS, FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
+    CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
+    FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
+    e2e_shard_commands_for_report,
     main_cache_prime_required,
     suite_commands_by_ci_job, suite_commands_for_report, suite_environment_for_report,
     truth_fixture_ids_for_paths,
@@ -128,6 +131,68 @@ class ImpactFixtures(unittest.TestCase):
             "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
         })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
+
+    def test_full_real_e2e_shards_cover_all_38_existing_tests_without_duplicate_filters(self) -> None:
+        # Select all known live sources, including the optional canonical
+        # certification fixture. Source suite selection and runner shard
+        # execution must agree even when exact full-impact cargo scope varies.
+        report = self.impact(
+            ".github/workflows/ci.yml",
+            "app/rust/crates/graph_neo4j/src/lib.rs",
+            "app/rust/crates/vector_qdrant/src/lib.rs",
+            "app/rust/services/temporal/src/main.rs",
+            TRUTH_FIXTURE_PREFIX + "candidate.html",
+        )
+        self.assertEqual(report["scope"], "full")
+        shards = e2e_shard_commands_for_report(report)
+        self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
+        self.assertTrue(all(shards[shard] for shard in shards))
+        self.assertEqual(
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 31
+        )
+        self.assertEqual(
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 8
+        )  # Seven ordinary architecture regressions + optional Truth cert.
+        self.assertEqual(
+            [(name, test_filter) for rows in shards.values()
+             for name, _, test_filter, _ in rows if name == "temporal_restart"],
+            [("temporal_restart", "canonical_temporal_manual_editorial_resumes_after_worker_restart"),
+             ("temporal_restart", "canonical_temporal_activity_history_wire_shape"),
+             ("temporal_restart", "canonical_temporal_blocked_review_ends_for_rework_without_publication")],
+        )
+        expected_sources = set(SUITE_OWNERS)
+        self.assertEqual({name for rows in shards.values() for name, *_ in rows}, expected_sources)
+
+    def test_full_real_e2e_shards_fail_closed_when_unknown_or_duplicate(self) -> None:
+        report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
+        self.assertEqual(report["scope"], "full")
+        malformed = dict(E2E_SHARD_RUNS)
+        malformed["verify_d"] = tuple(spec for spec in malformed["verify_d"]
+                                      if spec[0] != "pg_effect_v3")
+        with patch.dict("ci_impact.E2E_SHARD_RUNS", malformed, clear=True):
+            with self.assertRaisesRegex(ValueError, "does not cover|lost a mandatory"):
+                e2e_shard_commands_for_report(report)
+        duplicated = dict(E2E_SHARD_RUNS)
+        duplicated["verify_a"] = (*duplicated["verify_a"], duplicated["verify_a"][0])
+        with patch.dict("ci_impact.E2E_SHARD_RUNS", duplicated, clear=True):
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                e2e_shard_commands_for_report(report)
+        scoped = self.impact("app/rust/services/temporal/src/main.rs")
+        with self.assertRaisesRegex(ValueError, "non-full"):
+            e2e_shard_commands_for_report(scoped)
+
+    def test_real_canonical_temporal_test_inventory_is_exactly_sharded(self) -> None:
+        source_root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_harness/src/tests"
+        declared = set()
+        for source in source_root.glob("*.rs"):
+            declared.update(re.findall(
+                r"(?:async\s+)?fn\s+(canonical_temporal_[a-z0-9_]+)\s*\(",
+                source.read_text(encoding="utf-8"),
+            ))
+        expected = {filter_name for specs in E2E_SHARD_RUNS.values()
+                    for suite, filter_name, _ in specs if suite == "temporal_restart"}
+        self.assertEqual(declared, expected,
+                         "a newly added canonical Temporal regression needs an exact E2E shard")
 
     def test_scoped_ci_keeps_every_selected_real_suite_in_architecture(self) -> None:
         for path in (

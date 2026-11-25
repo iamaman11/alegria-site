@@ -831,6 +831,115 @@ FULL_VERIFY_E2E_SUITES = frozenset({
 })
 
 
+# Full-scope live suites execute on genuinely separate GitHub runners. This is
+# one static, typed routing table, NOT another operation registry: all the
+# executable commands and selection rules remain owned by SUITE_OWNERS.
+# A row is (source suite, exact Rust test-name filter, expected test count).
+# Each source suite is covered once except the canonical Temporal suite, whose
+# three individually audited test names deliberately run on two independent
+# servers/runners. Actual test counts are asserted by the binary runner, not
+# guessed from a successful subprocess exit status.
+E2E_ARCH_SHARDS = (
+    "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
+    "vector", "truth_certification",
+)
+E2E_VERIFY_SHARDS = ("verify_a", "verify_b", "verify_c", "verify_d")
+E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "graph": (("graph_query", "graph_capability_", 2),),
+    "pg_temporal": (("pg_temporal_v3", "temporal_effect_v3_", 1),),
+    "temporal_manual": (
+        ("temporal_restart", "canonical_temporal_manual_editorial_resumes_after_worker_restart", 1),
+        ("temporal_restart", "canonical_temporal_activity_history_wire_shape", 1),
+    ),
+    "temporal_blocked": (
+        ("temporal_restart", "canonical_temporal_blocked_review_ends_for_rework_without_publication", 1),
+    ),
+    "vector": (("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),),
+    "truth_certification": (
+        ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
+    ),
+    # Measured full-scope CI #45515259024: 31 PostgreSQL/pure Temporal tests
+    # in this partition, in addition to the seven architecture owner tests.
+    "verify_a": (("draft_qa_scenario", "draft_qa_", 2),
+                 ("truth_adjudication_integrity", "truth_adjudication_", 3)),
+    "verify_b": (("outbox_a14", "outbox_a14_", 9),
+                 ("knowledge_a13", "knowledge_a13_", 3),
+                 ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1)),
+    "verify_c": (("cms_review_revision", "cms_revision_", 4),
+                 ("planning_atomicity", "planning_atomic_", 6)),
+    "verify_d": (("pg_effect_v3", "pg_v3_", 2),
+                 ("pure_dag_v3", "pure_v3_", 1)),
+}
+
+
+def e2e_shard_commands_for_report(
+    report: dict[str, Any],
+) -> dict[str, list[tuple[str, list[str], str, int]]]:
+    """Exact-source, exhaustive full-CI shard plan; empty shards are NOT runnable.
+
+    The caller publishes only nonempty shards to a GitHub matrix. Each
+    selected suite and its actual test-name filters must be exercised once,
+    with a known exact test count. Unknown/new suites fail the planning job
+    until their test coverage is explicitly allocated.
+    """
+    if set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS) != set(E2E_SHARD_RUNS) or (
+        set(E2E_ARCH_SHARDS) & set(E2E_VERIFY_SHARDS)
+    ):
+        raise ValueError("invalid unique full-scope E2E shard identity registry")
+    if report.get("analysis") != "full" or report.get("scope") != "full":
+        raise ValueError("full-scope E2E shard plan used by a non-full CI run")
+    assignments = suite_commands_by_ci_job(report)
+    expected_assignments = {
+        "architecture-and-rust": dict(assignments["architecture-and-rust"]),
+        "verify": dict(assignments["verify"]),
+    }
+    result: dict[str, list[tuple[str, list[str], str, int]]] = {}
+    coverage: dict[str, list[str]] = {}
+    for shard, specs in E2E_SHARD_RUNS.items():
+        owner = "architecture-and-rust" if shard in E2E_ARCH_SHARDS else "verify"
+        rows: list[tuple[str, list[str], str, int]] = []
+        for name, test_filter, count in specs:
+            if name not in SUITE_OWNERS or not isinstance(count, int) or count <= 0:
+                raise ValueError(f"invalid E2E source suite/count in shard {shard}")
+            command = list(SUITE_OWNERS[name]["command"])
+            try:
+                original_filter = command[command.index("--lib") + 1]
+            except (ValueError, IndexError) as error:
+                raise ValueError(f"missing canonical Rust lib filter for {name}") from error
+            if not test_filter.startswith(original_filter):
+                raise ValueError(f"shard {shard} illegally widens canonical filter for {name}")
+            coverage.setdefault(name, []).append(test_filter)
+            if name in expected_assignments[owner]:
+                if command != expected_assignments[owner][name]:
+                    raise ValueError(f"shard {shard} changed source suite {name} command")
+                rows.append((name, command, test_filter, count))
+            elif name in expected_assignments["verify" if owner == "architecture-and-rust" else "architecture-and-rust"]:
+                raise ValueError(f"source suite {name} selected under wrong E2E CI owner")
+        result[shard] = rows
+
+    if set(coverage) != set(SUITE_OWNERS):
+        raise ValueError("full-scope shard registry does not cover every source suite")
+    for name, filters in coverage.items():
+        if name == "temporal_restart":
+            expected = {
+                "canonical_temporal_manual_editorial_resumes_after_worker_restart",
+                "canonical_temporal_blocked_review_ends_for_rework_without_publication",
+                "canonical_temporal_activity_history_wire_shape",
+            }
+            if set(filters) != expected or len(filters) != len(expected):
+                raise ValueError("historical Temporal restart tests have incomplete shard coverage")
+        elif len(filters) != 1 or filters[0] != SUITE_OWNERS[name]["command"][7]:
+            raise ValueError(f"suite {name} has missing, duplicate or rewritten E2E filter")
+    actual = {
+        "architecture-and-rust": {name for shard in E2E_ARCH_SHARDS for name, *_ in result[shard]},
+        "verify": {name for shard in E2E_VERIFY_SHARDS for name, *_ in result[shard]},
+    }
+    for owner, commands in expected_assignments.items():
+        if actual[owner] != set(commands):
+            raise ValueError(f"full-scope E2E shard partition lost a mandatory {owner} suite")
+    return result
+
+
 def suite_commands_by_ci_job(report: dict[str, Any]) -> dict[str, list[tuple[str, list[str]]]]:
     """Partition the *same selected suites* between existing PR owners exactly once.
 

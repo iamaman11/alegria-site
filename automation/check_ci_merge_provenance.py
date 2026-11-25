@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from ci_impact import CI_PR_OWNERS
+from ci_impact import CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +24,9 @@ BASE = "b" * 40
 JOBS = (
     "impact",
     "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
-    "rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e",
+    "rust-e2e-v3-binaries",
+    *(f"rust-architecture-e2e ({name})" for name in E2E_ARCH_SHARDS),
+    *(f"rust-verify-e2e ({name})" for name in E2E_VERIFY_SHARDS),
     "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
@@ -89,10 +91,20 @@ def execute_pr_gate(
 def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
                  skipped_job: str | None = None, delayed_pr_indexes: int = 0,
                  missing_pr: bool = False,
-                 accepted_run: bool = True) -> tuple[bool, str, set[str]]:
+                 accepted_run: bool = True,
+                 scoped_matrix: bool = False,
+                 scoped_matrix_name: str | None = None,
+                 omit_matrix_owner: str | None = None) -> tuple[bool, str, set[str]]:
     calls: set[str] = set()
     jobs = [{"name": name, "conclusion": "skipped" if name == skipped_job else "success"}
-            for name in JOBS if name != omit_job]
+            for name in JOBS if name != omit_job
+            and not (omit_matrix_owner and name.startswith(omit_matrix_owner + " ("))
+            and not (scoped_matrix and (name.startswith("rust-architecture-e2e (")
+                                        or name.startswith("rust-verify-e2e (")))]
+    if scoped_matrix:
+        jobs += [{"name": (name if scoped_matrix_name is None
+                          else f"{name} ({scoped_matrix_name})"), "conclusion": "skipped"}
+                 for name in ("rust-architecture-e2e", "rust-verify-e2e")]
     responses = {
         f"commits/{MERGE}": {"parents": [{"sha": BASE}, {"sha": SOURCE}]},
         f"commits/{MERGE}/pulls": [{"merged_at": "2026-11-20T21:00:00Z",
@@ -140,6 +152,21 @@ def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
 
 
 class MainMergeProvenanceTests(unittest.TestCase):
+    def test_protected_main_gate_imports_its_exact_checked_out_source_registry(self) -> None:
+        # This gate runs on PR *and* accepted-main push. Its matrix owner
+        # import must never depend on the PR-only checkout that existed
+        # before sharding; that would block the signed-artifact release.
+        source = WORKFLOW.read_text(encoding="utf-8")
+        checkout = "      - name: Checkout exact CI plan owner registry\n"
+        marker = "      - name: Require every mandatory job to succeed\n"
+        self.assertEqual(source.count(checkout), 1)
+        _, after = source.split(checkout, 1)
+        checkout_step = after.split(marker, 1)[0]
+        self.assertIn("uses: actions/checkout@v7", checkout_step)
+        self.assertIn("ref: ${{ github.sha }}", checkout_step)
+        self.assertNotIn("if: github.event_name == 'pull_request'", checkout_step)
+        self.assertIn("from ci_impact import E2E_ARCH_SHARDS", main_gate_source())
+
     def test_identical_git_trees_and_all_required_green_jobs_accept_without_build(self) -> None:
         ok, message, calls = execute_gate()
         self.assertTrue(ok, message)
@@ -165,12 +192,32 @@ class MainMergeProvenanceTests(unittest.TestCase):
     def test_missing_precompiled_e2e_or_verified_binary_owner_blocks_merge(self) -> None:
         for omitted in (
             "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
-            "rust-architecture-e2e", "rust-verify-e2e",
         ):
             with self.subTest(omitted=omitted):
                 ok, message, _ = execute_gate(omit_job=omitted)
                 self.assertFalse(ok)
                 self.assertIn("did not pass every mandatory owner", message)
+
+    def test_matrix_real_e2e_shards_are_all_green_and_scoped_skip_is_explicit(self) -> None:
+        ok, message, _ = execute_gate()
+        self.assertTrue(ok, message)
+        for name in (None, "", "not_applicable"):
+            with self.subTest(scoped_display=name):
+                ok, message, _ = execute_gate(scoped_matrix=True, scoped_matrix_name=name)
+                self.assertTrue(ok, message)
+        ok, message, _ = execute_gate(scoped_matrix=True, scoped_matrix_name="unknown")
+        self.assertFalse(ok)
+        self.assertIn("unrecognized E2E shard", message)
+        for omitted in ("rust-architecture-e2e", "rust-verify-e2e"):
+            with self.subTest(omitted=omitted):
+                ok, message, _ = execute_gate(omit_matrix_owner=omitted)
+                self.assertFalse(ok)
+                self.assertIn("neither selected shards", message)
+        for skipped in ("rust-architecture-e2e (graph)", "rust-verify-e2e (verify_d)"):
+            with self.subTest(skipped=skipped):
+                ok, message, _ = execute_gate(skipped_job=skipped)
+                self.assertFalse(ok)
+                self.assertIn("did not pass all selected E2E shards", message)
 
     def test_fresh_merge_waits_for_github_pr_indexing_then_accepts(self) -> None:
         ok, message, _ = execute_gate(delayed_pr_indexes=2)

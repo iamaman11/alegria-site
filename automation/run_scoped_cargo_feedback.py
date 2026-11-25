@@ -19,7 +19,10 @@ from pathlib import Path
 from typing import Mapping
 
 from cargo_feedback import run_cargo
-from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_by_ci_job, suite_environment_for_report
+from ci_impact import (
+    ROOT, SUITE_OWNERS, WORKSPACE, e2e_shard_commands_for_report,
+    suite_commands_by_ci_job, suite_environment_for_report,
+)
 from dev_rust_feedback import commands_for_report
 from rust_ci_artifacts import package as package_ci_artifact
 
@@ -162,9 +165,17 @@ def precompiled_verify_executable(measurement: dict) -> Path:
 def run_precompiled_e2e_suite(
     name: str, command: list[str], executable: Path,
     runtime_env: Mapping[str, str], output_lock: threading.Lock,
+    *, test_filter: str | None = None, expected_tests: int | None = None,
 ) -> dict:
     """Execute one already-selected test filter in its own process/env scope."""
-    test_filter = exact_verify_e2e_filter(command)
+    selected_filter = exact_verify_e2e_filter(command)
+    if test_filter is None:
+        test_filter = selected_filter
+    elif (not isinstance(test_filter, str) or not test_filter.startswith(selected_filter)
+          or test_filter.startswith("-") or not test_filter):
+        raise ValueError(f"shard filter must narrow its selected source suite: {test_filter!r}")
+    if expected_tests is not None and (type(expected_tests) is not int or expected_tests <= 0):
+        raise ValueError("shard must require a positive exact test count")
     executed = [str(executable), test_filter, "--nocapture"]
     environment = {**os.environ, **runtime_env}
     # Cargo usually appends target/debug/deps to the dynamic-loader path.
@@ -193,6 +204,7 @@ def run_precompiled_e2e_suite(
         "suite": name,
         "exit_code": exit_code,
         "matched_tests": matched_count,
+        "required_exact_tests": expected_tests,
         "elapsed_seconds": round(time.monotonic() - start, 3),
         "compiler_seconds": None,
         "post_compiler_seconds": None,
@@ -202,11 +214,67 @@ def run_precompiled_e2e_suite(
     }
     with output_lock:
         print("CARGO_FEEDBACK_JSON=" + json.dumps(measurement, sort_keys=True), flush=True)
-    if exit_code or matched_count == 0:
+    if exit_code or matched_count == 0 or (expected_tests is not None and matched_count != expected_tests):
         raise RuntimeError(
-            f"E2E suite {name} failed (exit={exit_code}, matched_tests={matched_count})"
+            f"E2E suite {name} failed (exit={exit_code}, matched_tests={matched_count}, "
+            f"expected_tests={expected_tests})"
         )
     return measurement
+
+
+def run_exact_precompiled_e2e_shard(
+    report: dict, shard: str, *, suite_job: str, prebuilt_executable: Path,
+) -> list[dict]:
+    """Execute one nonempty, registry-owned E2E shard on its *own* CI runner.
+
+    The planner is the single source of suite selection and exact test-filter
+    assignments. A shard is intentionally process-serial; separate GitHub
+    runners, not contending Docker containers, provide parallelism. Empty or
+    narrowed fragments never produce an artificial successful E2E result.
+    """
+    if report.get("analysis") != "full":
+        raise ValueError("sharded precompiled E2E requires exact-source full CI")
+    plan = e2e_shard_commands_for_report(report)
+    if shard not in plan:
+        raise ValueError(f"unrecognized immutable E2E shard {shard!r}")
+    selected = plan[shard]
+    if not selected:
+        raise ValueError(f"scheduled E2E shard {shard!r} has no selected real test filters")
+    if suite_job not in ("architecture-and-rust", "verify"):
+        raise ValueError("unknown sharded E2E owner")
+    owner_commands = dict(suite_commands_by_ci_job(report)[suite_job])
+    filters: set[str] = set()
+    for name, command, filter_, count in selected:
+        if (name not in owner_commands or command != owner_commands[name]
+                or command != list(SUITE_OWNERS[name]["command"])):
+            raise ValueError(f"shard {shard} selected a non-owner or rewritten Cargo command: {name}")
+        source_filter = exact_verify_e2e_filter(command)
+        if (not isinstance(filter_, str) or not filter_.startswith(source_filter)
+                or filter_ in filters or type(count) is not int or count <= 0):
+            raise ValueError(f"shard {shard} has an invalid or duplicate real test filter: {filter_!r}")
+        filters.add(filter_)
+
+    executable = prebuilt_executable.resolve()
+    expected = (WORKSPACE / "target/debug/deps/integration_harness-ci-exact").resolve()
+    if executable != expected or not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("E2E shard must execute only the installed verified exact-source test binary")
+    print(f"CI_E2E_SHARD_SOURCE=PASS shard={shard} owner={suite_job} filters={len(selected)}", flush=True)
+    results: list[dict] = []
+    output_lock = threading.Lock()
+    for name, command, filter_, count in selected:
+        require_clean_truth_filter_environment(name)
+        runtime_env = suite_runtime_environment(report, name)
+        print(f"CI_E2E_SHARD_FILTER={shard} suite={name} filter={filter_} expected_tests={count}", flush=True)
+        results.append(run_precompiled_e2e_suite(
+            name, command, executable, runtime_env, output_lock,
+            test_filter=filter_, expected_tests=count,
+        ))
+    actual = sum(row["matched_tests"] for row in results)
+    required = sum(count for _, _, _, count in selected)
+    if actual != required:
+        raise RuntimeError(f"E2E shard {shard} mismatched required coverage {actual}!={required}")
+    print(f"CI_E2E_SHARD=PASS shard={shard} filters={len(selected)} tests={actual}", flush=True)
+    return results
 
 
 def run_precompiled_e2e_suites(
@@ -292,6 +360,8 @@ def main() -> int:
                         help="Fresh output directory for the single full-impact E2E compiler artifact")
     parser.add_argument("--execute-precompiled-e2e", action="store_true",
                         help="For full impact, run exact owner suites from previously verified binary artifacts")
+    parser.add_argument("--e2e-shard",
+                        help="Exact nonempty shard name selected by CI impact; full precompiled E2E only")
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
     actual_sha = subprocess.check_output(
@@ -302,6 +372,7 @@ def main() -> int:
     if args.compile_harness_only or args.execute_precompiled_e2e:
         if (report.get("analysis") != "full"
                 or args.compile_harness_only == args.execute_precompiled_e2e
+                or (args.compile_harness_only and args.e2e_shard is not None)
                 or args.delegate_workspace_unit_tests_to_verify
                 or (args.compile_harness_only != (args.harness_bundle_dir is not None))
                 or (args.parallel_verify_e2e and args.suite_job != "verify")
@@ -314,6 +385,16 @@ def main() -> int:
             package_ci_artifact("harness", actual_sha, args.harness_bundle_dir, harness=executable)
             print("CI_E2E_HARNESS_BUILD=PASS", flush=True)
             return 0
+        if args.e2e_shard is not None:
+            if args.compile_harness_only or args.parallel_verify_e2e:
+                raise ValueError("a precompiled shard cannot compile or request old worker-level parallelism")
+            results = run_exact_precompiled_e2e_shard(
+                report, args.e2e_shard, suite_job=args.suite_job,
+                prebuilt_executable=WORKSPACE / "target/debug/deps/integration_harness-ci-exact",
+            )
+            print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} shard={args.e2e_shard} "
+                  f"tests={sum(row['matched_tests'] for row in results)}", flush=True)
+            return 0
         if args.suite_job == "verify" and not args.parallel_verify_e2e:
             raise ValueError("full verify suites must retain independent two-process E2E scheduling")
         suites = suite_commands_by_ci_job(report)[args.suite_job]
@@ -323,7 +404,7 @@ def main() -> int:
         )
         print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} suites={len(suites)} tests={sum(row['matched_tests'] for row in results)}", flush=True)
         return 0
-    if args.harness_bundle_dir is not None:
+    if args.harness_bundle_dir is not None or args.e2e_shard is not None:
         raise ValueError("harness bundle is valid only for the dedicated full compiler stage")
     if args.suite_job == "verify":
         if args.delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":

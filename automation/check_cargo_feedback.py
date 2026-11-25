@@ -23,7 +23,8 @@ from ci_impact import (
 from run_scoped_cargo_feedback import (
     E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
-    run_precompiled_e2e_suites, run_precompiled_e2e_suite, selected_preparations,
+    run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
+    run_precompiled_e2e_suite, selected_preparations,
 )
 
 
@@ -425,6 +426,96 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     run_precompiled_e2e_suite(
                         "cms_review_revision", command, binary, {}, threading.Lock(),
                     )
+
+            # Full shards require the *exact* expected tests, not merely one
+            # matching test. This catches an inadvertently narrowed prefix or
+            # a newly registered test that a handwritten shard omitted.
+            with patch("run_scoped_cargo_feedback.subprocess.Popen", return_value=FakeProcess([
+                "running 4 tests\n", "test result: ok. 4 passed; 0 failed; finished\n",
+            ])):
+                with self.assertRaisesRegex(RuntimeError, "expected_tests=5"):
+                    run_precompiled_e2e_suite(
+                        "cms_review_revision", command, binary, {}, threading.Lock(),
+                        test_filter="cms_revision_", expected_tests=5,
+                    )
+            with patch("run_scoped_cargo_feedback.subprocess.Popen") as forbidden:
+                with self.assertRaisesRegex(ValueError, "must narrow"):
+                    run_precompiled_e2e_suite(
+                        "cms_review_revision", command, binary, {}, threading.Lock(),
+                        test_filter="canonical_temporal_", expected_tests=1,
+                    )
+            forbidden.assert_not_called()
+
+    def test_full_shard_executes_only_registry_owned_exact_filters_and_counts(self) -> None:
+        report = self.report(["temporal_restart"])
+        temporal = list(SUITE_OWNERS["temporal_restart"]["command"])
+        selected = [
+            ("temporal_restart", temporal,
+             "canonical_temporal_manual_editorial_resumes_after_worker_restart", 1),
+            ("temporal_restart", temporal,
+             "canonical_temporal_activity_history_wire_shape", 1),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "app/rust"
+            binary = workspace / "target/debug/deps/integration_harness-ci-exact"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"exact-source test bundle")
+            binary.chmod(0o755)
+            calls: list[tuple[str, str, int]] = []
+
+            def run(name: str, command: list[str], *_args: object, **kwargs: object) -> dict:
+                self.assertEqual(command, temporal)
+                calls.append((name, kwargs["test_filter"], kwargs["expected_tests"]))
+                return {"suite": name, "matched_tests": kwargs["expected_tests"]}
+
+            with (
+                patch("run_scoped_cargo_feedback.WORKSPACE", workspace),
+                patch("run_scoped_cargo_feedback.e2e_shard_commands_for_report",
+                      return_value={"temporal_manual": selected, "graph": []}),
+                patch("run_scoped_cargo_feedback.suite_runtime_environment", return_value={}),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=run),
+                patch("sys.stdout", new_callable=io.StringIO) as output,
+            ):
+                result = run_exact_precompiled_e2e_shard(
+                    report, "temporal_manual", suite_job="architecture-and-rust",
+                    prebuilt_executable=binary,
+                )
+                self.assertEqual(sum(row["matched_tests"] for row in result), 2)
+                self.assertIn("CI_E2E_SHARD=PASS shard=temporal_manual filters=2 tests=2",
+                              output.getvalue())
+                with self.assertRaisesRegex(ValueError, "no selected real test"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "graph", suite_job="architecture-and-rust",
+                        prebuilt_executable=binary,
+                    )
+                with self.assertRaisesRegex(ValueError, "unrecognized immutable"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "unknown", suite_job="architecture-and-rust",
+                        prebuilt_executable=binary,
+                    )
+            self.assertEqual(calls, [(row[0], row[2], row[3]) for row in selected])
+
+    def test_full_shard_rejects_duplicate_filters_and_wrong_owner_before_execution(self) -> None:
+        report = self.report(["temporal_restart", "cms_review_revision"])
+        temporal = list(SUITE_OWNERS["temporal_restart"]["command"])
+        one = ("temporal_restart", temporal,
+               "canonical_temporal_manual_editorial_resumes_after_worker_restart", 1)
+        for chosen, expected_error in [
+            ([one, one], "duplicate real test filter"),
+            ([("cms_review_revision", list(SUITE_OWNERS["cms_review_revision"]["command"]),
+               "cms_revision_", 4)], "non-owner or rewritten Cargo command"),
+        ]:
+            with (
+                patch("run_scoped_cargo_feedback.e2e_shard_commands_for_report",
+                      return_value={"temporal_manual": chosen}),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite") as run,
+            ):
+                with self.assertRaisesRegex(ValueError, expected_error):
+                    run_exact_precompiled_e2e_shard(
+                        report, "temporal_manual", suite_job="architecture-and-rust",
+                        prebuilt_executable=Path("/tmp/never-reached"),
+                    )
+                run.assert_not_called()
 
     def test_parallel_verify_compiles_once_and_runs_every_suite_in_two_processes(self) -> None:
         selected = ["cms_review_revision", "draft_qa_scenario", "knowledge_a13"]
