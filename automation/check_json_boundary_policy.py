@@ -9,6 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RUST = ROOT / "app" / "rust"
 
+# The isolated PG V3 package is an opt-in integration-test target. These two
+# exact files decode *captured Temporal test History* inside cfg(test, e2e),
+# not application messages at a production use-case boundary. No broad crate
+# prefix exemption: a future production module or new test file must justify
+# its own JSON boundary explicitly.
+PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
+    "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -21,6 +31,8 @@ FORBIDDEN_PATTERNS = {
 
 def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
+    if rel in PG_V3_E2E_HISTORY_TEST_BOUNDARIES:
+        return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True
     if rel.startswith("app/rust/crates/infrastructure/src/adapters/"):

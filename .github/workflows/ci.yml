@@ -492,7 +492,8 @@ jobs:
       - name: Compare PG V3 owner and monolith real cold Cargo compilers
         run: |
           python3 automation/compare_pg_v3_harness_build.py \
-            --output automation/reports/pg_v3_harness_physical_ab.json
+            --output automation/reports/pg_v3_harness_physical_ab.json \
+            --measure-resources
           python3 automation/check_pg_v3_harness_build.py \
             --report automation/reports/pg_v3_harness_physical_ab.json
       - name: Publish optional isolated build measurement

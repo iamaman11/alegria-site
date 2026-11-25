@@ -48,6 +48,7 @@ case "${1:-}" in
     python3 automation/check_run_report_completeness.py
     python3 automation/check_reconcile_failsafe.py
     python3 automation/check_sqlx_offline_contract.py
+    python3 automation/check_json_boundary_policy_tests.py
     python3 automation/check_expert_consistency.py --run-boundary --run-invariants --run-json-boundary --report-json automation/reports/consistency_report.json
     python3 automation/check_integration_harness_present.py
     python3 automation/check_graph_contract_gate.py docs/runs/graph_contract_gate_evidence.json
