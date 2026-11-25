@@ -106,9 +106,10 @@ class ProductionBoundaryTests(unittest.TestCase):
                 'ENTRYPOINT ["/usr/local/bin/temporal_worker"]',
             ),
             V7_DOCKERFILE.replace(
-                "    -p temporal_orchestrator --bin temporal_orchestrator",
-                "    -p temporal_pg_effects --bin temporal_pg_effects",
+                "-p temporal_orchestrator --bin temporal_orchestrator",
+                "-p temporal_pg_effects --bin temporal_pg_effects",
             ),
+            V7_DOCKERFILE.replace(" --features legacy-workflows", ""),
             V7_DOCKERFILE.replace("COPY dependency-skeleton/app ./app", "COPY . ./app"),
             V7_DOCKERFILE.replace("USER 65532:65532", "USER root"),
         ):

@@ -5394,7 +5394,6 @@ dependencies = [
  "seo_application",
  "serde",
  "serde_json",
- "temporal_gateway",
  "temporalio-client",
  "temporalio-common",
  "temporalio-macros",
@@ -5403,6 +5402,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

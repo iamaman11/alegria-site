@@ -1,6 +1,6 @@
 //! Opt-in native Temporal orchestrator for checked, provider-free DAGs.
-//! The separate V4 opt-in can start owner child Workflows, but no owner
-//! Activity can write before independently attested PG V4 operator admission.
+//! Historical site-specific Workflows remain available only in the explicitly
+//! built legacy-workflows variant, never in the generic default binary.
 //!
 //! This executable is a real package boundary, not another binary in the
 //! provider-linked legacy `temporal_worker` Cargo package. Do not register
@@ -11,15 +11,13 @@ use operation_protocol::{OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::QDRANT_DAG_PARENT_QUEUE_V1;
 use std::env;
-use temporal_gateway::{
-    connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
-    PURE_DAG_ORCHESTRATOR_QUEUE,
-};
+use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_common::worker::{
     VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
 };
 use temporalio_sdk::runtime::RuntimeOptions;
 use temporalio_sdk::{Runtime, Worker, WorkerOptions};
+use url::Url;
 
 // Required by native Temporal proc-macro expansions.
 use futures_util as _;
@@ -31,6 +29,12 @@ mod qdrant_child_wire_json;
 mod replay;
 mod workflow;
 
+// Frozen historical queue names. Keep them unchanged for live Histories and
+// offline replay; the default worker refuses to poll these queues.
+const PURE_DAG_ORCHESTRATOR_QUEUE: &str = "alegria-pure-dag-v3";
+const EFFECT_DAG_ORCHESTRATOR_V4_QUEUE: &str = "alegria-effect-dag-v4";
+const EFFECT_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-effect-dag-v5";
+
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
 const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
 const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
@@ -40,8 +44,11 @@ const OPERATION_V2_LIVE_OPT_IN: &str = "ALLOW_OPERATION_DAG_V2_WITH_OWNER_VALIDA
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrchestratorMode {
+    #[cfg(feature = "legacy-workflows")]
     PureV3,
+    #[cfg(feature = "legacy-workflows")]
     AdmittedEffectV4,
+    #[cfg(feature = "legacy-workflows")]
     AdmittedEffectV5,
     #[cfg(feature = "legacy-qdrant-v1")]
     QdrantV1,
@@ -52,8 +59,11 @@ enum OrchestratorMode {
 impl OrchestratorMode {
     fn task_queue(self) -> &'static str {
         match self {
+            #[cfg(feature = "legacy-workflows")]
             Self::PureV3 => PURE_DAG_ORCHESTRATOR_QUEUE,
+            #[cfg(feature = "legacy-workflows")]
             Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+            #[cfg(feature = "legacy-workflows")]
             Self::AdmittedEffectV5 => EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
             #[cfg(feature = "legacy-qdrant-v1")]
             Self::QdrantV1 => QDRANT_DAG_PARENT_QUEUE_V1,
@@ -106,9 +116,36 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
         operation_v1_opt_in.as_deref() == Some("true"),
         operation_v2_opt_in.as_deref() == Some("true"),
     ) {
-        (true, false, false, false, false, false) => OrchestratorMode::PureV3,
-        (false, true, false, false, false, false) => OrchestratorMode::AdmittedEffectV4,
-        (false, false, true, false, false, false) => OrchestratorMode::AdmittedEffectV5,
+        (true, false, false, false, false, false) => {
+            #[cfg(feature = "legacy-workflows")]
+            {
+                OrchestratorMode::PureV3
+            }
+            #[cfg(not(feature = "legacy-workflows"))]
+            {
+                anyhow::bail!("historical pure DAG requires legacy-workflows binary feature")
+            }
+        }
+        (false, true, false, false, false, false) => {
+            #[cfg(feature = "legacy-workflows")]
+            {
+                OrchestratorMode::AdmittedEffectV4
+            }
+            #[cfg(not(feature = "legacy-workflows"))]
+            {
+                anyhow::bail!("historical V4 parent requires legacy-workflows binary feature")
+            }
+        }
+        (false, false, true, false, false, false) => {
+            #[cfg(feature = "legacy-workflows")]
+            {
+                OrchestratorMode::AdmittedEffectV5
+            }
+            #[cfg(not(feature = "legacy-workflows"))]
+            {
+                anyhow::bail!("historical V5 parent requires legacy-workflows binary feature")
+            }
+        }
         (false, false, false, true, false, false) => {
             #[cfg(feature = "legacy-qdrant-v1")]
             {
@@ -180,8 +217,11 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
     // No Activity handlers on either queue. The V4 parent can only start
     // *typed child Workflows* on the independent PostgreSQL command queue.
     match config.mode {
+        #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::PureV3 => workflow::register(&mut options)?,
+        #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
+        #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::AdmittedEffectV5 => workflow::register_v5(&mut options)?,
         #[cfg(feature = "legacy-qdrant-v1")]
         OrchestratorMode::QdrantV1 => workflow::register_qdrant_v1(&mut options)?,
@@ -266,7 +306,14 @@ async fn main() -> Result<()> {
         std::process::id(),
         config.source_sha
     );
-    let client = connect_client(&config.temporal_url, identity, &config.namespace).await?;
+    let connection = Connection::connect(
+        ConnectionOptions::new(Url::parse(&config.temporal_url)?)
+            .identity(identity)
+            .build(),
+    )
+    .await?;
+    let client = Client::new(connection, ClientOptions::new(&config.namespace).build())
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
     let worker_options = build_worker_options(&config)?;
     tracing::info!(
         task_queue = config.mode.task_queue(),
@@ -288,14 +335,14 @@ mod tests {
 
     fn valid_env() -> BTreeMap<String, String> {
         BTreeMap::from([
-            (LIVE_OPT_IN.into(), "true".into()),
+            (OPERATION_V2_LIVE_OPT_IN.into(), "true".into()),
             (
                 "WORKER_BUILD_ID".into(),
                 "0123456789abcdef0123456789abcdef01234567".into(),
             ),
             (
                 "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
-                PURE_DAG_ORCHESTRATOR_QUEUE.into(),
+                OPERATION_DAG_PARENT_QUEUE_V2.into(),
             ),
             ("TEMPORAL_URL".into(), "http://localhost:7233".into()),
         ])
@@ -309,7 +356,7 @@ mod tests {
         assert!(!config.versioning);
         let mut broken = original.clone();
         for (key, value) in [
-            (LIVE_OPT_IN, "false"),
+            (OPERATION_V2_LIVE_OPT_IN, "false"),
             ("WORKER_BUILD_ID", "dev-local"),
             ("TEMPORAL_ORCHESTRATOR_TASK_QUEUE", "alegria-pipeline"),
         ] {
@@ -326,12 +373,12 @@ mod tests {
         broken.insert("TEMPORAL_WORKER_VERSIONING".into(), "1".into());
         assert!(checked_live_config(|name| broken.get(name).cloned()).is_err());
         broken = original;
-        broken.remove(LIVE_OPT_IN);
+        broken.remove(OPERATION_V2_LIVE_OPT_IN);
         assert!(checked_live_config(|name| broken.get(name).cloned()).is_err());
     }
 
     #[test]
-    fn provider_free_worker_registers_pure_workflow_without_any_activities() {
+    fn provider_free_worker_registers_generic_workflow_without_activities() {
         let settings = valid_env();
         let config = checked_live_config(|key| settings.get(key).cloned()).unwrap();
         build_worker_options(&config).unwrap();
@@ -340,10 +387,26 @@ mod tests {
         build_worker_options(&versioned).unwrap();
     }
 
+    #[cfg(feature = "legacy-workflows")]
+    #[test]
+    fn historical_pure_mode_registers_only_on_frozen_queue() {
+        let mut settings = valid_env();
+        settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(LIVE_OPT_IN.into(), "true".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            PURE_DAG_ORCHESTRATOR_QUEUE.into(),
+        );
+        let config = checked_live_config(|key| settings.get(key).cloned()).unwrap();
+        assert_eq!(config.mode, OrchestratorMode::PureV3);
+        build_worker_options(&config).unwrap();
+    }
+
+    #[cfg(feature = "legacy-workflows")]
     #[test]
     fn v4_effect_parent_requires_distinct_queue_and_exclusive_opt_in() {
         let mut settings = valid_env();
-        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
         settings.insert(V4_LIVE_OPT_IN.into(), "true".into());
         settings.insert(
             "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
@@ -366,10 +429,11 @@ mod tests {
         assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
     }
 
+    #[cfg(feature = "legacy-workflows")]
     #[test]
     fn v5_ordered_parent_is_separately_gated_and_cannot_claim_v4_queue() {
         let mut settings = valid_env();
-        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
         settings.insert(V4_LIVE_OPT_IN.into(), "false".into());
         settings.insert(V5_LIVE_OPT_IN.into(), "true".into());
         settings.insert(
@@ -398,7 +462,7 @@ mod tests {
     #[test]
     fn generic_operation_parent_has_its_own_strictly_opt_in_queue() {
         let mut settings = valid_env();
-        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
         settings.insert(OPERATION_V1_LIVE_OPT_IN.into(), "true".into());
         settings.insert(
             "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
@@ -424,7 +488,6 @@ mod tests {
     #[test]
     fn parallel_v2_has_owner_validation_gate_and_never_reinterprets_v1_history() {
         let mut settings = valid_env();
-        settings.insert(LIVE_OPT_IN.into(), "false".into());
         settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "true".into());
         settings.insert(
             "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
@@ -442,5 +505,17 @@ mod tests {
             OPERATION_DAG_PARENT_QUEUE.into(),
         );
         assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+    }
+
+    #[cfg(not(feature = "legacy-workflows"))]
+    #[test]
+    fn generic_build_rejects_historical_site_workflow_modes() {
+        for legacy_flag in [LIVE_OPT_IN, V4_LIVE_OPT_IN, V5_LIVE_OPT_IN] {
+            let mut settings = valid_env();
+            settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
+            settings.insert(legacy_flag.into(), "true".into());
+            let denied = checked_live_config(|name| settings.get(name).cloned()).unwrap_err();
+            assert!(denied.to_string().contains("legacy-workflows"), "{legacy_flag}");
+        }
     }
 }

@@ -6,11 +6,11 @@
 //! fencing; this executor intentionally admits only side-effect-free work.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{self, Write};
 
 use operation_protocol::{
-    ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, ExecutionPlan, IdempotencyPolicy,
-    Operation, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId, RunScope,
+    enforce_json_budget as protocol_enforce_json_budget, ArtifactBinding, ArtifactId,
+    ArtifactSchema, ContractCatalog, ExecutionPlan, IdempotencyPolicy, JsonBudgetError, Operation,
+    OperationInstanceId, OperationRef, PlanError, PlanHash, PortId, RunScope,
 };
 use seo_domain::extraction::operations::{
     CanonicalizeMentions, EditorialTopics, EntitySpans, LayerRoute, OperationalEntities,
@@ -22,7 +22,6 @@ use thiserror::Error;
 mod effectful_v1;
 mod effectful_v4;
 mod effectful_v5;
-mod generic_dag_v1;
 pub use effectful_v1::{
     decode_owner_child_result_v4, execute_checked_dag_v1, preflight_effect_dag_v1,
     CheckedDagOutcomeV1, EffectDagError, EffectDagRunV1, OwnerCommandV1, PreparedDagStepV1,
@@ -33,7 +32,7 @@ pub use effectful_v5::{
     AdmittedDagReceiptV5, IndependentOwnerChildV5, MixedDagMachineV5, NativeEffectRouteV5,
     ADMITTED_DAG_RECEIPT_SCHEMA_V5,
 };
-pub use generic_dag_v1::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
+pub use operation_protocol::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,50 +72,25 @@ pub struct PureDagReceipt {
 // This first pure Temporal runner is intentionally small. These are limits
 // on the actual JSON history payloads, not just on raw source text. A future
 // worker/activity protocol may support larger artifacts outside History.
-pub const PURE_DAG_MAX_NODES: usize = 64;
-pub const PURE_DAG_MAX_INPUT_BYTES: usize = 512 * 1024;
-pub const PURE_DAG_MAX_RESULT_BYTES: usize = 512 * 1024;
-
-struct BoundedJsonWriter {
-    limit: usize,
-    bytes: usize,
-    exceeded: bool,
-}
-
-impl Write for BoundedJsonWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if buffer.len() > self.limit.saturating_sub(self.bytes) {
-            self.exceeded = true;
-            return Err(io::Error::other("JSON budget exceeded"));
-        }
-        self.bytes += buffer.len();
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
+pub use operation_protocol::{
+    DAG_MAX_INPUT_BYTES as PURE_DAG_MAX_INPUT_BYTES,
+    DAG_MAX_NODES as PURE_DAG_MAX_NODES,
+    DAG_MAX_RESULT_BYTES as PURE_DAG_MAX_RESULT_BYTES,
+};
 
 fn enforce_json_budget<T: Serialize>(
     value: &T,
     limit: usize,
     resource: &'static str,
 ) -> Result<(), OperationRunError> {
-    // Stream into a counting sink: a malicious serialized input cannot first
-    // allocate a multi-megabyte temporary JSON buffer just to be rejected.
-    let mut writer = BoundedJsonWriter {
-        limit,
-        bytes: 0,
-        exceeded: false,
-    };
-    match serde_json::to_writer(&mut writer, value) {
-        Ok(()) => Ok(()),
-        Err(_) if writer.exceeded => {
-            Err(OperationRunError::ResourceBudgetExceeded { resource, limit })
+    protocol_enforce_json_budget(value, limit, resource).map_err(|error| match error {
+        JsonBudgetError::ResourceBudgetExceeded { resource, limit } => {
+            OperationRunError::ResourceBudgetExceeded { resource, limit }
         }
-        Err(error) => Err(OperationRunError::EnvelopeSerialization(error.to_string())),
-    }
+        JsonBudgetError::EnvelopeSerialization(message) => {
+            OperationRunError::EnvelopeSerialization(message)
+        }
+    })
 }
 
 fn enforce_pure_dag_input_budget(run: &PureDagRun) -> Result<(), OperationRunError> {

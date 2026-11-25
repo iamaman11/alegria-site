@@ -301,15 +301,16 @@ OUTBOX_E2E_PREPARE = (
     "cargo", "build", "--locked", "-p", "outbox_worker", "--bin", "outbox_worker",
 )
 
-# The new pure DAG Temporal worker owns a different queue and has no provider
-# processes. Never pull the legacy worker/outbox binaries into this test's
-# preparation: both branches are intentionally independently deployable.
+# Historical Pure V3 replay is explicitly opted into the same frozen parent
+# that serves Qdrant V1 History. Default OperationDagV1/V2 remains standalone.
+# Reuse one physical compiled legacy variant instead of adding another build.
 PURE_V3_E2E_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "--bin", "temporal_orchestrator",
+    "--features", "legacy-qdrant-v1,legacy-workflows",
 )
 PURE_V3_E2E_RUNTIME_BINARIES = {
-    "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
+    "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator_legacy_qdrant_v1",
 }
 
 PG_V3_TEMPORAL_PREPARE = (
@@ -320,19 +321,20 @@ PG_V3_TEMPORAL_RUNTIME_BINARIES = {
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
 
-# The mandatory V4 parent->child test consumes *both* independently compiled
-# binaries from the existing content-verified V3 artifact. The scoped path
-# builds them together; the full PR runner merely installs that one artifact.
+# V4/V5 parent->child replay uses the historical Workflow feature, never the
+# provider-free V1/V2 parent. PG child and historical parent are still
+# independently content-verified; no extra parent compilation is needed in CI.
 PG_V4_PARENT_CHILD_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
     "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--features", "temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows",
 )
 QDRANT_V7_PARENT_CHILD_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_qdrant_effects",
     "--bin", "temporal_orchestrator", "--bin", "temporal_qdrant_effects",
-    "--features", "temporal_orchestrator/legacy-qdrant-v1",
+    "--features", "temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows",
 )
 QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
@@ -354,7 +356,7 @@ MIXED_V6_NATIVE_RUNTIME_BINARIES = {
 }
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
-    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
 }
 
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
@@ -757,6 +759,7 @@ SUITE_OWNERS = {
         "on_unknown_global_input": True,
         "prepare": PURE_V3_E2E_PREPARE,
         "runtime_binaries": PURE_V3_E2E_RUNTIME_BINARIES,
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
         "command": (
             "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib", "pure_v3_", "--locked", "--", "--nocapture",
@@ -806,6 +809,7 @@ SUITE_OWNERS = {
         # binary owners are mandatory, with no legacy Worker fallback.
         "prepare": PG_V4_PARENT_CHILD_PREPARE,
         "runtime_binaries": PG_V4_PARENT_CHILD_RUNTIME_BINARIES,
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
         "command": (
             "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
             "--lib", "pg_v3_", "--locked", "--", "--nocapture",

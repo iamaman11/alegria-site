@@ -1,25 +1,28 @@
 //! Standalone, provider-free native Temporal operation Workflows.
 //!
-//! Deliberately the same versioned history-visible type and typed execution
-//! semantics as the old opt-in Workflow: the owner implementation and bound
-//! artifact contracts are reused from `seo_application`, not reimplemented.
+//! Generic history-visible DAG types operate on `operation_protocol` only.
+//! Historical site-specific types are optional and retain their original
+//! `seo_application` execution semantics for replay compatibility.
 //! This process cannot execute Activities, access provider SDKs or publish.
 
 use operation_protocol::{
     owner_child_workflow_id, owner_child_workflow_id_v2, owner_validation_child_workflow_id_v1,
-    EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
-    OwnerValidationRequestV1, OwnerValidationResultV1, TemporalExecutionIdentityV4,
-    TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
+    OperationDagMachine, OperationDagReceiptV1, OperationDagRunV6, OwnerInvocationV1,
+    OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1,
+    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    OWNER_VALIDATION_CHILD_TYPE_V1,
 };
+#[cfg(feature = "legacy-workflows")]
+use operation_protocol::EffectChildInvocationV4;
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,
     QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
+#[cfg(feature = "legacy-workflows")]
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
-    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, OperationDagMachine,
-    OperationDagReceiptV1, PreparedDagStepV1, PureDagRun,
+    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1, PureDagRun,
 };
 use std::sync::OnceLock;
 use temporalio_common::WorkflowDefinition;
@@ -30,7 +33,9 @@ use temporalio_sdk::{
     WorkflowResult, WorkflowTermination,
 };
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) const PG_V4_CHILD_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV4Workflow";
+#[cfg(feature = "legacy-workflows")]
 pub(crate) const PG_V4_CHILD_COMMAND_QUEUE: &str = "alegria-pg-command-v3";
 static TRUSTED_OWNER_CATALOG: OnceLock<TrustedRouteCatalog> = OnceLock::new();
 
@@ -43,9 +48,11 @@ pub(crate) fn install_owner_catalog(catalog: TrustedRouteCatalog) -> anyhow::Res
 /// A typed client-side Workflow *definition*, not a handler/Activity. Only
 /// the separate PG owner service registers and implements this Workflow.
 /// Temporal persists the complete typed input in parent and child Histories.
+#[cfg(feature = "legacy-workflows")]
 #[derive(Clone, Copy)]
 struct PgTruthReviewReconcileV4Definition;
 
+#[cfg(feature = "legacy-workflows")]
 impl WorkflowDefinition for PgTruthReviewReconcileV4Definition {
     type Input = EffectChildInvocationV4;
     type Output = String;
@@ -108,6 +115,7 @@ fn workflow_failure(error: impl std::fmt::Display) -> WorkflowTermination {
     ))
 }
 
+#[cfg(feature = "legacy-workflows")]
 #[workflow]
 struct AlegriaPureOperationDagV1Workflow {
     immutable_input: PureDagRun,
@@ -118,6 +126,7 @@ struct AlegriaPureOperationDagV1Workflow {
 /// IDs to one canonical pipeline run. This Workflow intentionally performs
 /// complete typed preflight and then fails non-retryably BEFORE any Activity
 /// or child Workflow. It cannot emit a fabricated PG receipt.
+#[cfg(feature = "legacy-workflows")]
 #[workflow]
 struct AlegriaCheckedEffectDagV1Workflow {
     immutable_input: EffectDagRunV1,
@@ -127,6 +136,7 @@ struct AlegriaCheckedEffectDagV1Workflow {
 /// as authorized effects. This V2 parent can only invoke typed PG child
 /// Workflows, which wait for independent operator-issued V4 admission before
 /// their distinct owner Activity can perform any PostgreSQL business write.
+#[cfg(feature = "legacy-workflows")]
 #[workflow]
 struct AlegriaAdmittedEffectDagV2Workflow {
     immutable_input: EffectDagRunV1,
@@ -137,6 +147,7 @@ struct AlegriaAdmittedEffectDagV2Workflow {
 /// start/join boundary is reserved for genuinely disjoint future owner
 /// routes; today's single canonical PG Truth context always serializes.
 /// Old V2 histories are never upgraded in place.
+#[cfg(feature = "legacy-workflows")]
 #[workflow]
 struct AlegriaAdmittedEffectDagV3Workflow {
     immutable_input: EffectDagRunV1,
@@ -170,33 +181,39 @@ struct AlegriaOperationDagV2Workflow {
     immutable_input: OperationDagRunV6,
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register_for_replay(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register_v4(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV2Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register_for_replay_v4(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV2Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register_v5(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV3Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-workflows")]
 pub(crate) fn register_for_replay_v5(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV3Workflow>()?;
     Ok(())
@@ -454,6 +471,7 @@ impl AlegriaQdrantProjectionDagV1Workflow {
     }
 }
 
+#[cfg(feature = "legacy-workflows")]
 #[workflow_methods]
 impl AlegriaAdmittedEffectDagV3Workflow {
     #[init]
@@ -527,6 +545,7 @@ impl AlegriaAdmittedEffectDagV3Workflow {
     }
 }
 
+#[cfg(feature = "legacy-workflows")]
 #[workflow_methods]
 impl AlegriaAdmittedEffectDagV2Workflow {
     #[init]
@@ -589,6 +608,7 @@ impl AlegriaAdmittedEffectDagV2Workflow {
     }
 }
 
+#[cfg(feature = "legacy-workflows")]
 #[workflow_methods]
 impl AlegriaCheckedEffectDagV1Workflow {
     #[init]
@@ -613,6 +633,7 @@ impl AlegriaCheckedEffectDagV1Workflow {
     }
 }
 
+#[cfg(feature = "legacy-workflows")]
 #[workflow_methods]
 impl AlegriaPureOperationDagV1Workflow {
     #[init]

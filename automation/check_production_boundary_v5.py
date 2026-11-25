@@ -165,7 +165,7 @@ def check_v7_pure_candidate(overlay: str, dockerfile: str) -> dict[str, Any]:
         "FROM rust:1.100.0-slim-bookworm AS pure-builder",
         "COPY dependency-skeleton/app ./app",
         "COPY app ./app",
-        "    -p temporal_orchestrator --bin temporal_orchestrator",
+        "    -p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows",
         "USER 65532:65532",
         "COPY --from=pure-builder /app/app/rust/target/release/temporal_orchestrator \\",
         'ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]',
@@ -173,6 +173,8 @@ def check_v7_pure_candidate(overlay: str, dockerfile: str) -> dict[str, Any]:
     for line in dockerfile_requirements:
         if line not in dockerfile.splitlines():
             issues.append(f"V7 native image lacks pure owner build/runtime contract: {line.strip()}")
+    if dockerfile.count("-p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows") != 2:
+        issues.append("both V7 native build layers must enable frozen V5 Workflow History")
     for foreign in ("temporal_pg_effects", "temporal_worker", "vector_qdrant", "graph_neo4j"):
         if foreign in dockerfile:
             issues.append(f"V7 pure image mentions forbidden provider/legacy executable: {foreign}")

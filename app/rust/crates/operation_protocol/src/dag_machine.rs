@@ -19,7 +19,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use operation_protocol::{
+use crate::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
     operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2, owner_child_workflow_id,
     owner_child_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
@@ -33,9 +33,9 @@ use operation_protocol::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::{
-    enforce_json_budget, OperationRunError, PURE_DAG_MAX_INPUT_BYTES, PURE_DAG_MAX_NODES,
-    PURE_DAG_MAX_RESULT_BYTES,
+use crate::json_budget::{
+    enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES as PURE_DAG_MAX_INPUT_BYTES,
+    DAG_MAX_NODES as PURE_DAG_MAX_NODES, DAG_MAX_RESULT_BYTES as PURE_DAG_MAX_RESULT_BYTES,
 };
 
 #[derive(Debug, Error)]
@@ -45,7 +45,7 @@ pub enum GenericDagError {
     #[error(transparent)]
     Route(#[from] RouteCatalogError),
     #[error(transparent)]
-    Run(#[from] OperationRunError),
+    Run(#[from] JsonBudgetError),
     #[error("generic DAG has no operations")]
     EmptyPlan,
     #[error("Temporal parent Workflow ID is not the canonical generic DAG ID for its business run scope")]
@@ -123,7 +123,7 @@ impl OperationDagMachine {
                 .expect("preflight registered the contract");
             if !contract.effects.is_empty()
                 || !node.permitted_effects.is_empty()
-                || contract.idempotency != operation_protocol::IdempotencyPolicy::Pure
+                || contract.idempotency != crate::IdempotencyPolicy::Pure
             {
                 return Err(GenericDagError::UnadmittedV2Effect(node.instance.clone()));
             }
@@ -161,7 +161,7 @@ impl OperationDagMachine {
             return Err(GenericDagError::EmptyPlan);
         }
         if run.plan.nodes.len() > PURE_DAG_MAX_NODES {
-            return Err(OperationRunError::ResourceBudgetExceeded {
+            return Err(JsonBudgetError::ResourceBudgetExceeded {
                 resource: "operation_nodes",
                 limit: PURE_DAG_MAX_NODES,
             }
@@ -321,7 +321,7 @@ impl OperationDagMachine {
             };
             request
                 .validate_shape()
-                .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+                .map_err(|error| JsonBudgetError::EnvelopeSerialization(error.to_string()))?;
             requests.push((route, request));
         }
         Ok(requests)
@@ -409,7 +409,7 @@ impl OperationDagMachine {
                         .ok_or_else(|| GenericDagError::MissingProducedArtifact(id.clone()))?;
                     let actual_result_hash =
                         canonical_owner_result_hash(earlier).map_err(|error| {
-                            OperationRunError::EnvelopeSerialization(error.to_string())
+                            JsonBudgetError::EnvelopeSerialization(error.to_string())
                         })?;
                     if proof.producer != *producer
                         || proof.port != *producer_port
@@ -442,7 +442,7 @@ impl OperationDagMachine {
             );
         }
         let actual_bytes = canonical_owner_dispatch_input_bytes(&bound, &command.command_bytes)
-            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+            .map_err(|error| JsonBudgetError::EnvelopeSerialization(error.to_string()))?;
         let dispatch =
             self.validated
                 .checked_dispatch(instance, &actual_bytes, DispatchAttempt::First)?;
@@ -570,7 +570,7 @@ impl OperationDagMachine {
         let mut next_artifacts = self.artifacts.clone();
         let mut next_evidence = self.produced_evidence.clone();
         let result_hash = canonical_owner_result_hash(&result)
-            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+            .map_err(|error| JsonBudgetError::EnvelopeSerialization(error.to_string()))?;
         let receipt_hash = owner_content_hash(&result.receipt_bytes);
         for (port, value) in &result.outputs {
             let id = node.outputs.get(port).expect("validated output port");
@@ -636,7 +636,7 @@ impl OperationDagMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operation_protocol::{
+    use crate::{
         ArtifactSchema, ArtifactTypeId, ContractHash, EffectId, ExecutionPlan, IdempotencyPolicy,
         OperationContract, OperationId, OperationNode, OperationOwnerId, OperationRef,
         OwnerCommandWireV1, PlanHash, RunScope, OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
@@ -1182,7 +1182,7 @@ mod tests {
         let hash = owner_content_hash(&bytes);
         invocation.checked_dispatch.input_hash = hash.clone();
         invocation.checked_dispatch.execution_key =
-            operation_protocol::checked_execution_key(&invocation.checked_dispatch, &hash).unwrap();
+            crate::checked_execution_key(&invocation.checked_dispatch, &hash).unwrap();
     }
 
     #[test]
@@ -1285,7 +1285,7 @@ mod tests {
         assert!(matches!(
             machine.advance_owner_result(excessive),
             Err(GenericDagError::Run(
-                OperationRunError::ResourceBudgetExceeded { .. }
+                JsonBudgetError::ResourceBudgetExceeded { .. }
             ))
         ));
         assert_eq!(

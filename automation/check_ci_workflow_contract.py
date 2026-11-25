@@ -229,9 +229,9 @@ def check() -> None:
     assert "report.get('scope') not in {'none', 'scoped', 'full'}" in workflow
     assert "not {'architecture-and-rust', 'verify'}.issubset(selected)" in workflow
     assert "f.write('cargo_scope=' + report['scope'] + '\\n')" in workflow
-    assert "if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then" in architecture
-    assert "args+=(--delegate-workspace-unit-tests-to-verify)" in architecture
     assert "if: needs.impact.outputs.cargo_scope != 'full'" in architecture
+    assert "--delegate-workspace-unit-tests-to-verify" not in architecture
+    assert "run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json" in architecture
     assert 'git fetch --depth=1 origin "refs/pull/${CI_PR_NUMBER}/head"' in architecture
     assert 'test "$(git rev-parse FETCH_HEAD)" = "${CI_SOURCE_SHA}"' in architecture
     def job_block(name: str, next_job: str) -> str:
@@ -331,15 +331,22 @@ def check() -> None:
     assert "automation/reports/generic_parent_rebuild_ab.json" in optional_pg_ab
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects" in v3_job
-    # Distinct exact-source artifacts for provider-free default vs historical
-    # Qdrant V1: the legacy compile must happen only AFTER generic packaging.
+    # Distinct exact-source artifacts for provider-free default and one shared
+    # historical Pure V3/Qdrant V1 parent: generic is packed before legacy.
     assert v3_job.index('--kind v3 --source-sha "$GITHUB_SHA"') < v3_job.index(
-        'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1'
+        'cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows'
     ) < v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"')
-    assert "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1" in v3_job
+    assert "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1,pure-v3,v4,v5" in v3_job
     assert v3_job.index('--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"') < v3_job.index(
-        "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1"
+        "CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1,pure-v3,v4,v5"
     ) < v3_job.index("uses: actions/upload-artifact@v7")
+    for historical_replay in (
+        "--replay-history", "--replay-effect-history", "--replay-v5-effect-history",
+        "--replay-qdrant-effect-history",
+    ):
+        assert historical_replay in v3_job
+    assert 'grep -F \'requires legacy-\'' in v3_job
+    assert "grep -F 'read actual Temporal history'" in v3_job
     assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in v3_job
     assert "cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects" in qdrant_effects_job
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_effects_job
@@ -389,7 +396,6 @@ def check() -> None:
         assert "rust-e2e-truth-harness" not in runner
     for owner, worker in (
         ("rust-temporal-legacy-e2e", "legacy"),
-        ("rust-temporal-v3-e2e", "v3"),
         ("rust-outbox-e2e", "legacy"),
         ("rust-truth-e2e", "legacy"),
     ):
@@ -397,6 +403,14 @@ def check() -> None:
         assert f'--kind {worker} --source-sha "$GITHUB_SHA"' in runner
         assert f"name: rust-e2e-{worker}-${{{{ github.sha }}}}" in runner
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in runner_blocks["rust-pg-e2e"]
+    for historical_runner in ("rust-temporal-v3-e2e", "rust-pg-e2e"):
+        runner = runner_blocks[historical_runner]
+        assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in runner
+        assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in runner
+    pure_runner = runner_blocks["rust-temporal-v3-e2e"]
+    assert 'name: rust-e2e-v3-${{ github.sha }}' not in pure_runner
+    assert '--kind v3 --source-sha "$GITHUB_SHA"' not in pure_runner
+    assert 'name: rust-e2e-v3-${{ github.sha }}' in runner_blocks["rust-pg-e2e"]
     qdrant_runner = runner_blocks["rust-qdrant-temporal-e2e"]
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
@@ -416,7 +430,7 @@ def check() -> None:
     pg_runner = runner_blocks["rust-pg-e2e"]
     assert pg_runner.count("name: rust-e2e-v3-${{ github.sha }}") == 1
     assert pg_runner.count('--kind v3 --source-sha "$GITHUB_SHA"') == 1
-    assert pg_runner.count("python3 automation/rust_ci_artifacts.py install") == 2
+    assert pg_runner.count("python3 automation/rust_ci_artifacts.py install") == 3
     assert "if: matrix.shard == 'pg_temporal'\n        with:\n          name: rust-e2e-v3-" not in pg_runner
     assert "E2E_RUNNER_PARTITIONS" in workflow
     for name in ("graph", "qdrant", "qdrant_temporal", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
@@ -445,7 +459,7 @@ def check() -> None:
     # Architecture's real Temporal and graph container suites must not compete
     # on the same runner: CI #492 proved no speed gain and a 40s startup delay.
     assert "--parallel-architecture-e2e" not in architecture
-    assert 'python3 automation/run_scoped_cargo_feedback.py \\' in architecture
+    assert 'run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json' in architecture
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "  rust-contract-smokes:\n" not in workflow

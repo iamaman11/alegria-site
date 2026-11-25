@@ -125,11 +125,14 @@ def check(compose: str, dockerfile: str, pure_cargo: str, pg_cargo: str) -> list
 
     for required in [
         "ARG OWNER_PACKAGE", "COPY dependency-skeleton/app ./app", "COPY app ./app",
-        'temporal_orchestrator|temporal_pg_effects) ;;',
-        '-p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE"',
+        'temporal_orchestrator) set -- --features legacy-workflows ;;',
+        'temporal_pg_effects) set -- ;;',
+        '-p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE" "$@"',
     ]:
         if required not in dockerfile:
             failures.append(f"V3 Docker build missing source-scoped owner contract: {required}")
+    if dockerfile.count('temporal_orchestrator) set -- --features legacy-workflows ;;') != 2:
+        failures.append("both Docker build layers must select historical Temporal workflows")
     if dockerfile.find("COPY dependency-skeleton/app ./app") > dockerfile.find("COPY app ./app"):
         failures.append("actual source copied before stable Cargo dependency layer")
     for target, executable in [

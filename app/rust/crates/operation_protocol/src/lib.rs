@@ -1,8 +1,9 @@
 //! Provider-free contracts and validation of versioned operation graphs.
 //!
-//! This library never executes an operation or reads external state. It
-//! validates the complete immutable graph before a runner may schedule I/O.
-//! Operation implementations and provider adapters belong to their owners.
+//! This library never executes provider I/O or reads external state. It
+//! validates immutable graphs and advances the deterministic owner-neutral
+//! DAG machine. Operation implementations and provider adapters belong to
+//! their owners.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -11,9 +12,16 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod dag_machine;
 pub mod effect_child_v4;
+pub mod json_budget;
 pub mod owner_dispatch;
 pub mod owner_validation;
+pub use dag_machine::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
+pub use json_budget::{
+    enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES, DAG_MAX_NODES,
+    DAG_MAX_RESULT_BYTES,
+};
 pub use effect_child_v4::{
     canonical_effect_dispatch_input_bytes, checked_execution_key, BoundEffectInputV4,
     EffectChildInvocationV4, EffectChildProtocolError, EffectChildResultV4,

@@ -20,19 +20,25 @@ ENV SQLX_OFFLINE=true \
 ARG OWNER_PACKAGE
 COPY dependency-skeleton/app ./app
 RUN case "$OWNER_PACKAGE" in \
-      temporal_orchestrator|temporal_pg_effects) ;; \
+      temporal_orchestrator) set -- --features legacy-workflows ;; \
+      temporal_pg_effects) set -- ;; \
       *) echo "invalid owner package" >&2; exit 1 ;; \
     esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE"
+      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE" "$@"
 
 COPY app ./app
 # Docker COPY can preserve an old source mtime; guarantee fresh owner codegen
 # without invalidating the independent dependency skeleton compilation layer.
 RUN find /app/app/rust -type f -name '*.rs' \
     \( -path '*/src/*' -o -name 'build.rs' \) -exec touch {} + \
+    && case "$OWNER_PACKAGE" in \
+      temporal_orchestrator) set -- --features legacy-workflows ;; \
+      temporal_pg_effects) set -- ;; \
+      *) echo "invalid owner package" >&2; exit 1 ;; \
+    esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE"
+      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE" "$@"
 
 FROM build-base AS pure-builder
 

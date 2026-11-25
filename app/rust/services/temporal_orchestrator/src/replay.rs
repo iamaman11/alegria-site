@@ -1,23 +1,32 @@
 //! Offline official Temporal SDK history replay for the provider-free package.
 //! No DB, provider SDK, Activity registration, poller or network connection.
 
+use super::{
+    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+    PURE_DAG_ORCHESTRATOR_QUEUE,
+};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2};
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::QDRANT_DAG_PARENT_QUEUE_V1;
-use temporal_gateway::{
-    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
-};
 use temporalio_client::WorkflowHistory;
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 
+#[cfg(all(test, feature = "legacy-workflows"))]
 pub(crate) async fn replay_history(path: &Path) -> Result<()> {
     replay_history_for_queue(path, PURE_DAG_ORCHESTRATOR_QUEUE).await
 }
 
 pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result<()> {
+    #[cfg(not(feature = "legacy-workflows"))]
+    anyhow::ensure!(
+        queue != PURE_DAG_ORCHESTRATOR_QUEUE
+            && queue != EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
+            && queue != EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+        "historical site Workflow replay requires legacy-workflows binary feature"
+    );
     #[cfg(feature = "legacy-qdrant-v1")]
     let qdrant_v1 = queue == QDRANT_DAG_PARENT_QUEUE_V1;
     #[cfg(not(feature = "legacy-qdrant-v1"))]
@@ -55,11 +64,20 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
         #[cfg(feature = "legacy-qdrant-v1")]
         super::workflow::register_for_replay_qdrant_v1(&mut options)?;
     } else if queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE {
+        #[cfg(feature = "legacy-workflows")]
         super::workflow::register_for_replay_v5(&mut options)?;
+        #[cfg(not(feature = "legacy-workflows"))]
+        anyhow::bail!("historical V5 replay requires legacy-workflows binary feature");
     } else if queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE {
+        #[cfg(feature = "legacy-workflows")]
         super::workflow::register_for_replay_v4(&mut options)?;
+        #[cfg(not(feature = "legacy-workflows"))]
+        anyhow::bail!("historical V4 replay requires legacy-workflows binary feature");
     } else {
+        #[cfg(feature = "legacy-workflows")]
         super::workflow::register_for_replay(&mut options)?;
+        #[cfg(not(feature = "legacy-workflows"))]
+        anyhow::bail!("historical pure DAG replay requires legacy-workflows binary feature");
     }
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct Temporal replayer: {error}"))?
@@ -73,6 +91,21 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
 mod tests {
     use super::*;
 
+    #[cfg(not(feature = "legacy-workflows"))]
+    #[tokio::test]
+    async fn default_generic_replay_rejects_all_frozen_site_queues() {
+        let missing = std::env::temp_dir().join("not-a-real-temporal-history.json");
+        for queue in [
+            PURE_DAG_ORCHESTRATOR_QUEUE,
+            EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+            EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+        ] {
+            let error = replay_history_for_queue(&missing, queue).await.unwrap_err();
+            assert!(error.to_string().contains("legacy-workflows"), "{queue}");
+        }
+    }
+
+    #[cfg(feature = "legacy-workflows")]
     #[tokio::test]
     async fn invalid_or_missing_history_fails_offline() {
         let missing =

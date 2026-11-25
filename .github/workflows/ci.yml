@@ -320,24 +320,13 @@ jobs:
             "$RUNNER_TEMP/alegria-worker-context/app/rust/Cargo.toml" \
             "$RUNNER_TEMP/alegria-worker-context/dependency-skeleton/app/rust/Cargo.toml"
 
-      # Same impact report drives local and CI Cargo feedback. Broad or
-      # unclassifiable inputs fail closed to the workspace, not a fake PASS.
+      # Same impact report drives local and CI Cargo feedback. Full scope is
+      # delegated to the independent mandatory verify/E2E jobs above.
       - name: Changed Rust crates and dependent consumers
-        # Full impact compiles its one harness and three runtime binaries in
-        # independent CI jobs, then executes all suites with exact-SHA artifacts.
-        # Scoped changes keep this existing narrow Cargo owner unchanged.
         if: needs.impact.outputs.cargo_scope != 'full'
         env:
           SQLX_OFFLINE: "true"
-        run: |
-          args=()
-          if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then
-            # The same exact-source full scope makes the existing verify job
-            # mandatory; it executes the workspace unit tests in parallel.
-            args+=(--delegate-workspace-unit-tests-to-verify)
-          fi
-          python3 automation/run_scoped_cargo_feedback.py \
-            --report automation/reports/ci_impact.json "${args[@]}"
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -1088,30 +1077,32 @@ jobs:
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind v3 --source-sha "$GITHUB_SHA" \
             --directory automation/reports/rust-ci-artifacts/v3
-      - name: Compile frozen Qdrant V1 parent explicitly, without altering generic artifact
+      - name: Compile one explicitly legacy Temporal parent for historical Pure V3 and Qdrant V1 replay
         working-directory: app/rust
-        run: cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1
-      - name: Bind separate immutable Qdrant V1 replay executable to exact source
+        run: cargo build --locked -p temporal_orchestrator --bin temporal_orchestrator --features legacy-qdrant-v1,legacy-workflows
+      - name: Bind shared immutable historical replay executable to exact source
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
             --directory automation/reports/rust-ci-artifacts/legacy_qdrant_parent
-      - name: Prove exact-source Temporal binaries expose disjoint legacy Workflow features
+      - name: Prove exact-source generic refuses legacy histories and shared historical binary permits replay
         run: |
           set -euo pipefail
           missing_history="$RUNNER_TEMP/absent-temporal-qdrant-v1-history.json"
           generic="automation/reports/rust-ci-artifacts/v3/temporal_orchestrator"
           legacy="automation/reports/rust-ci-artifacts/legacy_qdrant_parent/temporal_orchestrator_legacy_qdrant_v1"
-          if "$generic" --replay-qdrant-effect-history "$missing_history" >"$RUNNER_TEMP/dag-generic-mode.log" 2>&1; then
-            echo "provider-free Temporal unexpectedly enabled frozen Qdrant V1 replay" >&2
-            exit 1
-          fi
-          grep -F 'requires legacy-qdrant-v1 binary feature' "$RUNNER_TEMP/dag-generic-mode.log"
-          if "$legacy" --replay-qdrant-effect-history "$missing_history" >"$RUNNER_TEMP/dag-legacy-mode.log" 2>&1; then
-            echo "frozen Qdrant V1 replay unexpectedly accepted absent server History" >&2
-            exit 1
-          fi
-          grep -F 'read actual Temporal history' "$RUNNER_TEMP/dag-legacy-mode.log"
-          echo 'CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1'
+          for mode in --replay-history --replay-effect-history --replay-v5-effect-history --replay-qdrant-effect-history; do
+            if "$generic" "$mode" "$missing_history" >"$RUNNER_TEMP/dag-generic-mode.log" 2>&1; then
+              echo "provider-free Temporal unexpectedly enabled historical replay $mode" >&2
+              exit 1
+            fi
+            grep -F 'requires legacy-' "$RUNNER_TEMP/dag-generic-mode.log"
+            if "$legacy" "$mode" "$missing_history" >"$RUNNER_TEMP/dag-legacy-mode.log" 2>&1; then
+              echo "historical replay unexpectedly accepted absent server History $mode" >&2
+              exit 1
+            fi
+            grep -F 'read actual Temporal history' "$RUNNER_TEMP/dag-legacy-mode.log"
+          done
+          echo 'CI_TEMPORAL_FEATURE_PROVENANCE=PASS generic=provider-free legacy=qdrant-v1,pure-v3,v4,v5'
       - uses: actions/upload-artifact@v7
         with:
           name: rust-e2e-v3-${{ github.sha }}
@@ -1420,8 +1411,8 @@ jobs:
             --report automation/reports/ci_impact.json --suite-job auto \
             --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
 
-  # Real temporal v3 providers run in isolated hosts using only their own
-  # source-bound test compiler and, if needed, independently compiled Workers.
+  # The historical Pure V3 Workflow uses the already-built explicit legacy
+  # parent, without recompiling a third parent or enabling legacy on generic.
   rust-temporal-v3-e2e:
     name: rust-temporal-v3-e2e (${{ matrix.shard }})
     needs: [impact, rust-e2e-temporal-harness, rust-e2e-v3-binaries]
@@ -1449,8 +1440,8 @@ jobs:
           path: ${{ runner.temp }}/rust-ci-bundles/temporal_harness
       - uses: actions/download-artifact@v7
         with:
-          name: rust-e2e-v3-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-ci-bundles/v3
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
       - name: Verify exact-source real test executable and Worker
         shell: bash
         run: |
@@ -1461,8 +1452,8 @@ jobs:
             --kind temporal_harness --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/temporal_harness"
           python3 automation/rust_ci_artifacts.py install \
-            --kind v3 --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
       - name: Execute exact selected temporal v3 real E2E shard
         run: |
           python3 automation/run_scoped_cargo_feedback.py \
@@ -1505,7 +1496,11 @@ jobs:
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
-      - name: Authenticate two independent source-bound PG and V3 executables
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
+      - name: Authenticate PG and generic and historical parent executables from exact source
         shell: bash
         run: |
           set -euo pipefail
@@ -1517,6 +1512,9 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind v3 --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
       - name: Execute exact selected PG V3 architecture shard
         if: matrix.shard == 'pg_temporal'
         run: |

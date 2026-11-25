@@ -15,12 +15,12 @@ ENV SQLX_OFFLINE=true \
 
 COPY dependency-skeleton/app ./app
 RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-    -p temporal_orchestrator --bin temporal_orchestrator
+    -p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows
 COPY app ./app
 RUN find /app/app/rust -type f -name '*.rs' \
     \( -path '*/src/*' -o -name 'build.rs' \) -exec touch {} + \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-       -p temporal_orchestrator --bin temporal_orchestrator
+       -p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows
 
 FROM debian:bookworm-slim AS pure-runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \

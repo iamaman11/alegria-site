@@ -297,7 +297,9 @@ class ImpactFixtures(unittest.TestCase):
             "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
         })
         self.assertIn("temporal_orchestrator/legacy-qdrant-v1",
-                      SUITE_OWNERS["temporal_qdrant_v8"]["prepare"])
+                      SUITE_OWNERS["temporal_qdrant_v8"]["prepare"][-1])
+        self.assertIn("temporal_orchestrator/legacy-workflows",
+                      SUITE_OWNERS["temporal_qdrant_v8"]["prepare"][-1])
         self.assertEqual(SUITE_OWNERS["temporal_mixed_v6_contract"]["runtime_binaries"], {
             "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
             "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
@@ -509,8 +511,12 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("pure_v3_", architecture["pure_dag_v3"])
         self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)
         self.assertEqual(PURE_V3_E2E_RUNTIME_BINARIES, {
-            "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
+            "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator_legacy_qdrant_v1",
         })
+        self.assertEqual(SUITE_OWNERS["pure_dag_v3"]["stage_binaries"], {
+            "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
+        })
+        self.assertIn("legacy-workflows", PURE_V3_E2E_PREPARE[-1])
 
     def test_pure_v3_runtime_replay_is_selected_by_actual_executor_and_contract_edits(self) -> None:
         # A V3 Workflow-only source selector is insufficient: the Workflow
@@ -557,8 +563,12 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
         self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["runtime_binaries"], {
             "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
-            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
         })
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["stage_binaries"], {
+            "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
+        })
+        self.assertIn("temporal_orchestrator/legacy-workflows", SUITE_OWNERS["pg_effect_v3"]["prepare"][-1])
         self.assertIn("temporal_orchestrator", SUITE_OWNERS["pg_effect_v3"]["prepare"])
         self.assertIn("temporal_pg_effects", SUITE_OWNERS["pg_effect_v3"]["prepare"])
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {

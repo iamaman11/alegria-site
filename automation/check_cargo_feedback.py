@@ -309,7 +309,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
                 with self.assertRaisesRegex(FileNotFoundError, "temporal_orchestrator"):
                     suite_runtime_environment(self.report(["pg_effect_v3"]), "pg_effect_v3")
-                pure = runtime / "temporal_orchestrator"
+                pure = runtime / "temporal_orchestrator_legacy_qdrant_v1"
                 pure.write_bytes(b"exact parent runtime")
                 pure.chmod(0o755)
                 with patch("sys.stdout", new_callable=io.StringIO):

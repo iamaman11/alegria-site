@@ -358,22 +358,27 @@ def native_dag_owner_closure_failures(
 
 
 def default_generic_parent_feature_failures(manifest: dict) -> list[str]:
-    """Keep frozen Qdrant V1 replay opt-in, not in the generic DAG binary.
+    """Keep both historical Workflow families opt-in and out of generic DAG.
 
     This is a Cargo feature/manifest guarantee only; a physical rustc A/B
     compile must still be run on the exact PR SHA before claiming complete
     native owner-only rebuild independence.
     """
     qdrant = manifest.get("dependencies", {}).get("qdrant_contracts")
+    site_application = manifest.get("dependencies", {}).get("seo_application")
     features = manifest.get("features", {})
     if (isinstance(qdrant, dict)
             and qdrant.get("optional") is True
             and features.get("legacy-qdrant-v1") == ["dep:qdrant_contracts"]
+            and isinstance(site_application, dict)
+            and site_application.get("optional") is True
+            and features.get("legacy-workflows") == ["dep:seo_application"]
             and features.get("default", []) == []):
         return []
     return [
         "default generic Temporal parent must be provider-neutral (default = []) "
-        "and retain an explicit opt-in legacy-qdrant-v1 feature for frozen old History"
+        "and retain explicit opt-in legacy-qdrant-v1 and legacy-workflows features "
+        "for frozen historical Workflow replay"
     ]
 
 

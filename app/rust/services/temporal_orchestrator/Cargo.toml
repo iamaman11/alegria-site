@@ -5,6 +5,10 @@ edition = "2021"
 
 [features]
 default = []
+# Historical Pure/V4/V5 Workflow Histories are served by an explicitly built
+# legacy variant; the normal generic DAG binary never links site application
+# and Truth/SEO domain crates.
+legacy-workflows = ["dep:seo_application"]
 # Frozen Qdrant V1 parent is available only for explicitly deployed legacy
 # history replay. Generic DAG and PostgreSQL parents do not link this owner.
 legacy-qdrant-v1 = ["dep:qdrant_contracts"]
@@ -16,8 +20,8 @@ temporalio-client = { workspace = true }
 temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
 temporalio-workflow = { workspace = true }
-temporal_gateway = { path = "../../crates/temporal_gateway" }
-seo_application = { path = "../../crates/seo_application" }
+url = { workspace = true }
+seo_application = { path = "../../crates/seo_application", optional = true }
 operation_protocol = { path = "../../crates/operation_protocol" }
 qdrant_contracts = { path = "../../crates/qdrant_contracts", optional = true } # frozen V1 only
 serde = { workspace = true }
