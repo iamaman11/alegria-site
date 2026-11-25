@@ -453,6 +453,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         self.assertEqual(NEW_E2E_ARTIFACT_OWNERS, {
             "graph_harness": "integration_graph_e2e",
             "qdrant_harness": "integration_qdrant_e2e",
+            "qdrant_temporal_harness": "integration_qdrant_temporal_e2e",
             "temporal_harness": "integration_temporal_e2e",
             "pg_app_harness": "integration_pg_app_e2e",
         })

@@ -479,5 +479,139 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
             .expect("historical NULL source still exists");
     assert_eq!(unowned_still_null, None, "legacy rows are quarantined, not silently transferred");
 
+    // V7 preflight is a read-only DBA diagnostic, not an authorization
+    // shortcut for native ingestion LOGINs and not an implicit backfill.
+    let preflight_a: bool = sqlx::query_scalar(
+        "SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)",
+    )
+    .bind(&login_a)
+    .bind("ci-pg-v3-tenant")
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("restricted native LOGIN A satisfies immutable tenant-bound ingress preflight");
+    assert!(preflight_a);
+    pg_v6_expect_provenance_rejection(
+        sqlx::query("SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)")
+            .bind(&login_b)
+            .bind(&tenant_b)
+            .execute(&postgres.pool)
+            .await
+            .expect_err("B's explicit TRUNCATE overgrant blocks role cutover"),
+        "overprivileged tenant LOGIN preflight",
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "REVOKE TRUNCATE ON ALL TABLES IN SCHEMA
+         serp,raw,kb,extracted,verified,site,monitoring,pipeline,system FROM {login_b};"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("DBA corrects the disposable role's overly broad TRUNCATE grants");
+    let preflight_b: bool = sqlx::query_scalar(
+        "SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)",
+    )
+    .bind(&login_b)
+    .bind(&tenant_b)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("B native tenant LOGIN can pass after the unsafe privilege is revoked");
+    assert!(preflight_b);
+    pg_v6_expect_provenance_rejection(
+        sqlx::query("SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)")
+            .bind(&login_unbound)
+            .bind(&tenant_b)
+            .execute(&postgres.pool)
+            .await
+            .expect_err("unprovisioned LOGIN cannot pass prospective tenant preflight"),
+        "unbound tenant LOGIN preflight",
+    );
+    let forbidden_census = sqlx::query("SELECT * FROM pipeline.tenant_historical_quarantine_v1()")
+        .execute(&actor_a)
+        .await
+        .expect_err("raw historical census is DBA-only and must not expose other tenants");
+    assert_eq!(
+        forbidden_census
+            .as_database_error()
+            .and_then(|database| database.code())
+            .as_deref(),
+        Some("42501"),
+        "tenant LOGIN must lack privileged census EXECUTE"
+    );
+    let census: Vec<(String, i64, i64)> = sqlx::query_as(
+        "SELECT relation_name,unattributed,inconsistent
+         FROM pipeline.tenant_historical_quarantine_v1() ORDER BY relation_name",
+    )
+    .fetch_all(&postgres.pool)
+    .await
+    .expect("DBA reads all ten real tenant-bearing owner relation counts");
+    assert_eq!(census.len(), 10, "every tenant-bearing RLS table is inventoried");
+    let legacy_page_census = census
+        .iter()
+        .find(|(relation, _, _)| relation == "raw.pages")
+        .expect("raw page history must be included in migration census");
+    assert_eq!(legacy_page_census.1, 1, "historical unowned page remains quarantined");
+    assert_eq!(
+        census.iter().map(|(_, _, inconsistent)| inconsistent).sum::<i64>(),
+        0,
+        "both valid native tenants have consistent actual source/context ownership"
+    );
+    pg_v6_expect_provenance_rejection(
+        sqlx::query("SELECT pipeline.assert_no_tenant_quarantine_v1()")
+            .execute(&postgres.pool)
+            .await
+            .expect_err("unattributed historical evidence must block attested cutover preflight"),
+        "historical NULL quarantine preflight",
+    );
+    let malformed_label = sqlx::query(
+        "INSERT INTO raw.pages(url,domain,dtype,tenant_id)
+         VALUES ($1,'ci-malformed.example.gov','government',' ci-pg-v3-tenant ')",
+    )
+    .bind(format!("https://ci-malformed-{marker}.example.gov"))
+    .execute(&postgres.pool)
+    .await
+    .expect_err("new tenant labels must be canonical despite historical NOT VALID check");
+    assert_eq!(
+        malformed_label
+            .as_database_error()
+            .and_then(|database| database.code())
+            .as_deref(),
+        Some("23514"),
+        "forward-only NOT VALID check still rejects new malformed tenant labels"
+    );
+    // An authorized DBA can plan historical repair, but unsafe parent
+    // reassignment of an already-ingested page must be visible, not masked.
+    sqlx::query("UPDATE raw.pages SET tenant_id='ci-pg-v3-tenant' WHERE id=$1")
+        .bind(page_b)
+        .execute(&postgres.pool)
+        .await
+        .expect("simulate audited historical ownership mismatch in disposable fixture");
+    let mismatched_edges: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT relation_name,inconsistent
+         FROM pipeline.tenant_historical_quarantine_v1()
+         WHERE inconsistent > 0 ORDER BY relation_name",
+    )
+    .fetch_all(&postgres.pool)
+    .await
+    .expect("DBA receives read-only mismatch inventory");
+    assert!(
+        mismatched_edges.iter().any(|(relation, count)|
+            relation == "raw.sections" && *count == 1
+        ),
+        "census must flag the section whose parent was reassigned to another tenant"
+    );
+    assert!(
+        mismatched_edges.iter().any(|(relation, count)|
+            relation == "extracted.rule_candidates" && *count == 1
+        ),
+        "census must flag canonical candidate source provenance after parent reassignment"
+    );
+    let no_implicit_claim: Option<String> =
+        sqlx::query_scalar("SELECT tenant_id FROM raw.pages WHERE id=$1")
+            .bind(legacy_page)
+            .fetch_one(&postgres.pool)
+            .await
+            .expect("read-only preflight has not changed historical unowned source");
+    assert_eq!(no_implicit_claim, None, "preflight must never mint tenant ownership");
+
     eprintln!("CI_PG_V6_NATIVE_TENANT_INGRESS_AND_RLS_PROVENANCE=PASS");
+    eprintln!("CI_PG_V7_TENANT_HISTORICAL_QUARANTINE_AND_ROLE_PREFLIGHT=PASS");
 }

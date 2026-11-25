@@ -64,6 +64,9 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     # Opt-in real two-container E2E inspects Qdrant REST/gRPC wire payloads
     # while proving the typed PostgreSQL admission/receipt fence end to end.
     "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
+    # V7 genuine Temporal parent/child/PG/Qdrant test: only this exact opt-in
+    # test file may inspect raw captured server History and RPC wire JSON.
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_qdrant_tests.rs",
     # Real PostgreSQL/HTTP fault-injection tests moved byte-for-byte from the
     # broad test harness, not permission to use JSON in production PG ports.
     "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
@@ -78,6 +81,15 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     # normalized Qdrant JSON at the external RPC boundary; no domain module
     # or other projection_delivery source gains blanket JSON privileges.
     "app/rust/crates/projection_delivery/src/admitted_qdrant_projection_v1.rs",
+    # V7 extracted *single* Qdrant provider-wire executor; this formerly
+    # permitted projection_delivery adapter moved into a narrow PG+Qdrant
+    # owner crate. No other qdrant_effects_core module receives permission.
+    "app/rust/crates/qdrant_effects_core/src/lib.rs",
+    # Explicit typed V7 Temporal command payload adapters. Neither the pure
+    # orchestrator workflow nor the Qdrant effect logic receives a crate-wide
+    # JSON decode exemption; each wire adapter is reviewed independently.
+    "app/rust/services/temporal_orchestrator/src/qdrant_child_wire_json.rs",
+    "app/rust/services/temporal_qdrant_effects/src/operator.rs",
     "app/rust/crates/voyage_api/src/lib.rs",
     # Real Temporal/history and full-stack tests were moved verbatim out of
     # the broad harness. Grant exact test files, never an E2E crate prefix.

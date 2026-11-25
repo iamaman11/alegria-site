@@ -2287,6 +2287,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_qdrant_temporal_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "integration_data_fixtures",
+ "operation_protocol",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-sdk-core",
+ "testcontainers",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
 name = "integration_pg_v3_e2e"
 version = "0.1.0"
 dependencies = [
@@ -3611,6 +3631,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -3637,9 +3658,11 @@ dependencies = [
  "anyhow",
  "contracts",
  "graph_neo4j",
+ "operation_protocol",
  "postgres_store",
  "primitives",
  "prost",
+ "qdrant_effects_core",
  "serde",
  "serde_json",
  "sqlx",
@@ -3655,6 +3678,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
+]
+
+[[package]]
+name = "qdrant_effects_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]
@@ -5361,6 +5396,29 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "truth_domain",
+ "uuid",
+]
+
+[[package]]
+name = "temporal_qdrant_effects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "operation_protocol",
+ "qdrant_effects_core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

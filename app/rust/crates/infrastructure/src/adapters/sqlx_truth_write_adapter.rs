@@ -23,6 +23,8 @@ use super::{
 };
 
 mod preflight;
+mod source_fence;
+pub(in crate::adapters) use source_fence::lock_and_validate_prepared_sources_in_tx;
 use preflight::{
     serialize_truth_value, unstaged_global_verified_rule_ids, validate_prepared_truth_write,
 };
@@ -114,6 +116,7 @@ where
         return Ok(previous);
     }
     sqlx_seo_adapter::reject_stale_truth_run_in_tx(&mut tx, run_id, context_key).await?;
+    lock_and_validate_prepared_sources_in_tx(&mut tx, raw_by_section).await?;
     sqlx_seo_adapter::lock_truth_rule_projections_in_tx(&mut tx, semantic_outcomes.keys()).await?;
 
     // Optional Voyage embedding is safe for a never-projected identity, but

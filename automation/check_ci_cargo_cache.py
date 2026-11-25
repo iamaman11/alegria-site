@@ -18,18 +18,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 OWNERS = (
     "architecture-and-rust", "verify",
-    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
     "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
     "rust-e2e-truth-harness",
-    "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+    "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries", "rust-e2e-qdrant-effects-binaries",
 )
 # V6.1's single PR compiler writer demonstrably regressed the mandatory
 # Temporal cold build by 100 seconds despite zero cache write errors. Restore
 # the prior invariant: every PR runner reads trusted-main objects only.
 READERS = OWNERS[1:]
 SOURCE_BOUND_COMPILERS = frozenset({
-    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
     "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
     "rust-e2e-truth-harness",

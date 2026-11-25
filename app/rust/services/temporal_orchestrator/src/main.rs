@@ -7,6 +7,7 @@
 //! partial Activity sets on the legacy task queue or change V1/V2 histories.
 
 use anyhow::{Context, Result};
+use operation_protocol::QDRANT_DAG_PARENT_QUEUE_V1;
 use std::env;
 use temporal_gateway::{
     connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
@@ -23,17 +24,20 @@ use futures_util as _;
 use temporalio_common as _;
 
 mod replay;
+mod qdrant_child_wire_json;
 mod workflow;
 
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
 const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
 const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
+const QDRANT_V1_LIVE_OPT_IN: &str = "ALLOW_QDRANT_DAG_ORCHESTRATOR_V1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrchestratorMode {
     PureV3,
     AdmittedEffectV4,
     AdmittedEffectV5,
+    QdrantV1,
 }
 
 impl OrchestratorMode {
@@ -42,6 +46,7 @@ impl OrchestratorMode {
             Self::PureV3 => PURE_DAG_ORCHESTRATOR_QUEUE,
             Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
             Self::AdmittedEffectV5 => EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+            Self::QdrantV1 => QDRANT_DAG_PARENT_QUEUE_V1,
         }
     }
 }
@@ -65,10 +70,12 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     let pure_opt_in = read(LIVE_OPT_IN);
     let effect_opt_in = read(V4_LIVE_OPT_IN);
     let v5_effect_opt_in = read(V5_LIVE_OPT_IN);
+    let qdrant_opt_in = read(QDRANT_V1_LIVE_OPT_IN);
     for (label, setting) in [
         (LIVE_OPT_IN, &pure_opt_in),
         (V4_LIVE_OPT_IN, &effect_opt_in),
         (V5_LIVE_OPT_IN, &v5_effect_opt_in),
+        (QDRANT_V1_LIVE_OPT_IN, &qdrant_opt_in),
     ] {
         anyhow::ensure!(
             matches!(setting.as_deref(), None | Some("true") | Some("false")),
@@ -79,11 +86,13 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
         pure_opt_in.as_deref() == Some("true"),
         effect_opt_in.as_deref() == Some("true"),
         v5_effect_opt_in.as_deref() == Some("true"),
+        qdrant_opt_in.as_deref() == Some("true"),
     ) {
-        (true, false, false) => OrchestratorMode::PureV3,
-        (false, true, false) => OrchestratorMode::AdmittedEffectV4,
-        (false, false, true) => OrchestratorMode::AdmittedEffectV5,
-        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}=true, {V4_LIVE_OPT_IN}=true and {V5_LIVE_OPT_IN}=true"),
+        (true, false, false, false) => OrchestratorMode::PureV3,
+        (false, true, false, false) => OrchestratorMode::AdmittedEffectV4,
+        (false, false, true, false) => OrchestratorMode::AdmittedEffectV5,
+        (false, false, false, true) => OrchestratorMode::QdrantV1,
+        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
@@ -145,6 +154,7 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
         OrchestratorMode::PureV3 => workflow::register(&mut options)?,
         OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
         OrchestratorMode::AdmittedEffectV5 => workflow::register_v5(&mut options)?,
+        OrchestratorMode::QdrantV1 => workflow::register_qdrant_v1(&mut options)?,
     }
     Ok(options)
 }
@@ -158,8 +168,11 @@ async fn main() -> Result<()> {
         if argument == std::ffi::OsStr::new("--replay-history")
             || argument == std::ffi::OsStr::new("--replay-effect-history")
             || argument == std::ffi::OsStr::new("--replay-v5-effect-history")
+            || argument == std::ffi::OsStr::new("--replay-qdrant-effect-history")
         {
-            let queue = if argument == std::ffi::OsStr::new("--replay-v5-effect-history") {
+            let queue = if argument == std::ffi::OsStr::new("--replay-qdrant-effect-history") {
+                QDRANT_DAG_PARENT_QUEUE_V1
+            } else if argument == std::ffi::OsStr::new("--replay-v5-effect-history") {
                 EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
             } else if argument == std::ffi::OsStr::new("--replay-effect-history") {
                 EFFECT_DAG_ORCHESTRATOR_V4_QUEUE

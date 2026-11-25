@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from ci_impact import (
     CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
-    E2E_RUNNER_PARTITIONS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
+    E2E_RUNNER_PARTITIONS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS, E2E_QDRANT_SHARDS,
     FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 47)
+                             for _, _, _, count in rows), 48)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -143,10 +143,12 @@ class ImpactFixtures(unittest.TestCase):
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
         self.assertTrue({
-            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-pg-app-harness",
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
+            "rust-e2e-qdrant-effects-binaries", "rust-e2e-pg-app-harness",
             "rust-e2e-temporal-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
             "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
-            "rust-graph-e2e", "rust-qdrant-e2e", "rust-pg-app-e2e", "rust-temporal-legacy-e2e",
+            "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e",
+            "rust-pg-app-e2e", "rust-temporal-legacy-e2e",
             "rust-temporal-v3-e2e", "rust-outbox-e2e",
         } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
@@ -165,6 +167,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("pg_effect_v3", architecture)
         self.assertIn("temporal_restart", architecture)
         self.assertIn("pg_temporal_v3", architecture)
+        self.assertIn("temporal_qdrant_v7", architecture)
         for owner in ("pg_effect_v3", "pg_temporal_v3"):
             self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_pg_v3_e2e")
         self.assertEqual(SUITE_OWNERS["outbox_a14"]["command"][3], "integration_outbox_e2e")
@@ -172,6 +175,7 @@ class ImpactFixtures(unittest.TestCase):
             "integration_harness": {"truth_certification"},
             "integration_graph_e2e": {"graph_query"},
             "integration_qdrant_e2e": {"knowledge_a13", "vector_projection", "vector_admitted_projection"},
+            "integration_qdrant_temporal_e2e": {"temporal_qdrant_v7"},
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
                                        "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity"},
@@ -248,6 +252,11 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/integration_harness/src/lib.rs",
         }, set())
         self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 10))
+        self.assertIn("app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql",
+                      SUITE_OWNERS["pg_effect_v3"]["paths"])
+        quarantine = self.impact("app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql")
+        self.assertEqual(quarantine["scope"], "full")
+        self.assertIn("pg_effect_v3", quarantine["selected_suites"])
         self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
         self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
@@ -271,13 +280,27 @@ class ImpactFixtures(unittest.TestCase):
             ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
             ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
         ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
+            ("temporal_qdrant_v7", "qdrant_v7_native_temporal_history_operator_real_effect", 1),
+        ))
+        self.assertEqual(SUITE_OWNERS["temporal_qdrant_v7"]["runtime_binaries"], {
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+            "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+        })
+        self.assertEqual(SUITE_OWNERS["temporal_qdrant_v7"]["command"][3],
+                         "integration_qdrant_temporal_e2e")
+        self.assertIn("app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+                      SUITE_OWNERS["temporal_qdrant_v7"]["paths"])
         self.assertIn("app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
                       SUITE_OWNERS["vector_admitted_projection"]["paths"])
         self.assertIn("app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
                       SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        self.assertIn("app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
         for migration in (
             "20261125_0010_qdrant_projection_operator_ledger.sql",
             "20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "20261125_0014_qdrant_projection_run_status_start_fence.sql",
         ):
             with self.subTest(migration=migration):
                 report = self.impact("app/db/migrations/" + migration)
@@ -330,7 +353,27 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual({suite for rows in E2E_SHARD_RUNS.values()
                           for suite, *_ in rows if suite in selected}, set(selected))
 
-    def test_full_real_e2e_shards_cover_all_48_including_optional_certification(self) -> None:
+    def test_native_temporal_qdrant_child_is_new_physical_exact_filter_not_vector_alias(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_qdrant_temporal_e2e"
+        manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["package"]["name"], "integration_qdrant_temporal_e2e")
+        self.assertEqual(manifest["features"]["default"], [])
+        self.assertNotIn("integration_qdrant_e2e", manifest["dependencies"])
+        library = (root / "src/lib.rs").read_text(encoding="utf-8")
+        name = "qdrant_v7_native_temporal_history_operator_real_effect"
+        self.assertEqual(library.count('include!("tests/native_temporal_qdrant_tests.rs")'), 1)
+        test_source = (root / "src/tests/native_temporal_qdrant_tests.rs").read_text(encoding="utf-8")
+        self.assertEqual(test_source.count(f"async fn {name}()"), 1)
+        self.assertEqual(test_source.count("#[tokio::test]"), 1)
+        for proof in ("PostgresHarness::start()", "QdrantHarness::start()",
+                      "TemporalHarness::start()", "INTEGRATION_QDRANT_EFFECT_WORKER_BIN",
+                      "INTEGRATION_EFFECT_DAG_WORKER_BIN"):
+            self.assertIn(proof, test_source)
+        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (("temporal_qdrant_v7", name, 1),))
+        self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
+        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], ("temporal_qdrant",))
+
+    def test_full_real_e2e_shards_cover_all_49_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -349,8 +392,8 @@ class ImpactFixtures(unittest.TestCase):
             sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 39
         )
         self.assertEqual(
-            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 9
-        )  # Eight ordinary architecture regressions + optional Truth cert.
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 10
+        )  # Nine ordinary architecture regressions + optional Truth cert.
         self.assertEqual(
             [(name, test_filter) for rows in shards.values()
              for name, _, test_filter, _ in rows if name == "temporal_restart"],
@@ -417,9 +460,9 @@ class ImpactFixtures(unittest.TestCase):
             head="HEAD", base="BASE",
         )
         self.assertEqual(impact["scope"], "scoped")
-        self.assertEqual(impact["selected_suites"], ["pg_effect_v3", "pure_dag_v3"])
+        self.assertEqual(impact["selected_suites"], ["pg_effect_v3", "pure_dag_v3", "temporal_qdrant_v7"])
         architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
-        self.assertEqual(set(architecture), {"pure_dag_v3", "pg_effect_v3"})
+        self.assertEqual(set(architecture), {"pure_dag_v3", "pg_effect_v3", "temporal_qdrant_v7"})
         self.assertIn("pure_v3_", architecture["pure_dag_v3"])
         self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)
         self.assertEqual(PURE_V3_E2E_RUNTIME_BINARIES, {
@@ -1167,7 +1210,7 @@ class ImpactFixtures(unittest.TestCase):
             {"vector_qdrant", "runtime_composition", "temporal_worker", "outbox_worker",
              "integration_harness"},
         )
-        self.assertEqual(result["selected_suites"], ["vector_admitted_projection", "vector_projection"])
+        self.assertEqual(result["selected_suites"], ["temporal_qdrant_v7", "vector_admitted_projection", "vector_projection"])
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})

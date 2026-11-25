@@ -328,6 +328,15 @@ PG_V4_PARENT_CHILD_PREPARE = (
     "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
     "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
 )
+QDRANT_V7_PARENT_CHILD_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_qdrant_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_qdrant_effects",
+)
+QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+}
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
@@ -505,6 +514,7 @@ SUITE_OWNERS = {
             "app/db/schema.sql",
             "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
             "app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
             "app/rust/crates/integration_qdrant_e2e/src/lib.rs",
             "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
         },
@@ -518,6 +528,37 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
             "--lib", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # One native Temporal parent/child execution over a real PG admission and
+    # Qdrant mutation. It is NOT a broadening of the REST-only vector shard:
+    # distinct test executable and two exact-source independent Worker owners.
+    "temporal_qdrant_v7": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+            "app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/services/temporal_qdrant_effects/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/projection_delivery/",
+            "app/rust/crates/vector_qdrant/",
+            "app/rust/crates/operation_protocol/",
+        ),
+        "lock_crates": {"temporal_orchestrator", "temporal_qdrant_effects",
+                        "projection_delivery", "vector_qdrant", "operation_protocol"},
+        "on_unknown_global_input": True,
+        "prepare": QDRANT_V7_PARENT_CHILD_PREPARE,
+        "runtime_binaries": QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "qdrant_v7_native_temporal_history_operator_real_effect",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -605,6 +646,7 @@ SUITE_OWNERS = {
             "app/db/migrations/20261125_0008_truth_source_authority_fence.sql",
             "app/db/migrations/20261125_0009_tenant_ingress_writer_provenance.sql",
             "app/db/migrations/20261125_0011_tenant_operator_truncate_fence.sql",
+            "app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
@@ -750,6 +792,7 @@ CI_PR_OWNERS = (
     "architecture-and-rust",
     "rust-e2e-graph-harness",
     "rust-e2e-qdrant-harness",
+    "rust-e2e-qdrant-temporal-harness",
     "rust-e2e-pg-app-harness",
     "rust-e2e-temporal-harness",
     "rust-e2e-pg-harness",
@@ -757,8 +800,10 @@ CI_PR_OWNERS = (
     "rust-e2e-truth-harness",
     "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
+    "rust-e2e-qdrant-effects-binaries",
     "rust-graph-e2e",
     "rust-qdrant-e2e",
+    "rust-qdrant-temporal-e2e",
     "rust-pg-app-e2e",
     "rust-temporal-legacy-e2e",
     "rust-temporal-v3-e2e",
@@ -980,7 +1025,7 @@ FULL_VERIFY_E2E_SUITES = frozenset({
 # guessed from a successful subprocess exit status.
 E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
-    "vector", "truth_certification",
+    "vector", "temporal_qdrant", "truth_certification",
 )
 E2E_VERIFY_SHARDS = (
     "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
@@ -991,6 +1036,7 @@ E2E_VERIFY_SHARDS = (
 # to exactly one runtime job: none may wait for a broad harness dependency.
 E2E_GRAPH_SHARDS = ("graph",)
 E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
+E2E_QDRANT_TEMPORAL_SHARDS = ("temporal_qdrant",)
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
 E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
 E2E_TEMPORAL_V3_SHARDS = ("temporal_pure",)
@@ -1000,6 +1046,7 @@ E2E_TRUTH_SHARDS = ("truth_certification",)
 E2E_RUNNER_PARTITIONS = {
     "rust-graph-e2e": E2E_GRAPH_SHARDS,
     "rust-qdrant-e2e": E2E_QDRANT_SHARDS,
+    "rust-qdrant-temporal-e2e": E2E_QDRANT_TEMPORAL_SHARDS,
     "rust-pg-app-e2e": E2E_PG_APP_SHARDS,
     "rust-temporal-legacy-e2e": E2E_TEMPORAL_LEGACY_SHARDS,
     "rust-temporal-v3-e2e": E2E_TEMPORAL_V3_SHARDS,
@@ -1024,6 +1071,9 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "vector": (
         ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
         ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+    ),
+    "temporal_qdrant": (
+        ("temporal_qdrant_v7", "qdrant_v7_native_temporal_history_operator_real_effect", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

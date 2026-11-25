@@ -96,3 +96,58 @@ remaining opportunity is the provider-free V3 harness split and ultimately
 the legacy/manual E2E compiler's 29-crate full-provider dependency closure;
 neither change is silently substituted for mandatory real tests. No industrial
 SLA pass is claimed before independent remote green-gate measurements.
+
+## V6.2 source-SHA measurement: critical path moved to canonical Worker compilation
+
+[Full green V6.2 run #45629313364](https://github.com/iamaman11/alegria-site/actions/runs/45629313364),
+head `cf6e886aba54df4aafd7031b4425b0247e2526c5`, finished all required
+source and real-provider jobs with the restored read-only PR compiler cache.
+Source event 14:00:09 → mandatory green gate 14:04:47 UTC = **278 seconds**.
+This is a different immutable source from the other observations; it is a
+single actual measurement, not an SLA distribution.
+
+| V6.2 full-gate critical path | Measured elapsed |
+| --- | ---: |
+| `rust-e2e-legacy-binaries` compiler job | 174 s |
+| Rust `cargo build --locked -p temporal_worker -p outbox_worker` step | **153 s** |
+| `rust-temporal-legacy-e2e (temporal_manual)` job after binaries | 79 s |
+| Actual manual test process | 69.46 s |
+| `rust-e2e-temporal-harness` Cargo compiler (parallel, **not** now critical) | 114.941 s |
+| Mandatory aggregate gate | 6 s |
+| **Source event → full green** | **278 s** |
+
+The manual draft-only acceptance test **actually launches both** the canonical
+Temporal Worker and Outbox Worker: it proves pending Qdrant projection without
+an Outbox ACK, then starts the real Outbox and observes durable completion.
+Consequently, making the `temporal_manual` shard ignore its Outbox binary is
+an invalid shortcut, not a safe latency optimization.
+
+## V7 split study and new three-provider E2E owner: experiment, not SLA attainment
+
+The repository now offers an **optional** `workflow_dispatch` physical study
+`operation=physical-study`, `physical_study=legacy-worker-split`. It accepts
+only a previously fully green exact PR SHA and verifies its tree; its Python
+driver creates a Git archive, starts three separate cold Cargo targets for
+the combined Worker+Outbox build, Temporal-only build, and Outbox-only build,
+and records real locked compiler artifact units, timings, CPU and peak RSS.
+`sccache` and incremental reuse are explicitly disabled for this study, so
+sequential samples cannot be mistaken for the production PR READ_ONLY cache
+critical path. This is **measurement infrastructure**, not a mandatory runner
+or a replacement for any E2E check.
+
+A static conservative Rust Cargo.toml dependency inspection of the V6.2
+source found 24 local crates in the legacy Temporal Worker closure versus
+13 in the Outbox closure, with 12 local crates shared between them. Isolating
+Outbox's link may save its tail, but duplicate compilation and cached object
+latency remain unknown. No physical split or full-CI speed claim is made
+before the exact-SHA study output and subsequent changed-SHA full CI run.
+
+V7 also adds **one mandatory native Temporal→PostgreSQL→Qdrant parent/child
+E2E** to the prior 47 real-provider tests: a distinct Rust E2E executable,
+independent Qdrant-effect binary, the existing provider-free parent binary,
+and three SHA/content-attested bundles on an isolated real-container runner.
+The previous Qdrant REST/gRPC shards have no new Worker dependency. The
+full-scope count is **48 mandatory** tests, or **49** if optional Truth
+certification is impact-selected. Compiler and green-gate times for this
+new immutable V7 source must be recorded from GitHub CI; **the ≤180-second
+criterion remains NO-GO** until it is actually demonstrated.

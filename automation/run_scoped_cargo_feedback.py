@@ -42,11 +42,13 @@ OUTBOX_E2E_COMMAND_PREFIX = (
 )
 GRAPH_E2E_PACKAGE = "integration_graph_e2e"
 QDRANT_E2E_PACKAGE = "integration_qdrant_e2e"
+QDRANT_TEMPORAL_E2E_PACKAGE = "integration_qdrant_temporal_e2e"
 TEMPORAL_E2E_PACKAGE = "integration_temporal_e2e"
 PG_APP_E2E_PACKAGE = "integration_pg_app_e2e"
 NEW_E2E_PACKAGE_PREFIXES = tuple(
     ("cargo", "test", "-p", package, "--features", "e2e", "--lib")
-    for package in (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE)
+    for package in (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, QDRANT_TEMPORAL_E2E_PACKAGE,
+                    TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE)
 )
 E2E_COMMAND_PREFIXES = (
     VERIFY_E2E_COMMAND_PREFIX, PG_E2E_COMMAND_PREFIX, OUTBOX_E2E_COMMAND_PREFIX,
@@ -60,13 +62,15 @@ OUTBOX_E2E_COMPILE = [*OUTBOX_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
 NEW_E2E_COMPILES = {
     package: [*prefix, "--locked", "--no-run"]
     for package, prefix in zip(
-        (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE),
+        (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, QDRANT_TEMPORAL_E2E_PACKAGE,
+         TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE),
         NEW_E2E_PACKAGE_PREFIXES,
     )
 }
 NEW_E2E_ARTIFACT_OWNERS = {
     "graph_harness": GRAPH_E2E_PACKAGE,
     "qdrant_harness": QDRANT_E2E_PACKAGE,
+    "qdrant_temporal_harness": QDRANT_TEMPORAL_E2E_PACKAGE,
     "temporal_harness": TEMPORAL_E2E_PACKAGE,
     "pg_app_harness": PG_APP_E2E_PACKAGE,
 }
@@ -76,6 +80,7 @@ EXACT_EXECUTABLE_NAMES = {
     OUTBOX_E2E_PACKAGE: "integration_outbox_e2e-ci-exact",
     GRAPH_E2E_PACKAGE: "integration_graph_e2e-ci-exact",
     QDRANT_E2E_PACKAGE: "integration_qdrant_e2e-ci-exact",
+    QDRANT_TEMPORAL_E2E_PACKAGE: "integration_qdrant_temporal_e2e-ci-exact",
     TEMPORAL_E2E_PACKAGE: "integration_temporal_e2e-ci-exact",
     PG_APP_E2E_PACKAGE: "integration_pg_app_e2e-ci-exact",
 }

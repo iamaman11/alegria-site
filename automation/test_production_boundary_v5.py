@@ -2,8 +2,14 @@
 """No-network regression tests for honest production topology acceptance."""
 
 import unittest
+from pathlib import Path
 
-from check_production_boundary_v5 import check, service_sections
+from check_production_boundary_v5 import check, check_v7_pure_candidate, service_sections
+
+
+ROOT = Path(__file__).resolve().parents[1]
+V7_OVERLAY = (ROOT / "infra/temporal/compose.v7-isolated.yml").read_text(encoding="utf-8")
+V7_DOCKERFILE = (ROOT / "infra/temporal/Dockerfile.v7-pure").read_text(encoding="utf-8")
 
 
 EXPERIMENTS = """services:
@@ -59,6 +65,56 @@ def fixture(extra: str = "") -> str:
 
 
 class ProductionBoundaryTests(unittest.TestCase):
+    def test_v7_pure_overlay_is_separate_source_scoped_and_deploy_only(self) -> None:
+        result = check_v7_pure_candidate(V7_OVERLAY, V7_DOCKERFILE)
+        self.assertEqual(result["boundary"], "PASS")
+        self.assertFalse(result["production_release_authorized"])
+        self.assertEqual(check(fixture())["production_static_boundary"], "NO_GO")
+
+    def test_v7_candidate_requires_explicit_profile_exact_sha_and_build_context(self) -> None:
+        for unsafe in (
+            V7_OVERLAY.replace('    profiles: ["v7-production-isolation-evaluation"]\n', ""),
+            V7_OVERLAY.replace(
+                "${V7_SOURCE_SHA:?exact committed 40-hex Git SHA required}",
+                "${WORKER_BUILD_ID:-docker-dev}",
+            ),
+            V7_OVERLAY.replace(
+                "${V7_PURE_BUILD_CONTEXT:?exact-SHA pure build context required}",
+                ".",
+            ),
+            V7_OVERLAY.replace("${V7_ENABLE_PURE_CANDIDATE:-false}", "true"),
+        ):
+            with self.subTest(variant=unsafe[:110]):
+                self.assertEqual(check_v7_pure_candidate(unsafe, V7_DOCKERFILE)["boundary"], "FAIL")
+
+    def test_v7_candidate_rejects_provider_secret_and_lateral_network(self) -> None:
+        for unsafe in (
+            V7_OVERLAY.replace("      RUST_LOG: info", "      DATABASE_URL: admin:password\n      RUST_LOG: info"),
+            V7_OVERLAY.replace("      - temporal_pure_control", "      - default"),
+            V7_OVERLAY.replace("      - temporal_pure_control", "      - temporal_pg_effect_data"),
+            V7_OVERLAY.replace("    networks:\n", "    secrets:\n      - source: pg_effect_worker_dsn\n    networks:\n"),
+            V7_OVERLAY.replace("    networks:\n", "    env_file: provider.env\n    networks:\n"),
+            V7_OVERLAY.replace("    networks:\n", "    volumes:\n      - /:/host\n    networks:\n"),
+        ):
+            with self.subTest(variant=unsafe[-110:]):
+                self.assertEqual(check_v7_pure_candidate(unsafe, V7_DOCKERFILE)["boundary"], "FAIL")
+
+    def test_v7_native_image_must_only_copy_pure_binary(self) -> None:
+        for unsafe in (
+            V7_DOCKERFILE.replace(
+                'ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]',
+                'ENTRYPOINT ["/usr/local/bin/temporal_worker"]',
+            ),
+            V7_DOCKERFILE.replace(
+                "    -p temporal_orchestrator --bin temporal_orchestrator",
+                "    -p temporal_pg_effects --bin temporal_pg_effects",
+            ),
+            V7_DOCKERFILE.replace("COPY dependency-skeleton/app ./app", "COPY . ./app"),
+            V7_DOCKERFILE.replace("USER 65532:65532", "USER root"),
+        ):
+            with self.subTest(variant=unsafe[-125:]):
+                self.assertEqual(check_v7_pure_candidate(V7_OVERLAY, unsafe)["boundary"], "FAIL")
+
     def test_experimental_profile_does_not_count_as_production_owner(self) -> None:
         report = check(fixture())
         self.assertEqual(report["experimental_boundary"], "PASS")

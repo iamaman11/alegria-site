@@ -5,7 +5,11 @@
 //! artifact contracts are reused from `seo_application`, not reimplemented.
 //! This process cannot execute Activities, access provider SDKs or publish.
 
-use operation_protocol::{EffectChildInvocationV4, TemporalExecutionIdentityV4};
+use operation_protocol::{
+    EffectChildInvocationV4, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
+    QdrantProjectionRunV1, TemporalExecutionIdentityV4,
+    QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
+};
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
     MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1, PureDagRun,
@@ -33,6 +37,21 @@ impl WorkflowDefinition for PgTruthReviewReconcileV4Definition {
 
     fn name(&self) -> &str {
         PG_V4_CHILD_WORKFLOW_TYPE
+    }
+}
+
+/// No Qdrant SDK, DB connection or Activity handler can enter this pure
+/// process. The separately registered child on a dedicated Task Queue owns
+/// the provider RPC and cannot execute before operator admission.
+#[derive(Clone, Copy)]
+struct QdrantKeywordProjectionV1Definition;
+
+impl WorkflowDefinition for QdrantKeywordProjectionV1Definition {
+    type Input = QdrantKeywordChildInvocationV1;
+    type Output = String;
+
+    fn name(&self) -> &str {
+        QDRANT_OWNER_CHILD_TYPE_V1
     }
 }
 
@@ -76,6 +95,14 @@ struct AlegriaAdmittedEffectDagV3Workflow {
     immutable_input: EffectDagRunV1,
 }
 
+/// V7 new History-visible typed serial owner route. Deliberately not a
+/// reinterpretation of prior V5 DAG Histories or arbitrary PG/Qdrant fanout.
+/// All Qdrant effects must have independent Temporal parent/child proof.
+#[workflow]
+struct AlegriaQdrantProjectionDagV1Workflow {
+    immutable_input: QdrantProjectionRunV1,
+}
+
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
@@ -106,6 +133,68 @@ pub(crate) fn register_v5(opts: &mut WorkerOptions) -> anyhow::Result<()> {
 pub(crate) fn register_for_replay_v5(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaAdmittedEffectDagV3Workflow>()?;
     Ok(())
+}
+
+pub(crate) fn register_qdrant_v1(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaQdrantProjectionDagV1Workflow>()?;
+    Ok(())
+}
+
+pub(crate) fn register_for_replay_qdrant_v1(
+    opts: &mut WorkflowReplayerOptions,
+) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaQdrantProjectionDagV1Workflow>()?;
+    Ok(())
+}
+
+#[workflow_methods]
+impl AlegriaQdrantProjectionDagV1Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, immutable_input: QdrantProjectionRunV1) -> Self {
+        Self { immutable_input }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
+        let run = ctx.state(|state| state.immutable_input.clone());
+        // This is a complete preflight of every future irreversible child.
+        // An invalid later node cannot follow an earlier external mutation.
+        run.preflight().map_err(workflow_failure)?;
+        let parent = TemporalExecutionIdentityV4 {
+            workflow_id: ctx.info().workflow_id().to_string(),
+            run_id: ctx.run_id().to_string(),
+        };
+        let mut results = Vec::<QdrantKeywordChildResultV1>::new();
+        for command in run.commands {
+            let options = ChildWorkflowOptions::builder()
+                .workflow_id(format!("alegria-qdrant-effect-v1-{}", command.admission_id))
+                .task_queue(QDRANT_OWNER_COMMAND_QUEUE_V1.to_string())
+                .build();
+            let child = ctx
+                .start_child_workflow(
+                    QdrantKeywordProjectionV1Definition,
+                    QdrantKeywordChildInvocationV1 {
+                        schema_revision: 1,
+                        parent: parent.clone(),
+                        canonical_run_id: run.canonical_run_id,
+                        command: command.clone(),
+                    },
+                    options,
+                )
+                .await
+                .map_err(workflow_failure)?;
+            // Strictly sequential: cannot start a second remote write until
+            // the first independently admitted child has a durable receipt.
+            let result: String = child.result().await.map_err(workflow_failure)?;
+            let parsed = super::qdrant_child_wire_json::decode_result(&result)
+                .map_err(workflow_failure)?;
+            if parsed.schema_revision != 1 || parsed.admission_id != command.admission_id {
+                return Err(workflow_failure("Qdrant child returned mismatched durable receipt"));
+            }
+            results.push(parsed);
+        }
+        serde_json::to_string(&results).map_err(workflow_failure)
+    }
 }
 
 #[workflow_methods]

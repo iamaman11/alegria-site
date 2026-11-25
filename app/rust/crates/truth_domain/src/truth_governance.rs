@@ -162,7 +162,7 @@ pub fn adjudicate_truth_candidates_with_governance(
     let has_authoritative_support = structured.iter().any(|candidate| {
         source_registry
             .get(&candidate.source_key)
-            .map(|record| is_corroboration_authority(&record.authority_class))
+            .map(is_trusted_authority)
             .unwrap_or(false)
     });
 
@@ -229,7 +229,7 @@ pub fn adjudicate_truth_candidates_with_governance(
             .get(&candidate.source_key)
             .cloned()
             .unwrap_or_default();
-        if governance.override_eligible && is_override_authority(&governance.authority_class) {
+        if governance.override_eligible && is_trusted_authority(&governance) {
             return TruthAdjudicationResult {
                 overall_status: "verified".to_string(),
                 verified_count: 1,
@@ -249,7 +249,22 @@ pub fn adjudicate_truth_candidates_with_governance(
                 }],
             };
         }
-        if governance.override_eligible && !is_override_authority(&governance.authority_class) {
+        if governance.override_eligible && !is_trusted_authority(&governance) {
+            let reason = if matches!(
+                governance.authority_class.as_str(),
+                "primary_authority" | "delegated_authority" | "official_publisher"
+            ) {
+                format!(
+                    "override_not_allowed_for_authority_tier; authority_class={}; trust_level={}",
+                    governance.authority_class, governance.trust_level
+                )
+            } else {
+                // Preserve the existing rejected-agency contract reason.
+                format!(
+                    "override_not_allowed_for_authority_class; authority_class={}",
+                    governance.authority_class
+                )
+            };
             return TruthAdjudicationResult {
                 overall_status: "needs_hitl".to_string(),
                 verified_count: 0,
@@ -261,10 +276,7 @@ pub fn adjudicate_truth_candidates_with_governance(
                     decision: "needs_hitl".to_string(),
                     publish_admissibility: "needs_hitl".to_string(),
                     verification_method: "truth_governance@1".to_string(),
-                    adjudication_reason: format!(
-                        "override_not_allowed_for_authority_class; authority_class={}",
-                        governance.authority_class,
-                    ),
+                    adjudication_reason: reason,
                 }],
             };
         }
@@ -329,18 +341,16 @@ fn independence_group(
         })
 }
 
-fn is_override_authority(authority_class: &str) -> bool {
-    matches!(
-        authority_class,
-        "primary_authority" | "delegated_authority" | "official_publisher"
-    )
-}
-
-fn is_corroboration_authority(authority_class: &str) -> bool {
-    matches!(
-        authority_class,
-        "primary_authority" | "delegated_authority" | "official_publisher"
-    )
+fn is_trusted_authority(source: &SourceGovernanceRecord) -> bool {
+    // Tier 5 is the original government/primary registry classification;
+    // delegated VFS/official publishers are registered at tier 4. A curator
+    // may lower that numeric tier without rewriting the source_type/class.
+    // A class label by itself never grants authoritative verification.
+    match source.authority_class.as_str() {
+        "primary_authority" => source.trust_level >= 5,
+        "delegated_authority" | "official_publisher" => source.trust_level >= 4,
+        _ => false,
+    }
 }
 
 fn freshness_or_completeness_block_reason(
@@ -444,6 +454,7 @@ mod tests {
                 "a".to_string(),
                 SourceGovernanceRecord {
                     authority_class: "primary_authority".to_string(),
+                    trust_level: 5,
                     independence_group_key: "gov-a".to_string(),
                     ..SourceGovernanceRecord::default()
                 },
@@ -452,6 +463,7 @@ mod tests {
                 "b".to_string(),
                 SourceGovernanceRecord {
                     authority_class: "delegated_authority".to_string(),
+                    trust_level: 4,
                     independence_group_key: "gov-b".to_string(),
                     ..SourceGovernanceRecord::default()
                 },
@@ -462,6 +474,60 @@ mod tests {
             &registry,
         );
         assert_eq!(result.overall_status, "verified");
+    }
+
+    #[test]
+    fn curator_downgrade_removes_authoritative_corroboration_even_with_primary_class() {
+        let registry = BTreeMap::from([
+            (
+                "a".to_string(),
+                SourceGovernanceRecord {
+                    source_type: "government".to_string(),
+                    authority_class: "primary_authority".to_string(),
+                    trust_level: 1, // explicit curator downgrade from 5
+                    independence_group_key: "gov-a".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                SourceGovernanceRecord {
+                    source_type: "editorial".to_string(),
+                    authority_class: "editorial".to_string(),
+                    trust_level: 3,
+                    independence_group_key: "media-b".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+        ]);
+        let result = adjudicate_truth_candidates_with_governance(
+            &[candidate("1", "a", 80), candidate("2", "b", 80)],
+            &registry,
+        );
+        assert_eq!(result.overall_status, "needs_hitl");
+        assert!(result.decisions.iter().all(|decision| decision
+            .adjudication_reason
+            .contains("weak_source_corroboration")));
+    }
+
+    #[test]
+    fn curator_downgrade_removes_single_primary_override() {
+        let registry = BTreeMap::from([(
+            "a".to_string(),
+            SourceGovernanceRecord {
+                source_type: "government".to_string(),
+                authority_class: "primary_authority".to_string(),
+                trust_level: 1,
+                override_eligible: true,
+                ..SourceGovernanceRecord::default()
+            },
+        )]);
+        let result =
+            adjudicate_truth_candidates_with_governance(&[candidate("1", "a", 80)], &registry);
+        assert_eq!(result.overall_status, "needs_hitl");
+        assert!(result.decisions[0]
+            .adjudication_reason
+            .contains("override_not_allowed_for_authority_tier"));
     }
 
     #[test]
@@ -598,6 +664,7 @@ mod tests {
             "a".to_string(),
             SourceGovernanceRecord {
                 authority_class: "primary_authority".to_string(),
+                trust_level: 5,
                 override_eligible: true,
                 freshness_ttl_days: 14,
                 ..SourceGovernanceRecord::default()

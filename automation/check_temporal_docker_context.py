@@ -14,7 +14,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from prepare_worker_build_context import (
-    IMAGE_CONTEXT_ROOTS, V3_DOCKERFILE, context_files,
+    IMAGE_CONTEXT_ROOTS, V3_DOCKERFILE, V7_PURE_DOCKERFILE, context_files,
     dependency_skeleton_targets, release_closure, write_dependency_skeleton,
 )
 from check_worker_dependency_skeleton import graph_signature
@@ -402,6 +402,14 @@ class TemporalDockerContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing tracked V3 Dockerfile"):
             context_files(tracked - {V3_DOCKERFILE}, owners, expected["temporal-orchestrator-v3"],
                           image_owner="temporal-orchestrator-v3")
+        v7_context = context_files(
+            tracked | {V7_PURE_DOCKERFILE}, owners, expected["temporal-orchestrator-v3"],
+            image_owner="temporal-orchestrator-v3",
+        )
+        self.assertIn(V7_PURE_DOCKERFILE, v7_context)
+        self.assertNotIn("app/rust/crates/graph_neo4j/src/lib.rs", v7_context)
+        self.assertNotIn("app/rust/crates/vector_qdrant/src/lib.rs", v7_context)
+        self.assertNotIn("app/rust/crates/postgres_store/src/lib.rs", v7_context)
 
     def test_checked_in_v3_owner_closures_use_real_manifest_graph_without_legacy_providers(self) -> None:
         # Actual local Cargo manifests are enough to prove source exclusion;

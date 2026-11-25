@@ -1,0 +1,32 @@
+[package]
+name = "integration_qdrant_temporal_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# Isolated V7 real Temporal + PostgreSQL + Qdrant proof binary. Does not add
+# Temporal SDK compilation to the existing qdrant-only real-vector E2E shard.
+[features]
+default = []
+e2e = [
+  "dep:anyhow", "dep:integration_data_fixtures", "integration_data_fixtures/e2e",
+  "dep:operation_protocol", "dep:serial_test", "dep:sqlx",
+  "dep:temporal_gateway", "dep:temporalio-client", "dep:temporalio-common",
+  "dep:temporalio-sdk-core", "dep:testcontainers", "dep:tokio",
+  "dep:uuid", "dep:vector_qdrant",
+]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+operation_protocol = { path = "../operation_protocol", optional = true }
+serial_test = { version = "3.2.0", optional = true }
+sqlx = { workspace = true, optional = true }
+temporal_gateway = { path = "../temporal_gateway", optional = true }
+temporalio-client = { workspace = true, optional = true }
+temporalio-common = { workspace = true, optional = true }
+temporalio-sdk-core = { workspace = true, optional = true }
+testcontainers = { version = "0.28.0", optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }
+serde_json = { workspace = true }

@@ -1,8 +1,9 @@
 # Experimental admitted Qdrant keyword projection V1 — NO-GO
 
-This is a **second real provider-mutation pilot**, not an accepted Temporal
-business-operation owner and **not a production cutover**. The legacy V3/V4/V5
-Workflow Histories and the canonical Outbox dispatcher remain unchanged.
+This is a **second real provider-mutation pilot with a new V7 native Temporal
+child route**, not an accepted generalized business-operation executor and
+**not a production cutover**. Legacy V3/V4/V5 Workflow Histories and the
+canonical Outbox dispatcher remain unchanged.
 
 ## Precisely what is implemented
 
@@ -12,9 +13,12 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
   relations: immutable operator command authority, durable RPC-attempt
   uncertainty barriers, and append-only receipts.
 - Each admission binds exact serialized command bytes (SHA-256), a real run,
-  immutable tenant/context ownership, keyword, parent/child *expected* Temporal
-  identities and operation instance. It can only be inserted by a PostgreSQL
-  LOGIN provisioned for that tenant; no untrusted tenant GUC is accepted.
+  immutable tenant/context ownership, keyword and parent/child Temporal
+  identities. The opt-in V7 operator now independently retrieves **both exact
+  server Histories** and proves the reciprocal parent initiation/start pair,
+  child server-origin parent identity, task queues and typed commands before
+  inserting this immutable row. The PostgreSQL LOGIN must be provisioned for
+  that tenant; no untrusted tenant GUC is accepted.
 - The typed Rust boundary admits only a single operation:
   `seo_keyword_clusters_4`/`keyword_cluster` with a 1024-dimensional finite,
   nonzero cosine vector and fixed tenant provenance fields. Neither endpoint,
@@ -55,15 +59,29 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
   tests revoke-before-begin, and checks an intentionally overgranted worker
   cannot erase or rewrite the receipt/attempt ledger. An `uncertain` write
   with a missing remote point is never retried automatically.
+- V7 adds `AlegriaQdrantProjectionDagV1Workflow` on the provider-free parent
+  queue `alegria-qdrant-dag-v1`, and a separate
+  `temporal_qdrant_effects` executable registering
+  `QdrantKeywordProjectionV1Workflow` on `alegria-qdrant-command-v1`
+  plus the actual Qdrant Activity on `alegria-qdrant-effects-v1`. A dedicated
+  operator CLI performs the two-History proof and signals the child only
+  after committing admission. A new isolated four-container E2E covers
+  Temporal + PostgreSQL + Qdrant source, provider readback, status-race
+  denial and an independently authenticated operator. The E2E is **authored
+  but must pass authoritative Rust CI** before this route counts as proven.
+- The native Qdrant process now links the narrow `qdrant_effects_core` crate,
+  not graph/Voyage-linked legacy `projection_delivery`. The latter reexports
+  the old public path for compatibility.
 
 ## Explicit production blockers
 
-1. **Temporal History attestation is not implemented for this owner.** The
-   parent/child Workflow IDs in an admission are expected strings supplied by
-   the operator; they are **not** verified against Temporal server History.
-   No new Workflow Type, task queue, Activity, operator CLI, replay route, or
-   native DAG route has been registered. The pilot cannot satisfy #94's P0
-   arbitrary business-operation chains.
+1. **Native V7 Temporal code is not yet independently accepted.** The new
+   parent/child server-History operator, replay routes and full-stack E2E
+   require clean locked Cargo builds, genuine live integration and offline
+   History replay. The V7 typed parent sequences **Qdrant commands only**;
+   it does not yet compose arbitrary PG V5 and Qdrant owners in the same DAG.
+   The earlier V6 direct-SQL pilot remains test-only and makes no independent
+   claim of Temporal provenance.
 2. **Trust boundary of `confirm_qdrant_projection_v1`:** PostgreSQL cannot
    independently query Qdrant. A trusted dedicated worker must perform exact
    provider readback and only then invoke `confirm`. The `TRUE` SQL value is
@@ -85,20 +103,24 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
 
 - The executor refuses operation unless
   `ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1=1`.
+- The native Worker additionally requires
+  `ALEGRIA_ENABLE_QDRANT_EFFECT_V1=true`, a dedicated tenant-bound PostgreSQL
+  secret, and two distinct pinned Temporal Task Queues. Independent operator
+  issuance additionally requires `ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1=true`
+  and a **separate** tenant-bound operator PostgreSQL secret.
 - Newly created admission tables and both SQL functions revoke PUBLIC access.
-  There is **no** production worker grant, Compose service, Temporal Workflow
-  registration or ingress route. A DBA can provision **separate** tenant-bound
-  operator and executor LOGINs in a disposable environment for the pilot.
+  There is **no** production worker grant, production cutover or ingress route.
+  The new Workflow registrations exist only on explicitly opt-in separate
+  queues. A DBA can provision **separate** tenant-bound operator and executor
+  LOGINs in a disposable environment for the pilot.
 - Never infer that a `confirmed` SQL row alone proves live Qdrant state. The
   Rust executor rechecks the provider's exact current bytes on every return,
   including repeated completed calls.
 
 ## Next required P0 step
 
-Introduce a versioned native Qdrant Temporal child with independent
-parent/child server-History attestation by the operator, a dedicated task queue
-and least-privilege worker role, preserve prior History replay, then route a
-new typed DAG command through that child and run complete
-Temporal + PostgreSQL + Qdrant E2E (including concurrent source mutation,
-unknown outcome, replay and tenant-denied branches). Until then #94 remains
-**NO-GO** and PR #95 remains **Draft**.
+Pass the new real Temporal + PostgreSQL + Qdrant E2E and SDK History replay in
+CI, independently verify the operator's History proof, then introduce a
+new versioned **mixed PG/Qdrant operation DAG** with proven ordered and
+concurrent branches, Truth revision fencing, and tenant-denied cases. Until
+those checks pass #94 remains **NO-GO** and PR #95 remains **Draft**.

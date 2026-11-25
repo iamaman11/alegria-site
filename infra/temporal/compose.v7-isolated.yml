@@ -1,0 +1,34 @@
+# Explicit second-file, second-profile opt-in only. The ordinary
+# docker-compose.yml default production deployment remains byte-for-byte
+# unchanged. This candidate uses the existing V5 queue until a *separately*
+# attested native V7 Workflow/Task Queue is ready; never run both profiles.
+# V7_PURE_BUILD_CONTEXT is the exact-SHA source-scoped context produced by
+# automation/prepare_worker_build_context.py, not the repository checkout.
+services:
+  temporal-pure-release-candidate:
+    profiles: ["v7-production-isolation-evaluation"]
+    build:
+      context: ${V7_PURE_BUILD_CONTEXT:?exact-SHA pure build context required}
+      dockerfile: ./infra/temporal/Dockerfile.v7-pure
+    restart: "no"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=16m
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v5
+      WORKER_BUILD_ID: ${V7_SOURCE_SHA:?exact committed 40-hex Git SHA required}
+      TEMPORAL_WORKER_VERSIONING: "false"
+      ALLOW_PURE_DAG_ORCHESTRATOR: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V5: ${V7_ENABLE_PURE_CANDIDATE:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    networks:
+      - temporal_pure_control

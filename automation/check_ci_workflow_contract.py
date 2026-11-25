@@ -18,9 +18,11 @@ from report_sccache_failures import summarize
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
     "architecture-and-rust", "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-qdrant-temporal-harness",
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness", "rust-e2e-truth-harness",
     "rust-e2e-pg-harness", "rust-e2e-outbox-harness", "rust-e2e-legacy-binaries",
-    "rust-e2e-v3-binaries", "rust-graph-e2e", "rust-qdrant-e2e", "rust-pg-app-e2e",
+    "rust-e2e-v3-binaries", "rust-e2e-qdrant-effects-binaries",
+    "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e", "rust-pg-app-e2e",
     "rust-temporal-legacy-e2e", "rust-temporal-v3-e2e", "rust-pg-e2e",
     "rust-outbox-e2e", "rust-truth-e2e", "product-truth",
     "rust-security", "cloudflare-static-build",
@@ -197,13 +199,15 @@ def check() -> None:
     compiler_owners = {
         "graph": "graph_harness",
         "qdrant": "qdrant_harness",
+        "qdrant-temporal": "qdrant_temporal_harness",
         "pg-app": "pg_app_harness",
         "temporal": "temporal_harness",
     }
     for name, kind in compiler_owners.items():
         job = job_block(f"rust-e2e-{name}-harness", {
             "graph": "rust-e2e-qdrant-harness",
-            "qdrant": "rust-e2e-pg-app-harness",
+            "qdrant": "rust-e2e-qdrant-temporal-harness",
+            "qdrant-temporal": "rust-e2e-pg-app-harness",
             "pg-app": "rust-e2e-temporal-harness",
             "temporal": "rust-e2e-truth-harness",
         }[name])
@@ -238,7 +242,8 @@ def check() -> None:
 
     optional_pg_ab = job_block("rust-pg-physical-ab", "rust-e2e-legacy-binaries")
     legacy_job = job_block("rust-e2e-legacy-binaries", "rust-e2e-v3-binaries")
-    v3_job = job_block("rust-e2e-v3-binaries", "rust-graph-e2e")
+    v3_job = job_block("rust-e2e-v3-binaries", "rust-e2e-qdrant-effects-binaries")
+    qdrant_effects_job = job_block("rust-e2e-qdrant-effects-binaries", "rust-graph-e2e")
     assert "github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study'" in optional_pg_ab
     assert "continue-on-error: true" not in optional_pg_ab
     assert "CI_SOURCE_SHA: ${{ inputs.expected_source_sha }}" in optional_pg_ab
@@ -258,6 +263,11 @@ def check() -> None:
     assert "inputs.physical_study || 'shared'" in workflow.split("jobs:\n", 1)[0]
     assert "--output automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
     assert "--report automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
+    assert "- legacy-worker-split" in workflow
+    assert "python3 automation/measure_legacy_worker_split.py" in optional_pg_ab
+    assert "--output automation/reports/legacy_worker_split_physical.json" in optional_pg_ab
+    assert "automation/reports/legacy_worker_split_physical.json" in optional_pg_ab
+    assert "expected_source_sha" in optional_pg_ab
     assert "if: always()" in optional_pg_ab
     assert "rust-pg-physical-ab" not in gate and "rust-pg-physical-ab" not in OWNERS
     for opt_in_probe in ("physical-ab-probe", "physical-ab-coldwarm", "owner-build-probe"):
@@ -266,14 +276,16 @@ def check() -> None:
     assert "expected_source_sha:" in workflow and "physical_study:" in workflow
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3_job
-    for block in (truth_compiler, pg_compiler, outbox_compiler, legacy_job, v3_job):
+    assert "cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects" in qdrant_effects_job
+    assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_effects_job
+    for block in (truth_compiler, pg_compiler, outbox_compiler, legacy_job, v3_job, qdrant_effects_job):
         assert "uses: actions/cache/restore@v4" in block
         assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in block
         assert "uses: actions/upload-artifact@v7" in block
         assert "cargo test --workspace --locked" not in block
 
     runner_names = (
-        "rust-graph-e2e", "rust-qdrant-e2e", "rust-pg-app-e2e",
+        "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e", "rust-pg-app-e2e",
         "rust-temporal-legacy-e2e", "rust-temporal-v3-e2e",
         "rust-pg-e2e", "rust-outbox-e2e", "rust-truth-e2e",
     )
@@ -286,6 +298,7 @@ def check() -> None:
     required_bundles = {
         "rust-graph-e2e": ("rust-e2e-graph-harness", "graph_harness"),
         "rust-qdrant-e2e": ("rust-e2e-qdrant-harness", "qdrant_harness"),
+        "rust-qdrant-temporal-e2e": ("rust-e2e-qdrant-temporal-harness", "qdrant_temporal_harness"),
         "rust-pg-app-e2e": ("rust-e2e-pg-app-harness", "pg_app_harness"),
         "rust-temporal-legacy-e2e": ("rust-e2e-temporal-harness", "temporal_harness"),
         "rust-temporal-v3-e2e": ("rust-e2e-temporal-harness", "temporal_harness"),
@@ -319,6 +332,15 @@ def check() -> None:
         assert f'--kind {worker} --source-sha "$GITHUB_SHA"' in runner
         assert f"name: rust-e2e-{worker}-${{{{ github.sha }}}}" in runner
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in runner_blocks["rust-pg-e2e"]
+    qdrant_runner = runner_blocks["rust-qdrant-temporal-e2e"]
+    assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
+    assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
+    assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' in qdrant_runner
+    assert 'name: rust-e2e-v3-${{ github.sha }}' in qdrant_runner
+    assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert '--kind v3 --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 3
+    assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]
     # verify_d now executes a real native operator CLI: both PG shards must
@@ -330,9 +352,9 @@ def check() -> None:
     assert pg_runner.count("python3 automation/rust_ci_artifacts.py install") == 2
     assert "if: matrix.shard == 'pg_temporal'\n        with:\n          name: rust-e2e-v3-" not in pg_runner
     assert "E2E_RUNNER_PARTITIONS" in workflow
-    for name in ("graph", "qdrant", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
+    for name in ("graph", "qdrant", "qdrant_temporal", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
         assert f"{name}_e2e_shards" in workflow
-    assert len(E2E_ARCH_SHARDS) == 6 and len(E2E_VERIFY_SHARDS) == 9
+    assert len(E2E_ARCH_SHARDS) == 7 and len(E2E_VERIFY_SHARDS) == 9
     assert set(E2E_PG_SHARDS) == {"pg_temporal", "verify_d"}
     assert set(E2E_OUTBOX_SHARDS) == {"outbox"}
     assert set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values())) == set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)
@@ -343,6 +365,8 @@ def check() -> None:
     assert 'if "truth_certification" not in suites:' in (ROOT / "automation/ci_impact.py").read_text(encoding="utf-8")
     assert '"rust-e2e-truth-harness"' in gate
     assert '"rust-e2e-qdrant-harness"' in gate
+    assert '"rust-e2e-qdrant-temporal-harness"' in gate
+    assert '"rust-e2e-qdrant-effects-binaries"' in gate
     assert 'matrix_owners = {owner: set(shards) for owner, shards in E2E_RUNNER_PARTITIONS.items()}' in gate
     assert "did not pass all selected E2E shards" in gate
     assert "      - name: Checkout exact CI plan owner registry\n" in gate

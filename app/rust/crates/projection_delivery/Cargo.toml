@@ -8,6 +8,8 @@ edition = "2021"
 [dependencies]
 anyhow = { workspace = true }
 contracts = { path = "../contracts" }
+operation_protocol = { path = "../operation_protocol" }
+qdrant_effects_core = { path = "../qdrant_effects_core" }
 graph_neo4j = { path = "../graph_neo4j" }
 postgres_store = { path = "../postgres_store" }
 primitives = { path = "../primitives" }

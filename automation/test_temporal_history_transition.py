@@ -36,6 +36,10 @@ def postgres(**overrides):
     return {
         "source": "live_postgresql_all_tenant_read_only", "global_visibility": True,
         **{name: overrides.get(name, 0) for name in transition.COUNT_FIELDS},
+        "quarantine_by_relation": {
+            relation: {"unattributed": 0, "inconsistent": 0}
+            for relation in transition.QUARANTINE_RELATIONS
+        },
     }
 
 
@@ -85,6 +89,8 @@ class TemporalHistoryTransitionTests(unittest.TestCase):
             "pipeline.pg_effect_v3_receipts", "pipeline.execution_runs",
             "extracted.rule_candidates", "raw.sections", "raw.pages",
             "site.seo_hitl_tasks", "rolbypassrls", "tenant_id is distinct from",
+            "pipeline.tenant_historical_quarantine_v1()", "quarantine_by_relation",
+            "left join raw.pages", "left join raw.sections",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, sql)
@@ -151,7 +157,7 @@ class TemporalHistoryTransitionTests(unittest.TestCase):
             captured["env"] = kwargs["env"]
             return json.dumps({"global_visibility": True, **{
                 name: 0 for name in transition.COUNT_FIELDS
-            }})
+            }, "quarantine_by_relation": postgres()["quarantine_by_relation"]})
 
         with patch.dict("os.environ", {"ALEGRIA_HISTORY_AUDIT_DSN": "postgres://secret:123@pg/db"}), \
              patch.object(transition, "run_command", side_effect=command):
@@ -177,6 +183,26 @@ class TemporalHistoryTransitionTests(unittest.TestCase):
     def test_unowned_historical_data_blocks_drain(self):
         result = transition.blockers(temporal(), postgres(raw_pages_unowned=2))
         self.assertTrue(any("raw_pages_unowned" in s for s in result))
+
+    def test_ten_relation_quarantine_census_positive_or_incomplete_blocks(self):
+        p = postgres(historical_quarantine_unattributed=1)
+        p["quarantine_by_relation"]["raw.pages"]["unattributed"] = 1
+        reasons = transition.blockers(temporal(), p)
+        self.assertTrue(any("historical_quarantine_unattributed" in reason
+                            for reason in reasons))
+        p["historical_quarantine_unattributed"] = 0
+        with self.assertRaisesRegex(transition.EvidenceError, "sum differs"):
+            transition.blockers(temporal(), p)
+        p = postgres()
+        p["quarantine_by_relation"].pop("pipeline.qdrant_projection_v1_attempts")
+        with self.assertRaisesRegex(transition.EvidenceError, "ten authoritative"):
+            transition.blockers(temporal(), p)
+
+    def test_historical_quarantine_inconsistent_rows_block_drain(self):
+        p = postgres(historical_quarantine_inconsistent=2)
+        p["quarantine_by_relation"]["pipeline.pg_effect_v3_receipts"]["inconsistent"] = 2
+        self.assertTrue(any("historical_quarantine_inconsistent" in reason
+                            for reason in transition.blockers(temporal(), p)))
 
     def test_mismatched_cross_source_tenant_blocks_drain(self):
         result = transition.blockers(temporal(), postgres(candidate_source_mismatches=1))
@@ -214,7 +240,8 @@ class TemporalHistoryTransitionTests(unittest.TestCase):
         import re
         root = Path(__file__).resolve().parents[1] / "app/rust/services"
         registered = set()
-        for service in ("temporal", "temporal_orchestrator", "temporal_pg_effects"):
+        for service in ("temporal", "temporal_orchestrator", "temporal_pg_effects",
+                        "temporal_qdrant_effects"):
             for path in (root / service / "src").rglob("*.rs"):
                 registered.update(re.findall(r"register_workflow::<([A-Za-z0-9_]+)>",
                                              path.read_text(encoding="utf-8")))
@@ -385,6 +412,31 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
         self.assertNotIn("TEMPORAL_API_KEY", command.call_args.kwargs["env"])
         self.assertNotIn("OPENAI_API_KEY", command.call_args.kwargs["env"])
 
+    def test_versioned_qdrant_parent_and_child_use_different_native_replayers(self):
+        for workflow_type, queue, binary_owner, argument, marker in (
+            ("AlegriaQdrantProjectionDagV1Workflow", "alegria-qdrant-dag-v1",
+             "orchestrator", "--replay-qdrant-effect-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+            ("QdrantKeywordProjectionV1Workflow", "alegria-qdrant-command-v1",
+             "qdrant", "--replay-history", "CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS"),
+        ):
+            with self.subTest(workflow_type=workflow_type):
+                self.capture, self.manifest, history = replay_fixture(
+                    workflow_type=workflow_type, task_queue=queue,
+                )
+                (self.root / "history.json").write_bytes(history)
+                self.binaries = {binary_owner: self.binary}
+                with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+                     patch.object(transition, "run_command", return_value=marker) as command:
+                    result = transition.replay_audit(
+                        self.capture, self.manifest,
+                        history_root=self.root, binaries=self.binaries, clock=NOW,
+                    )
+                self.assertEqual(result["replay_count"], 1)
+                self.assertFalse(result["cutover_authorized"])
+                argv = command.call_args.args[0]
+                self.assertEqual(argv[:2], [str(self.binary), argument])
+                self.assertNotEqual(argv[2], str(self.root / "history.json"))
+
     def test_history_type_and_queue_come_from_first_actual_start_event(self):
         self.assertEqual(transition.history_type_and_queue(self.history),
                          ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"))
@@ -392,6 +444,35 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
                         b'{"events": [{"eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED"}]}'):
             with self.subTest(invalid=invalid), self.assertRaises(transition.EvidenceError):
                 transition.history_type_and_queue(invalid)
+
+    def test_sdk_protobuf_nested_oneof_history_start_layout_is_supported(self):
+        # Rust E2E obtains WorkflowHistory::to_json(), which serializes the
+        # HistoryEvent.attributes oneof, unlike flat Temporal CLI JSON.
+        for started_key in (
+            "WorkflowExecutionStartedEventAttributes",
+            "workflowExecutionStartedEventAttributes",
+            "workflow_execution_started_event_attributes",
+        ):
+            payload = {
+                "events": [{
+                    "event_type": 1,
+                    "attributes": {started_key: {
+                        "workflow_type": {"name": "AlegriaAdmittedEffectDagV3Workflow"},
+                        "task_queue": {"name": "alegria-effect-dag-v5"},
+                    }},
+                }],
+            }
+            with self.subTest(started_key=started_key):
+                self.assertEqual(transition.history_type_and_queue(
+                    json.dumps(payload).encode()),
+                    ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"))
+        flat = json.loads(self.history)
+        flat["events"][0]["attributes"] = {
+            "WorkflowExecutionStartedEventAttributes": flat["events"][0][
+                "workflowExecutionStartedEventAttributes"],
+        }
+        with self.assertRaisesRegex(transition.EvidenceError, "ambiguous"):
+            transition.history_type_and_queue(json.dumps(flat).encode())
 
     def test_missing_history_count_blocks_before_any_sdk_invocation(self):
         self.capture["temporal"]["legacy_workflow_types"]["AlegriaAdmittedEffectDagV3Workflow"]["total"] = 2
@@ -500,6 +581,8 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
             ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"),
             ("PgTruthReviewReconcileV3Workflow", "alegria-pg-command-v3"),
             ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"),
+            ("AlegriaQdrantProjectionDagV1Workflow", "alegria-qdrant-dag-v1"),
+            ("QdrantKeywordProjectionV1Workflow", "alegria-qdrant-command-v1"),
         }, set(), "SDK replay queue routes require explicit test coverage")
         self.assertTrue(set(t for t, _ in transition.REPLAY_ROUTES) <= set(transition.WORKFLOW_TYPES))
 
@@ -620,6 +703,109 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
         report = json.loads(compare_report.read_text())
         self.assertEqual(report["status"], "HISTORY_REPLAY_PRECONDITIONS_CAPTURED")
         self.assertFalse(report["cutover_authorized"])
+
+
+class TemporalNonmutatingCutoverRehearsalTests(unittest.TestCase):
+    def snapshots(self):
+        earlier = snap(captured_at=NOW - timedelta(seconds=75))
+        later = snap(captured_at=NOW - timedelta(seconds=10))
+        return earlier, later
+
+    @staticmethod
+    def plan():
+        return {
+            "schema_version": 1, "environment": "staging", "namespace": "staging-site",
+            "source": {"sha": SHA, "tree": TREE},
+            "routes": [{
+                "owner": "orchestrator", "task_queue": "alegria-effect-dag-v5",
+                "from_build_id": "orchestrator-v5", "to_build_id": "orchestrator-v6",
+                "rollback_build_id": "orchestrator-v5",
+            }],
+        }
+
+    def test_rehearsal_validates_versioned_route_but_never_authorizes_cutover(self):
+        earlier, later = self.snapshots()
+        result = transition.rehearse_cutover_plan(earlier, later, self.plan(), clock=NOW)
+        self.assertEqual(result["status"], "ROUTING_REHEARSAL_CANDIDATE_ONLY")
+        self.assertFalse(result["cutover_authorized"])
+        self.assertTrue(result["unverified_external_gates"])
+        self.assertEqual(result["routing_changes_reviewed"][0]["rollback_build_id"],
+                         "orchestrator-v5")
+
+    def test_rehearsal_rejects_retained_history_route_even_if_replay_covered(self):
+        earlier, later = self.snapshots()
+        retained = later["temporal"]["legacy_workflow_types"]
+        retained["AlegriaAdmittedEffectDagV3Workflow"]["total"] = 1
+        later["temporal"]["total_all_before"] = later["temporal"]["total_all_after"] = 1
+        earlier = snap(captured_at=NOW - timedelta(seconds=75),
+                       temporal_data=later["temporal"])
+        later = snap(captured_at=NOW - timedelta(seconds=10),
+                     temporal_data=later["temporal"])
+        replay = {
+            "schema_version": 1, "status": "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY",
+            "cutover_authorized": False, "source": later["source"],
+            "environment": "staging", "temporal_namespace": "staging-site",
+            "replayed_by_type": {name: c["total"] for name, c in retained.items()},
+            "replayed_sha256": ["a" * 64], "replay_count": 1,
+            "replayed_runs": [{
+                "workflow_type": "AlegriaAdmittedEffectDagV3Workflow",
+                "task_queue": "alegria-effect-dag-v5", "workflow_id": "id-1",
+                "run_id": "run-1", "sha256": "a" * 64,
+            }],
+        }
+        result = transition.rehearse_cutover_plan(
+            earlier, later, self.plan(), replay_evidence=replay, clock=NOW,
+        )
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertTrue(any("retained histories" in message for message in result["errors"]))
+
+    def test_rehearsal_rejects_duplicate_queue_wrong_owner_and_missing_rollback(self):
+        earlier, later = self.snapshots()
+        for broken in ("duplicate", "owner", "rollback", "same-build"):
+            with self.subTest(broken=broken):
+                plan = self.plan()
+                if broken == "duplicate":
+                    plan["routes"].append(dict(plan["routes"][0]))
+                elif broken == "owner":
+                    plan["routes"][0]["owner"] = "pg"
+                elif broken == "rollback":
+                    plan["routes"][0]["rollback_build_id"] = "unrelated"
+                else:
+                    plan["routes"][0]["to_build_id"] = "orchestrator-v5"
+                result = transition.rehearse_cutover_plan(earlier, later, plan, clock=NOW)
+                self.assertEqual(result["status"], "BLOCKED")
+                self.assertFalse(result["cutover_authorized"])
+
+    def test_rehearsal_is_blocked_on_unready_pg_ownership_or_stale_snapshots(self):
+        earlier, later = self.snapshots()
+        later["postgres"]["raw_pages_unowned"] = 1
+        result = transition.rehearse_cutover_plan(earlier, later, self.plan(), clock=NOW)
+        self.assertEqual(result["status"], "BLOCKED")
+        later["postgres"]["raw_pages_unowned"] = 0
+        later["captured_at"] = (NOW - timedelta(minutes=14)).isoformat()
+        self.assertEqual(transition.rehearse_cutover_plan(
+            earlier, later, self.plan(), clock=NOW,
+        )["status"], "BLOCKED")
+
+    def test_rehearsal_cli_only_writes_local_diagnostic_report(self):
+        earlier, later = self.snapshots()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name, value in (("earlier", earlier), ("later", later), ("plan", self.plan())):
+                (root / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+            output = root / "rehearsal.json"
+            with patch.object(transition, "now_utc", return_value=NOW), \
+                 patch.object(transition, "run_command") as command:
+                result = transition.main([
+                    "rehearse", "--earlier", str(root / "earlier.json"),
+                    "--later", str(root / "later.json"),
+                    "--routing-plan", str(root / "plan.json"), "--output", str(output),
+                ])
+            self.assertEqual(result, 0)
+            command.assert_not_called()
+            report = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "ROUTING_REHEARSAL_CANDIDATE_ONLY")
+            self.assertFalse(report["cutover_authorized"])
 
 
 if __name__ == "__main__":

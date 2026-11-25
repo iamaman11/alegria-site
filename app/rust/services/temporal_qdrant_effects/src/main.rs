@@ -1,0 +1,253 @@
+//! V7 experimental real Temporal -> PostgreSQL-admitted Qdrant owner.
+//! Native Workflow and Activity have separate pinned Task Queues; neither
+//! a forged Workflow start nor an arbitrary Signal can authorize Qdrant I/O.
+
+use std::{sync::Arc, time::Duration};
+
+use anyhow::{Context, Result};
+use operation_protocol::{
+    QdrantChildOutcomeV1, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
+    QDRANT_OWNER_ACTIVITY_QUEUE_V1, QDRANT_OWNER_CHILD_TYPE_V1,
+    QDRANT_OWNER_COMMAND_QUEUE_V1,
+};
+use qdrant_effects_core::{
+    execute_admitted_qdrant_projection_v1, QdrantProjectionOutcomeV1,
+};
+use sqlx::{PgPool, Row};
+use temporalio_client::WorkflowHistory;
+use temporalio_macros::{activities, workflow, workflow_methods};
+use temporalio_sdk::activities::{ActivityContext, ActivityError};
+use temporalio_sdk::runtime::RuntimeOptions;
+use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
+use temporalio_sdk::{
+    ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext, Worker, WorkerOptions,
+    WorkflowContext, WorkflowContextView, WorkflowResult,
+};
+
+use futures_util as _;
+use temporalio_common as _;
+
+mod operator;
+
+#[workflow]
+struct QdrantKeywordProjectionV1Workflow {
+    immutable_invocation: QdrantKeywordChildInvocationV1,
+    admission_signal_received: bool,
+}
+
+#[workflow_methods]
+impl QdrantKeywordProjectionV1Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, invocation: QdrantKeywordChildInvocationV1) -> Self {
+        Self { immutable_invocation: invocation, admission_signal_received: false }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
+        let invocation = ctx.state(|state| state.immutable_invocation.clone());
+        if invocation.schema_revision != 1 || invocation.command.validate().is_err()
+            || invocation.canonical_run_id.is_nil()
+            || invocation.parent.workflow_id.is_empty()
+            || invocation.parent.run_id.is_empty()
+        {
+            return Err(temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(
+                    "invalid typed Qdrant child invocation",
+                )),
+            ));
+        }
+        // This Signal is an untrusted wake-up only. The Activity rechecks the
+        // exact server-issued child identity and independently issued SQL row.
+        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+        options.task_queue = Some(QDRANT_OWNER_ACTIVITY_QUEUE_V1.to_string());
+        let result: QdrantKeywordChildResultV1 = ctx
+            .start_activity(QdrantProjectionActivities::materialize_admitted_keyword_v1,
+                invocation, options)
+            .await?;
+        serde_json::to_string(&result).map_err(|err| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(err.to_string())),
+            )
+        })
+    }
+
+    #[signal(name = "operator_admission_ready_qdrant_v1")]
+    fn operator_admission_ready_qdrant_v1(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        self.admission_signal_received = true;
+    }
+}
+
+struct QdrantProjectionActivities { pool: Arc<PgPool> }
+
+#[activities]
+impl QdrantProjectionActivities {
+    #[activity]
+    pub(crate) async fn materialize_admitted_keyword_v1(
+        self: Arc<Self>, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+    ) -> Result<QdrantKeywordChildResultV1, ActivityError> {
+        let result = self.materialize_with_server_info(ctx, invocation).await;
+        result.map_err(|error| {
+            // An ambiguous provider RPC can only reconcile by readback; the
+            // SQL barrier forbids a second call. Activity retries remain safe.
+            ActivityError::application(ApplicationFailure::non_retryable(
+                std::io::Error::other(error.to_string()),
+            ))
+        })
+    }
+}
+
+impl QdrantProjectionActivities {
+    async fn materialize_with_server_info(
+        &self, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+    ) -> Result<QdrantKeywordChildResultV1> {
+        let info = ctx.info();
+        let actual_id = info.workflow_id.as_deref().context("Activity lacks server child Workflow ID")?;
+        let actual_run_id = info.workflow_run_id.as_deref().context("Activity lacks server child Run ID")?;
+        anyhow::ensure!(
+            info.workflow_type.as_deref() == Some(QDRANT_OWNER_CHILD_TYPE_V1)
+                && info.task_queue == QDRANT_OWNER_ACTIVITY_QUEUE_V1
+                && actual_id == format!("alegria-qdrant-effect-v1-{}", invocation.command.admission_id),
+            "Qdrant Activity originated outside registered native child Workflow/Queue"
+        );
+        anyhow::ensure!(invocation.schema_revision == 1, "Qdrant invocation revision mismatch");
+        invocation.command.validate().map_err(anyhow::Error::msg)?;
+        let row = sqlx::query(
+            "SELECT child_workflow_id,child_workflow_run_id,parent_workflow_id,
+                    parent_workflow_run_id,run_id,tenant_id,context_key,keyword_key,
+                    command_bytes FROM pipeline.qdrant_projection_v1_admissions
+             WHERE admission_id=$1",
+        )
+        .bind(invocation.command.admission_id)
+        .fetch_one(&*self.pool)
+        .await.context("native Qdrant child has no readable independently issued admission")?;
+        let actual_command = serde_json::to_vec(&invocation.command)?;
+        anyhow::ensure!(
+            row.try_get::<String, _>("child_workflow_id")? == actual_id
+                && row.try_get::<String, _>("child_workflow_run_id")? == actual_run_id
+                && row.try_get::<String, _>("parent_workflow_id")? == invocation.parent.workflow_id
+                && row.try_get::<String, _>("parent_workflow_run_id")? == invocation.parent.run_id
+                && row.try_get::<uuid::Uuid, _>("run_id")? == invocation.canonical_run_id
+                && row.try_get::<String, _>("tenant_id")? == invocation.command.tenant_id
+                && row.try_get::<String, _>("context_key")? == invocation.command.context_key
+                && row.try_get::<String, _>("keyword_key")? == invocation.command.keyword_key
+                && row.try_get::<Vec<u8>, _>("command_bytes")? == actual_command,
+            "operator admission does not pin exact server child, parent, tenant and command bytes"
+        );
+        let outcome = execute_admitted_qdrant_projection_v1(&self.pool,
+            invocation.command.admission_id).await?;
+        let outcome = match outcome {
+            QdrantProjectionOutcomeV1::Applied => QdrantChildOutcomeV1::Applied,
+            QdrantProjectionOutcomeV1::Reconciled => QdrantChildOutcomeV1::Reconciled,
+            QdrantProjectionOutcomeV1::AlreadyConfirmed => QdrantChildOutcomeV1::AlreadyConfirmed,
+        };
+        Ok(QdrantKeywordChildResultV1 {
+            schema_revision: 1,
+            admission_id: invocation.command.admission_id,
+            outcome,
+        })
+    }
+}
+
+fn worker_database_url() -> Result<String> {
+    let inline = std::env::var("QDRANT_EFFECT_WORKER_DATABASE_URL").ok();
+    let file = std::env::var("QDRANT_EFFECT_WORKER_DATABASE_URL_FILE").ok();
+    let value = match (inline, file) {
+        (Some(_), Some(_)) => anyhow::bail!("choose one Qdrant worker DB credential source"),
+        (Some(url), None) => url,
+        (None, Some(path)) => {
+            let path = std::path::Path::new(&path);
+            anyhow::ensure!(path.is_absolute(), "Qdrant worker DSN path must be absolute");
+            let meta = std::fs::symlink_metadata(path)?;
+            anyhow::ensure!(meta.file_type().is_file(), "Qdrant worker DSN must be a regular non-symlink file");
+            #[cfg(unix)] {
+                use std::os::unix::fs::PermissionsExt;
+                anyhow::ensure!(meta.permissions().mode() & 0o077 == 0,
+                    "Qdrant worker DSN secret requires 0600/0400 permissions");
+            }
+            std::fs::read_to_string(path)?
+                .trim_end_matches(|c| c == '\r' || c == '\n').to_owned()
+        }
+        (None, None) => anyhow::bail!("dedicated Qdrant worker DSN secret required"),
+    };
+    anyhow::ensure!(!value.is_empty() && value.trim() == value,
+        "Qdrant worker DSN has unsafe whitespace");
+    Ok(value)
+}
+
+async fn assert_effect_worker_role(pool: &PgPool) -> Result<()> {
+    let row = sqlx::query(
+        "SELECT r.rolsuper, r.rolbypassrls,
+                has_table_privilege(session_user,
+                  'pipeline.qdrant_projection_v1_admissions','INSERT') AS may_admit,
+                pipeline.current_session_tenant_v1() AS tenant
+         FROM pg_roles r WHERE r.rolname=session_user",
+    ).fetch_one(pool).await?;
+    anyhow::ensure!(!row.try_get::<bool, _>("rolsuper")?
+        && !row.try_get::<bool, _>("rolbypassrls")?
+        && !row.try_get::<bool, _>("may_admit")?
+        && row.try_get::<Option<String>, _>("tenant")?.is_some(),
+        "Qdrant Activity role must be tenant-bound and must not issue admissions/bypass RLS");
+    Ok(())
+}
+
+async fn replay_history(path: &std::path::Path) -> Result<()> {
+    let bytes = std::fs::read(path)?;
+    let history = WorkflowHistory::from_json(&bytes)
+        .map_err(|e| anyhow::anyhow!("decode real Qdrant Temporal History: {e}"))?;
+    let mut options = WorkflowReplayerOptions::new()
+        .namespace("default".to_string())
+        .task_queue(QDRANT_OWNER_COMMAND_QUEUE_V1.to_string()).build();
+    options.register_workflow::<QdrantKeywordProjectionV1Workflow>()?;
+    WorkflowReplayer::new(options)
+        .map_err(|e| anyhow::anyhow!("construct Qdrant replayer: {e}"))?
+        .replay_workflow(history).await
+        .map_err(|e| anyhow::anyhow!("Qdrant History replay failed: {e}"))?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut args = std::env::args_os().skip(1);
+    if let Some(arg) = args.next() {
+        if arg == std::ffi::OsStr::new("--replay-history") {
+            let file = args.next().context("--replay-history requires real History JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
+            replay_history(std::path::Path::new(&file)).await?;
+            println!("CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS");
+            return Ok(());
+        }
+        if arg == std::ffi::OsStr::new("--operator-issue") {
+            let file = args.next().context("--operator-issue requires request JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected operator arguments");
+            return operator::issue_from_file(std::path::Path::new(&file)).await;
+        }
+        anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");
+    }
+    anyhow::ensure!(std::env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_V1").as_deref() == Ok("true"),
+        "experimental native Qdrant owner is disabled");
+    anyhow::ensure!(std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1").as_deref() == Ok("1"),
+        "underlying Qdrant provider pilot is disabled");
+    tracing_subscriber::fmt().with_env_filter(
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
+    ).init();
+    let pool = PgPool::connect(&worker_database_url()?).await
+        .context("connect dedicated Qdrant Activity PostgreSQL LOGIN")?;
+    assert_effect_worker_role(&pool).await?;
+    let runtime = Runtime::from_current_tokio(RuntimeOptions::builder().build()
+        .map_err(|e| anyhow::anyhow!("{e}"))?)?;
+    let url = std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".into());
+    let namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into());
+    let client = temporal_gateway::connect_client(&url,
+        format!("alegria-qdrant-owner-v1:{}",std::process::id()), &namespace).await?;
+    let mut command = WorkerOptions::new(QDRANT_OWNER_COMMAND_QUEUE_V1).build();
+    command.register_workflow::<QdrantKeywordProjectionV1Workflow>()?;
+    let mut command_worker = Worker::new(&runtime,client.clone(),command)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let activities = WorkerOptions::new(QDRANT_OWNER_ACTIVITY_QUEUE_V1)
+        .register_activities(QdrantProjectionActivities { pool: Arc::new(pool) }).build();
+    let mut activity_worker = Worker::new(&runtime,client,activities)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    tokio::try_join!(command_worker.run(), activity_worker.run())?;
+    Ok(())
+}

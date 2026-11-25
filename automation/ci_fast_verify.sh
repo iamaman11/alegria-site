@@ -13,6 +13,7 @@ case "${1:-}" in
     python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
     python3 automation/check_ci_workflow_contract.py
     python3 automation/check_owner_build_evidence_summary.py
+    python3 automation/check_legacy_worker_split.py
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py

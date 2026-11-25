@@ -27,6 +27,7 @@ from ci_impact import (
 
 SKELETON_ROOT = "dependency-skeleton"
 V3_DOCKERFILE = "infra/temporal/Dockerfile.v3"
+V7_PURE_DOCKERFILE = "infra/temporal/Dockerfile.v7-pure"
 IMAGE_CONTEXT_ROOTS = {
     "temporal-worker": frozenset(IMAGE_OWNERS["temporal-worker"]["crates"]),
     "temporal-orchestrator-v3": frozenset({"temporal_orchestrator"}),
@@ -187,6 +188,11 @@ def context_files(
         if V3_DOCKERFILE not in tracked:
             raise ValueError("missing tracked V3 Dockerfile for isolated context")
         paths.add(V3_DOCKERFILE)
+        # The V7 deploy-only pure candidate uses this *same* exact-SHA Cargo
+        # owner closure, but a dedicated Dockerfile that can never choose the
+        # PG or legacy executable. It is absent in older historical checkouts.
+        if image_owner == "temporal-orchestrator-v3" and V7_PURE_DOCKERFILE in tracked:
+            paths.add(V7_PURE_DOCKERFILE)
     return paths
 
 

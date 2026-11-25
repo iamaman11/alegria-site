@@ -47,14 +47,25 @@ WORKFLOW_TYPES = (
     "AlegriaAdmittedEffectDagV3Workflow",
     "PgTruthReviewReconcileV3Workflow",
     "PgTruthReviewReconcileV4Workflow",
+    "AlegriaQdrantProjectionDagV1Workflow",
+    "QdrantKeywordProjectionV1Workflow",
 )
 # Historical name retained for compatibility with the local safety tests.
 LEGACY_TYPES = WORKFLOW_TYPES
 WORKFLOW_QUERY_RUNNING = 'ExecutionStatus = "Running"'
 SHA_RE = re.compile(r"[a-f0-9]{40}\Z")
 ROLE_SQL = """
+WITH quarantine AS MATERIALIZED (
+    SELECT * FROM pipeline.tenant_historical_quarantine_v1()
+)
 SELECT json_build_object(
  'global_visibility', (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user),
+ 'historical_quarantine_unattributed', (SELECT coalesce(sum(unattributed), 0) FROM quarantine),
+ 'historical_quarantine_inconsistent', (SELECT coalesce(sum(inconsistent), 0) FROM quarantine),
+ 'quarantine_by_relation', (
+   SELECT json_object_agg(relation_name, json_build_object(
+       'unattributed', unattributed, 'inconsistent', inconsistent)) FROM quarantine
+ ),
  'execution_runs_unowned', (SELECT count(*) FROM pipeline.execution_runs WHERE tenant_id IS NULL),
  'raw_pages_unowned', (SELECT count(*) FROM raw.pages WHERE tenant_id IS NULL),
  'raw_sections_unowned', (SELECT count(*) FROM raw.sections WHERE tenant_id IS NULL),
@@ -91,19 +102,22 @@ SELECT json_build_object(
       OR receipt.tenant_id IS DISTINCT FROM o.tenant_id
       OR receipt.tenant_id IS DISTINCT FROM a.tenant_id
       OR receipt.tenant_id IS DISTINCT FROM r.tenant_id
+      OR receipt.run_id IS DISTINCT FROM a.run_id
+      OR receipt.context_key IS DISTINCT FROM a.context_key
       OR receipt.context_key IS DISTINCT FROM r.context_key
  ),
  'section_page_mismatches', (
-   SELECT count(*) FROM raw.sections s JOIN raw.pages p ON p.id = s.page_id
-   WHERE s.tenant_id IS DISTINCT FROM p.tenant_id
+   SELECT count(*) FROM raw.sections s LEFT JOIN raw.pages p ON p.id = s.page_id
+   WHERE p.id IS NULL OR s.tenant_id IS DISTINCT FROM p.tenant_id
  ),
  'candidate_source_mismatches', (
    SELECT count(*) FROM extracted.rule_candidates c
-   JOIN raw.sections rs ON rs.id = c.raw_section_id
-   JOIN raw.pages rp ON rp.id = rs.page_id
-   JOIN raw.sections es ON es.id = c.evidence_section_id
-   JOIN raw.pages ep ON ep.id = es.page_id
-   WHERE c.tenant_id IS DISTINCT FROM rs.tenant_id
+   LEFT JOIN raw.sections rs ON rs.id = c.raw_section_id
+   LEFT JOIN raw.pages rp ON rp.id = rs.page_id
+   LEFT JOIN raw.sections es ON es.id = c.evidence_section_id
+   LEFT JOIN raw.pages ep ON ep.id = es.page_id
+   WHERE rs.id IS NULL OR rp.id IS NULL OR es.id IS NULL OR ep.id IS NULL
+      OR c.tenant_id IS DISTINCT FROM rs.tenant_id
       OR c.tenant_id IS DISTINCT FROM rp.tenant_id
       OR c.tenant_id IS DISTINCT FROM es.tenant_id
       OR c.tenant_id IS DISTINCT FROM ep.tenant_id
@@ -117,12 +131,21 @@ SELECT json_build_object(
 )::text;
 """
 COUNT_FIELDS = (
+    "historical_quarantine_unattributed", "historical_quarantine_inconsistent",
     "execution_runs_unowned", "raw_pages_unowned", "raw_sections_unowned",
     "candidates_unowned", "hitl_unowned", "admissions_unowned", "receipts_unowned", "unfinished_runs",
     "unregistered_run_contexts", "unregistered_candidate_contexts",
     "admission_owner_mismatches", "receipt_owner_mismatches",
     "section_page_mismatches", "candidate_source_mismatches",
     "hitl_candidate_mismatches",
+)
+QUARANTINE_RELATIONS = (
+    "raw.pages", "raw.sections", "extracted.rule_candidates",
+    "pipeline.execution_runs", "site.seo_hitl_tasks",
+    "pipeline.pg_effect_v3_admissions", "pipeline.pg_effect_v3_receipts",
+    "pipeline.qdrant_projection_v1_admissions",
+    "pipeline.qdrant_projection_v1_attempts",
+    "pipeline.qdrant_projection_v1_receipts",
 )
 
 # A route exists only if this exact native binary registers the Workflow in
@@ -148,9 +171,14 @@ REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
         ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
     ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"):
         ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
+    ("AlegriaQdrantProjectionDagV1Workflow", "alegria-qdrant-dag-v1"):
+        ("orchestrator", "--replay-qdrant-effect-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("QdrantKeywordProjectionV1Workflow", "alegria-qdrant-command-v1"):
+        ("qdrant", "--replay-history", "CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS"),
 }
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
 HISTORY_SHA_RE = re.compile(r"[a-f0-9]{64}\Z")
+ROUTING_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # Native replay must not inherit live PG, Temporal, provider, signing, or
 # deployment credentials from the operator's census environment.
 REPLAY_ENV_ALLOW = ("PATH", "LD_LIBRARY_PATH", "LANG", "LC_ALL", "TZ", "RUST_BACKTRACE", "TMPDIR")
@@ -286,13 +314,31 @@ def pg_inventory(dsn_env: str) -> dict[str, Any]:
         document = json.loads(raw)
     except json.JSONDecodeError as error:
         raise EvidenceError("PostgreSQL owner inventory returned malformed JSON") from error
-    if not isinstance(document, dict) or set(document) != {*COUNT_FIELDS, "global_visibility"}:
+    if not isinstance(document, dict) or set(document) != {
+        *COUNT_FIELDS, "global_visibility", "quarantine_by_relation",
+    }:
         raise EvidenceError("PostgreSQL inventory has missing or unexpected fields")
     if document["global_visibility"] is not True:
         raise EvidenceError("audit PostgreSQL role cannot prove global visibility under RLS")
-    return {"source": "live_postgresql_all_tenant_read_only", "global_visibility": True, **{
+    evidence = {"source": "live_postgresql_all_tenant_read_only", "global_visibility": True, **{
         key: nonnegative(document[key], key) for key in COUNT_FIELDS
-    }}
+    }, "quarantine_by_relation": document["quarantine_by_relation"]}
+    validate_quarantine(evidence)
+    return evidence
+
+
+def validate_quarantine(postgres: dict[str, Any]) -> None:
+    by_relation = postgres.get("quarantine_by_relation")
+    if not isinstance(by_relation, dict) or set(by_relation) != set(QUARANTINE_RELATIONS):
+        raise EvidenceError("historical tenant quarantine lacks all ten authoritative relations")
+    for label in ("unattributed", "inconsistent"):
+        summed = 0
+        for relation, counts in by_relation.items():
+            if not isinstance(counts, dict) or set(counts) != {"unattributed", "inconsistent"}:
+                raise EvidenceError(f"malformed historical tenant quarantine for {relation}")
+            summed += nonnegative(counts[label], f"{relation}.{label}")
+        if summed != nonnegative(postgres[f"historical_quarantine_{label}"], label):
+            raise EvidenceError("historical quarantine sum differs from per-relation census")
 
 
 def blockers(temporal: dict[str, Any], postgres: dict[str, Any]) -> list[str]:
@@ -322,6 +368,7 @@ def blockers(temporal: dict[str, Any], postgres: dict[str, Any]) -> list[str]:
         raise EvidenceError("unrecognized closed or open Workflow Types remain")
     for name in COUNT_FIELDS:
         nonnegative(postgres[name], name)
+    validate_quarantine(postgres)
     if temporal["open_all_after"]:
         reasons.append("Temporal has open Workflows in selected namespace")
     for name, counts in temporal["legacy_workflow_types"].items():
@@ -359,15 +406,42 @@ def history_type_and_queue(raw: bytes) -> tuple[str, str]:
     if not events:
         raise EvidenceError("Temporal History is empty")
     first = events[0]
-    if not isinstance(first, dict) or first.get("eventType") not in (
+    if not isinstance(first, dict):
+        raise EvidenceError("Temporal History first event is invalid")
+    event_type = first.get("eventType", first.get("event_type"))
+    if type(event_type) is int and event_type == 1:
+        pass  # SDK serde protobuf's EventType::WorkflowExecutionStarted value.
+    elif event_type not in (
         "WorkflowExecutionStarted", "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
     ):
         raise EvidenceError("Temporal History first event is not WorkflowExecutionStarted")
-    attributes = first.get("workflowExecutionStartedEventAttributes")
+    # Native Rust WorkflowHistory::to_json() serializes HistoryEvent.attributes
+    # as a nested protobuf oneof. Temporal CLI/proto JSON can place the typed
+    # attributes on the event. Reject conflicting dual layouts.
+    nested = first.get("attributes")
+    flat = first.get("workflowExecutionStartedEventAttributes")
+    if nested is not None and flat is not None:
+        raise EvidenceError("ambiguous Temporal History started-event attributes")
+    if nested is not None:
+        if not isinstance(nested, dict):
+            raise EvidenceError("Temporal History attributes oneof is invalid")
+        oneof = [key for key in (
+            "WorkflowExecutionStartedEventAttributes",
+            "workflowExecutionStartedEventAttributes",
+            "workflow_execution_started_event_attributes",
+        ) if key in nested]
+        if len(oneof) != 1 or len(nested) != 1:
+            raise EvidenceError("Temporal History started-event oneof is ambiguous")
+        attributes = nested[oneof[0]]
+    else:
+        attributes = flat
     if not isinstance(attributes, dict):
         raise EvidenceError("Temporal History has no started-event attributes")
-    workflow = attributes.get("workflowType")
-    queue = attributes.get("taskQueue")
+    if (("workflowType" in attributes and "workflow_type" in attributes)
+            or ("taskQueue" in attributes and "task_queue" in attributes)):
+        raise EvidenceError("ambiguous Temporal History Type/Queue field aliases")
+    workflow = attributes.get("workflowType", attributes.get("workflow_type"))
+    queue = attributes.get("taskQueue", attributes.get("task_queue"))
     if not isinstance(workflow, dict) or not isinstance(queue, dict):
         raise EvidenceError("Temporal History lacks Workflow Type or Task Queue")
     workflow_type, task_queue = workflow.get("name"), queue.get("name")
@@ -689,6 +763,89 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
     }
 
 
+def rehearse_cutover_plan(earlier: dict[str, Any], later: dict[str, Any],
+                          plan: dict[str, Any], *,
+                          replay_evidence: dict[str, Any] | None = None,
+                          clock: datetime | None = None) -> dict[str, Any]:
+    """Check a versioned routing/rollback plan, without any routing side effect.
+
+    The plan is *operator-proposed*, not operator-authorized or server-attested.
+    Output is diagnostic evidence and can never unlock a production cutover.
+    """
+    comparison = check_pair(earlier, later, replay_evidence=replay_evidence, clock=clock)
+    errors = list(comparison["errors"])
+    if comparison["status"] not in {
+        "DRAIN_PRECONDITIONS_CAPTURED", "HISTORY_REPLAY_PRECONDITIONS_CAPTURED",
+    }:
+        errors.append("read-only two-snapshot/replay prerequisites have not passed")
+        return {"status": "BLOCKED", "errors": errors, "cutover_authorized": False}
+    if (not isinstance(plan, dict) or set(plan) != {
+        "schema_version", "source", "environment", "namespace", "routes",
+    } or type(plan["schema_version"]) is not int
+            or plan["schema_version"] != SCHEMA_VERSION
+            or not isinstance(plan["routes"], list) or not plan["routes"]):
+        errors.append("routing rehearsal plan has an unsupported or empty schema")
+        return {"status": "BLOCKED", "errors": errors, "cutover_authorized": False}
+    if (plan["source"] != later.get("source")
+            or plan["environment"] != later.get("environment")
+            or plan["namespace"] != later.get("temporal", {}).get("namespace")):
+        errors.append("routing rehearsal plan differs from audited namespace/source")
+    # A historical Type can have multiple generations of Task Queue. A plan
+    # must not retire *any* plausible older routing path while retained
+    # histories exist. Server-verified actual build IDs remain an external gate.
+    retained_types = {
+        name for name, counts in later.get("temporal", {}).get(
+            "legacy_workflow_types", {}).items()
+        if isinstance(counts, dict) and counts.get("total", 0) > 0
+    }
+    protected_queues = {
+        queue for workflow_type, queue in REPLAY_ROUTES if workflow_type in retained_types
+    }
+    route_owners: dict[str, str] = {}
+    route_summaries: list[dict[str, str]] = []
+    for route in plan["routes"]:
+        if not isinstance(route, dict) or set(route) != {
+            "task_queue", "owner", "from_build_id", "to_build_id", "rollback_build_id",
+        } or any(not isinstance(value, str) or not ROUTING_IDENTIFIER_RE.fullmatch(value)
+                 for value in route.values()):
+            errors.append("routing rehearsal contains an invalid route/Build ID")
+            continue
+        queue = route["task_queue"]
+        if queue in route_owners:
+            errors.append("routing rehearsal attempts duplicate Task Queue ownership")
+        route_owners[queue] = route["owner"]
+        if route["owner"] not in {"legacy", "orchestrator", "pg", "qdrant"}:
+            errors.append("routing rehearsal proposes an unknown Worker owner")
+        known_owners = {
+            REPLAY_ROUTES[(workflow_type, routed_queue)][0]
+            for workflow_type, routed_queue in REPLAY_ROUTES if routed_queue == queue
+        }
+        if known_owners and route["owner"] not in known_owners:
+            errors.append("routing rehearsal reassigns a registered Queue to the wrong owner")
+        if queue in protected_queues:
+            errors.append("routing rehearsal would change a Queue with retained histories")
+        if (route["from_build_id"] == route["to_build_id"]
+                or route["rollback_build_id"] != route["from_build_id"]):
+            errors.append("routing rehearsal lacks an exact reversible Build ID transition")
+        route_summaries.append(dict(route))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "BLOCKED" if errors else "ROUTING_REHEARSAL_CANDIDATE_ONLY",
+        "errors": errors, "cutover_authorized": False,
+        "environment": plan["environment"], "namespace": plan["namespace"],
+        "source": plan["source"],
+        "routing_changes_reviewed": sorted(route_summaries, key=lambda item: item["task_queue"]),
+        "old_queues_with_retained_history": sorted(protected_queues),
+        "unverified_external_gates": [
+            "server_attested_run_bound_history_and_tenant_backfill",
+            "independently_fenced_legacy_starters_and_task_queue_pollers",
+            "actual_build_id_routing_and_signed_exact_source_binary_provenance",
+            "operator_approved_live_rollback_and_recovery_drill",
+            "production_mTLS_and_change_control_authorization",
+        ],
+    }
+
+
 def atomic_json(path: Path, evidence: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -727,7 +884,15 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--legacy-bin", type=Path, required=True)
     replay.add_argument("--orchestrator-bin", type=Path, required=True)
     replay.add_argument("--pg-bin", type=Path, required=True)
+    replay.add_argument("--qdrant-bin", type=Path,
+                        help="required only when a Qdrant child history is present")
     replay.add_argument("--output", type=Path, required=True)
+    rehearsal = sub.add_parser("rehearse", help="validate hypothetical Worker routing; never changes it")
+    rehearsal.add_argument("--earlier", type=Path, required=True)
+    rehearsal.add_argument("--later", type=Path, required=True)
+    rehearsal.add_argument("--replay-evidence", type=Path)
+    rehearsal.add_argument("--routing-plan", type=Path, required=True)
+    rehearsal.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "capture":
@@ -745,7 +910,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.replay_evidence is not None else None
                 ),
             )
-        else:
+        elif args.command == "replay-audit":
             outcome = replay_audit(
                 json.loads(args.capture.read_text(encoding="utf-8")),
                 json.loads(args.manifest.read_text(encoding="utf-8")),
@@ -754,13 +919,25 @@ def main(argv: list[str] | None = None) -> int:
                     "legacy": args.legacy_bin,
                     "orchestrator": args.orchestrator_bin,
                     "pg": args.pg_bin,
+                    "qdrant": args.qdrant_bin,
                 },
+            )
+        else:
+            outcome = rehearse_cutover_plan(
+                json.loads(args.earlier.read_text(encoding="utf-8")),
+                json.loads(args.later.read_text(encoding="utf-8")),
+                json.loads(args.routing_plan.read_text(encoding="utf-8")),
+                replay_evidence=(
+                    json.loads(args.replay_evidence.read_text(encoding="utf-8"))
+                    if args.replay_evidence is not None else None
+                ),
             )
         atomic_json(args.output, outcome)
         print(f"TEMPORAL_HISTORY_TRANSITION={outcome['status']} cutover_authorized=false")
         return 0 if outcome["status"] in {
             "DRAIN_CANDIDATE_ONLY", "DRAIN_PRECONDITIONS_CAPTURED",
             "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY", "HISTORY_REPLAY_PRECONDITIONS_CAPTURED",
+            "ROUTING_REHEARSAL_CANDIDATE_ONLY",
         } else 1
     except (EvidenceError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         # The error reason must never include a DSN, URI query, token or stderr.

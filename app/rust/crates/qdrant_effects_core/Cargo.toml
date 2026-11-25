@@ -1,0 +1,14 @@
+[package]
+name = "qdrant_effects_core"
+version = "0.1.0"
+edition = "2021"
+
+# Narrow ownership closure: PostgreSQL uncertainty/receipt + Qdrant I/O.
+# No graph_neo4j, voyage_api, projection_delivery or legacy runtime.
+[dependencies]
+anyhow = { workspace = true }
+operation_protocol = { path = "../operation_protocol" }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+vector_qdrant = { path = "../vector_qdrant" }

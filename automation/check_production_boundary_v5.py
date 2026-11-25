@@ -35,6 +35,9 @@ FORBIDDEN_PG_ENV = frozenset({
 })
 PURE_CONTROL_NETWORK = "temporal_pure_control"
 PG_EFFECT_DATA_NETWORK = "temporal_pg_effect_data"
+V7_PURE_CANDIDATE = "temporal-pure-release-candidate"
+V7_PURE_OVERLAY = ROOT / "infra/temporal/compose.v7-isolated.yml"
+V7_PURE_DOCKERFILE = ROOT / "infra/temporal/Dockerfile.v7-pure"
 
 
 def service_sections(compose: str) -> dict[str, str]:
@@ -98,6 +101,87 @@ def isolated_native_image(body: str, target: str, package: str) -> bool:
         f"        OWNER_PACKAGE: {package}",
     )
     return all(line in body.splitlines() for line in required)
+
+
+def check_v7_pure_candidate(overlay: str, dockerfile: str) -> dict[str, Any]:
+    """Fail-closed opt-in candidate evidence, never a release authorization.
+
+    Unlike the base Compose, this file is not loaded at all by default. Even
+    when explicitly merged, its own profile and runtime gate must be enabled.
+    The exact-SHA isolated Cargo context is required at Compose parse time.
+    """
+    issues: list[str] = []
+    services = service_sections(overlay)
+    if set(services) != {V7_PURE_CANDIDATE}:
+        issues.append("V7 overlay must define only its isolated pure candidate service")
+    for forbidden_root in ("networks:", "secrets:", "volumes:"):
+        if re.search(rf"(?m)^{re.escape(forbidden_root)}", overlay):
+            issues.append(f"V7 overlay must not change default root {forbidden_root}")
+    body = services.get(V7_PURE_CANDIDATE, "")
+    required = (
+        '    profiles: ["v7-production-isolation-evaluation"]',
+        "    build:",
+        "      context: ${V7_PURE_BUILD_CONTEXT:?exact-SHA pure build context required}",
+        "      dockerfile: ./infra/temporal/Dockerfile.v7-pure",
+        '    restart: "no"',
+        "    read_only: true",
+        '    cap_drop: ["ALL"]',
+        "    security_opt:",
+        "      - no-new-privileges:true",
+        "      TEMPORAL_URL: http://temporal-server:7233",
+        "      TEMPORAL_NAMESPACE: default",
+        "      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v5",
+        "      WORKER_BUILD_ID: ${V7_SOURCE_SHA:?exact committed 40-hex Git SHA required}",
+        '      TEMPORAL_WORKER_VERSIONING: "false"',
+        '      ALLOW_PURE_DAG_ORCHESTRATOR: "false"',
+        '      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: "false"',
+        "      ALLOW_EFFECT_DAG_ORCHESTRATOR_V5: ${V7_ENABLE_PURE_CANDIDATE:-false}",
+    )
+    for line in required:
+        if line not in body.splitlines():
+            issues.append(f"V7 pure candidate missing mandatory isolation/control: {line.strip()}")
+    if service_networks(body) != [PURE_CONTROL_NETWORK]:
+        issues.append("V7 pure candidate has non-Temporal or default network access")
+    if service_dependencies(body) != ["temporal-server"]:
+        issues.append("V7 pure candidate depends on a provider or non-Temporal service")
+    expected_environment = {
+        "TEMPORAL_URL", "TEMPORAL_NAMESPACE", "TEMPORAL_ORCHESTRATOR_TASK_QUEUE",
+        "WORKER_BUILD_ID", "TEMPORAL_WORKER_VERSIONING",
+        "ALLOW_PURE_DAG_ORCHESTRATOR", "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4",
+        "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5", "RUST_LOG",
+    }
+    if environment(body) != expected_environment:
+        issues.append("V7 pure candidate environment differs from exact provider-free allowlist")
+    for forbidden in (
+        "    secrets:", "    volumes:", "    ports:", "    devices:",
+        "    extra_hosts:", "    links:", "    pid:", "    ipc:",
+    ):
+        if forbidden in body.splitlines():
+            issues.append(f"V7 pure candidate has forbidden host/secret wiring: {forbidden.strip()}")
+    for entry in unsafe_wiring(body):
+        issues.append(f"V7 pure candidate has unsafe wiring: {entry}")
+
+    dockerfile_requirements = (
+        "FROM rust:1.100.0-slim-bookworm AS pure-builder",
+        "COPY dependency-skeleton/app ./app",
+        "COPY app ./app",
+        "    -p temporal_orchestrator --bin temporal_orchestrator",
+        "USER 65532:65532",
+        "COPY --from=pure-builder /app/app/rust/target/release/temporal_orchestrator \\",
+        'ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]',
+    )
+    for line in dockerfile_requirements:
+        if line not in dockerfile.splitlines():
+            issues.append(f"V7 native image lacks pure owner build/runtime contract: {line.strip()}")
+    for foreign in ("temporal_pg_effects", "temporal_worker", "vector_qdrant", "graph_neo4j"):
+        if foreign in dockerfile:
+            issues.append(f"V7 pure image mentions forbidden provider/legacy executable: {foreign}")
+    return {
+        "boundary": "PASS" if not issues else "FAIL",
+        "production_release_authorized": False,
+        "evidence_scope": "opt-in overlay, exact source-scoped native image shape only; no live deploy or History attestation",
+        "issues": issues,
+    }
 
 
 def check(compose: str) -> dict[str, Any]:
@@ -241,11 +325,20 @@ def check(compose: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--compose", type=Path, default=ROOT / "docker-compose.yml")
+    parser.add_argument("--candidate-overlay", type=Path, default=V7_PURE_OVERLAY)
+    parser.add_argument("--candidate-dockerfile", type=Path, default=V7_PURE_DOCKERFILE)
     parser.add_argument("--require-production", action="store_true")
     args = parser.parse_args()
     result = check(args.compose.read_text(encoding="utf-8"))
+    candidate = check_v7_pure_candidate(
+        args.candidate_overlay.read_text(encoding="utf-8"),
+        args.candidate_dockerfile.read_text(encoding="utf-8"),
+    )
+    result["v7_pure_isolation_candidate"] = candidate
     print(json.dumps(result, indent=2, sort_keys=True))
     if result["experimental_boundary"] != "PASS":
+        return 1
+    if candidate["boundary"] != "PASS":
         return 1
     if args.require_production and result["production_static_boundary"] != "PASS":
         return 1

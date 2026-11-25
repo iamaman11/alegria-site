@@ -93,6 +93,7 @@ class RustArtifactTests(unittest.TestCase):
         cases = {
             "graph_harness": "integration_graph_e2e",
             "qdrant_harness": "integration_qdrant_e2e",
+            "qdrant_temporal_harness": "integration_qdrant_temporal_e2e",
             "temporal_harness": "integration_temporal_e2e",
             "pg_app_harness": "integration_pg_app_e2e",
         }
@@ -127,6 +128,24 @@ class RustArtifactTests(unittest.TestCase):
             (bundle / "outbox_worker").write_bytes(b"forged")
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("legacy", SHA, bundle, target=self.root / "installed")
+
+    def test_qdrant_effect_worker_is_independent_of_pg_and_legacy_workers(self) -> None:
+        with patch.object(artifacts, "TARGET", self.target):
+            original = self.executable("temporal_qdrant_effects", b"real independent Qdrant SDK worker")
+            bundle = self.root / "qdrant_worker_bundle"
+            manifest = artifacts.package("qdrant_effects", SHA, bundle)
+            self.assertEqual(set(manifest["files"]), {"temporal_qdrant_effects"})
+            for incompatible in ("v3", "legacy", "qdrant_temporal_harness"):
+                with self.subTest(incompatible=incompatible):
+                    with self.assertRaisesRegex(ValueError, "manifest"):
+                        artifacts.install(incompatible, SHA, bundle, target=self.root / incompatible)
+            destination = self.root / "installed_qdrant"
+            artifacts.install("qdrant_effects", SHA, bundle, target=destination)
+            self.assertEqual((destination / "temporal_qdrant_effects").read_bytes(), original.read_bytes())
+            self.assertFalse((destination / "temporal_orchestrator").exists())
+            (bundle / "temporal_qdrant_effects").write_bytes(b"forged")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                artifacts.install("qdrant_effects", SHA, bundle, target=self.root / "forged_qdrant")
 
     def test_rejects_manifest_confusion_symlink_and_extra_payload(self) -> None:
         source = self.executable("real")

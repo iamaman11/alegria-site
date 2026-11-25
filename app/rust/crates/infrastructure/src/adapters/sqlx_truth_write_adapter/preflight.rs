@@ -54,13 +54,26 @@ pub(super) fn validate_prepared_truth_write(
         if !candidate_ids.insert(decision.rule_candidate_id.as_str()) {
             return Err(invalid("duplicate extractor candidate identity"));
         }
-        if !raw_by_section.contains_key(&decision.section_id) {
-            return Err(DomainError::ValidationFailure {
+        let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
+            DomainError::ValidationFailure {
                 message: format!(
                     "verified truth write missing raw section {} for candidate/source registration",
                     decision.section_id
                 ),
-            });
+            }
+        })?;
+        // A typed decision cannot claim a different page or globally trusted
+        // source than the durable section that its own evidence came from.
+        // This is independent of the later row/advisory locking: source keys
+        // and page IDs must bind correctly even if no concurrent writer runs.
+        if decision.page_id != raw_section.page_id
+            || decision.source_key != raw_section.source_url
+            || (!raw_section.content_hash.is_empty()
+                && decision.source_snapshot_hash != raw_section.content_hash)
+        {
+            return Err(invalid(
+                "candidate source/page/snapshot identity differs from raw evidence",
+            ));
         }
         required_slots.insert(slot.as_str());
     }
@@ -174,7 +187,7 @@ mod tests {
             "concept_canonical_key": "tuition_fee",
             "params": {},
             "scope": {},
-            "source_key": "official",
+            "source_key": "https://official.example.test/fees",
             "source_tier": "primary",
             "confidence": 0.99,
             "freshness_class": "fresh",
@@ -216,7 +229,7 @@ mod tests {
                 rule_instance_id: "slot".into(),
                 role_type: "fee_item".into(),
                 concept_key: "tuition_fee".into(),
-                source_key: "official".into(),
+                source_key: "https://official.example.test/fees".into(),
                 evidence_quote: "fee schedule".into(),
             }],
         }
@@ -239,6 +252,35 @@ mod tests {
             "run", "context", &decisions, &slots, &outcomes, &sections, &change, None,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn candidate_cannot_spoof_raw_page_source_or_evidence_snapshot() {
+        let valid = decision("candidate");
+        let mut wrong_page = valid.clone();
+        wrong_page.page_id = 999;
+        let mut wrong_source = valid.clone();
+        wrong_source.source_key = "https://different.example.gov".into();
+        let mut wrong_hash = valid;
+        wrong_hash.source_snapshot_hash = "other-evidence".into();
+        for forged in [wrong_page, wrong_source, wrong_hash] {
+            let slots = vec!["slot".to_string()];
+            let outcomes = BTreeMap::from([(
+                "slot".to_string(),
+                SemanticTruthWriteOutcome::Verified(&forged),
+            )]);
+            assert!(validate_prepared_truth_write(
+                "run",
+                "context",
+                std::slice::from_ref(&forged),
+                &slots,
+                &outcomes,
+                &raw_sections(),
+                &projection(),
+                None,
+            )
+            .is_err());
+        }
     }
 
     #[test]

@@ -115,16 +115,14 @@ pub async fn load_source_registry_entries(
         let trust_level = row.trust_level;
         let freshness_ttl_days = row.freshness_ttl_days;
         let override_eligible = row.override_eligible;
-        let effective_trust = if source_type.eq_ignore_ascii_case("government") {
-            10
-        } else {
-            trust_level
-        };
+        // `trust_level` is the curator-owned authoritative tier (1..=5),
+        // not a crawler-inferred lower bound. A prior government=>10 uplift
+        // silently defeated a curator's manual downgrade to tier 1.
         registry.insert(
             key,
             SourceRegistryRecord {
                 source_type,
-                trust_level: effective_trust as i64,
+                trust_level: trust_level as i64,
                 authority_class,
                 independence_group_key,
                 freshness_ttl_days,

@@ -31,10 +31,12 @@ KINDS = {
     # executable. Never alias these to the old monolithic harness artifact.
     "graph_harness": ("integration_graph_e2e_test",),
     "qdrant_harness": ("integration_qdrant_e2e_test",),
+    "qdrant_temporal_harness": ("integration_qdrant_temporal_e2e_test",),
     "temporal_harness": ("integration_temporal_e2e_test",),
     "pg_app_harness": ("integration_pg_app_e2e_test",),
     "legacy": ("temporal_worker", "outbox_worker"),
     "v3": ("temporal_orchestrator", "temporal_pg_effects"),
+    "qdrant_effects": ("temporal_qdrant_effects",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 TARGET = WORKSPACE / "target" / "debug"
@@ -62,7 +64,7 @@ def source_binaries(kind: str, *, harness: Path | None = None) -> dict[str, Path
     if kind not in KINDS:
         raise ValueError(f"unknown Rust CI artifact kind {kind}")
     if kind in ("harness", "pg_harness", "outbox_harness", "graph_harness", "qdrant_harness",
-                "temporal_harness", "pg_app_harness"):
+                "qdrant_temporal_harness", "temporal_harness", "pg_app_harness"):
         if harness is None:
             raise ValueError("the harness bundle needs the compiler-reported test executable")
         return {KINDS[kind][0]: harness.resolve()}
@@ -135,6 +137,7 @@ def install(kind: str, source_sha: str, bundle: Path, *, target: Path = TARGET) 
             "outbox_harness": "deps/integration_outbox_e2e-ci-exact",
             "graph_harness": "deps/integration_graph_e2e-ci-exact",
             "qdrant_harness": "deps/integration_qdrant_e2e-ci-exact",
+            "qdrant_temporal_harness": "deps/integration_qdrant_temporal_e2e-ci-exact",
             "temporal_harness": "deps/integration_temporal_e2e-ci-exact",
             "pg_app_harness": "deps/integration_pg_app_e2e-ci-exact",
         }

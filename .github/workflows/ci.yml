@@ -31,6 +31,7 @@ on:
           - coldwarm
           - pg-harness
           - owner-rebuild
+          - legacy-worker-split
 
 permissions:
   contents: read
@@ -54,6 +55,7 @@ jobs:
       cargo_scope: ${{ steps.decide.outputs.cargo_scope }}
       graph_e2e_shards: ${{ steps.decide.outputs.graph_e2e_shards }}
       qdrant_e2e_shards: ${{ steps.decide.outputs.qdrant_e2e_shards }}
+      qdrant_temporal_e2e_shards: ${{ steps.decide.outputs.qdrant_temporal_e2e_shards }}
       pg_app_e2e_shards: ${{ steps.decide.outputs.pg_app_e2e_shards }}
       temporal_legacy_e2e_shards: ${{ steps.decide.outputs.temporal_legacy_e2e_shards }}
       temporal_v3_e2e_shards: ${{ steps.decide.outputs.temporal_v3_e2e_shards }}
@@ -101,6 +103,7 @@ jobs:
           output_keys = {
               'rust-graph-e2e': 'graph_e2e_shards',
               'rust-qdrant-e2e': 'qdrant_e2e_shards',
+              'rust-qdrant-temporal-e2e': 'qdrant_temporal_e2e_shards',
               'rust-pg-app-e2e': 'pg_app_e2e_shards',
               'rust-temporal-legacy-e2e': 'temporal_legacy_e2e_shards',
               'rust-temporal-v3-e2e': 'temporal_v3_e2e_shards',
@@ -464,6 +467,63 @@ jobs:
           path: automation/reports/rust-ci-artifacts/qdrant_harness/
           if-no-files-found: error
 
+  # Native Temporal + PG + Qdrant is a NEW physical test owner. Never force
+  # existing REST Qdrant shards to await provider Worker compiler artifacts.
+  rust-e2e-qdrant-temporal-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-qdrant-temporal-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile distinct live Temporal/PG/Qdrant E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness qdrant_temporal_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/qdrant_temporal_harness
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/qdrant_temporal_harness/
+          if-no-files-found: error
+
 
   # Independent exact-source PostgreSQL application E2E compiler, no dependency on unrelated owners.
   rust-e2e-pg-app-harness:
@@ -809,6 +869,7 @@ jobs:
             const fullRunMarkers = [
               'verify', 'rust-e2e-temporal-harness',
               'rust-temporal-legacy-e2e (temporal_manual)', 'rust-pg-e2e (verify_d)',
+              'rust-qdrant-temporal-e2e (temporal_qdrant)',
             ];
             let green = null;
             for (const run of accepted.slice(0, 5)) {
@@ -869,6 +930,10 @@ jobs:
             owner-rebuild)
               RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py
               ;;
+            legacy-worker-split)
+              python3 automation/measure_legacy_worker_split.py \
+                --output automation/reports/legacy_worker_split_physical.json
+              ;;
             *) echo "Unknown physical study kind" >&2; exit 2 ;;
           esac
       - name: Publish exact four-owner metrics as auditable text
@@ -895,6 +960,7 @@ jobs:
             automation/reports/physical_owner_ab.json
             automation/reports/physical_coldwarm_ab.json
             automation/reports/owner_rebuild_probe.json
+            automation/reports/legacy_worker_split_physical.json
           if-no-files-found: warn
 
   # Actual legacy and V3 Workers compile in parallel with the shared harness
@@ -1001,6 +1067,59 @@ jobs:
           path: automation/reports/rust-ci-artifacts/v3/
           if-no-files-found: error
 
+  # The Qdrant SDK/PG effects runtime is compiled and attested independently
+  # of the provider-free parent (`v3`) and the PG-only effect owner.
+  rust-e2e-qdrant-effects-binaries:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-qdrant-effects-binaries') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Compile real Qdrant/PG Activity worker without contaminating pure parent
+        working-directory: app/rust
+        run: cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects
+      - name: Attest independent Qdrant effect worker to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind qdrant_effects --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/qdrant_effects
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/qdrant_effects/
+          if-no-files-found: error
+
   # Real graph providers run in isolated hosts using only their own
   # source-bound test compiler and, if needed, independently compiled Workers.
   rust-graph-e2e:
@@ -1080,6 +1199,57 @@ jobs:
             --kind qdrant_harness --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_harness"
       - name: Execute exact selected qdrant real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Mandatory real Temporal parent + Qdrant Activity child. Three independently
+  # compiled exact-source bundles prove Worker roles; existing vector shards
+  # remain free to run on their own compiler completion.
+  rust-qdrant-temporal-e2e:
+    name: rust-qdrant-temporal-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.qdrant_temporal_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-v3-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/v3
+      - name: Verify actual parent, child and native three-provider E2E binary from one SHA
+        run: |
+          set -euo pipefail
+          python3 automation/rust_ci_artifacts.py install \
+            --kind qdrant_temporal_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_temporal_harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind qdrant_effects --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_effects"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind v3 --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+      - name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt
         run: |
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json --suite-job auto \
@@ -1725,6 +1895,7 @@ jobs:
       - architecture-and-rust
       - rust-e2e-graph-harness
       - rust-e2e-qdrant-harness
+      - rust-e2e-qdrant-temporal-harness
       - rust-e2e-pg-app-harness
       - rust-e2e-temporal-harness
       - rust-e2e-pg-harness
@@ -1732,8 +1903,10 @@ jobs:
       - rust-e2e-truth-harness
       - rust-e2e-legacy-binaries
       - rust-e2e-v3-binaries
+      - rust-e2e-qdrant-effects-binaries
       - rust-graph-e2e
       - rust-qdrant-e2e
+      - rust-qdrant-temporal-e2e
       - rust-pg-app-e2e
       - rust-temporal-legacy-e2e
       - rust-temporal-v3-e2e
@@ -1812,6 +1985,7 @@ jobs:
           expected_jobs = {
               "impact",
               "architecture-and-rust", "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+              "rust-e2e-qdrant-temporal-harness", "rust-e2e-qdrant-effects-binaries",
               "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
               "rust-e2e-pg-harness", "rust-e2e-outbox-harness", "rust-e2e-truth-harness",
               "rust-e2e-legacy-binaries",

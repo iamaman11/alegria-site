@@ -1,6 +1,7 @@
 // Opt-in experimental second external effect: PostgreSQL role/tenant-bound
 // admission -> committed uncertainty fence -> REAL Qdrant upsert -> full REST
 // readback -> durable receipt. Temporal child History is not yet attested.
+
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
@@ -47,7 +48,7 @@ async fn admitted_qdrant_keyword_projection_recovers_after_receipt_failure_witho
          VALUES ($1,$2,'seo_site_build',$3,'verifying',$4)",
     )
     .bind(run_id)
-    .bind(Uuid::new_v4().to_string())
+    .bind("ci-parent-run")
     .bind(&context_key)
     .bind(tenant)
     .execute(&pg.pool)
@@ -76,6 +77,9 @@ async fn admitted_qdrant_keyword_projection_recovers_after_receipt_failure_witho
         "GRANT INSERT ON pipeline.qdrant_projection_v1_admissions TO qdrant_ci_operator",
     )
     .execute(&pg.pool).await.unwrap();
+    sqlx::query(
+        "GRANT SELECT, UPDATE(revoked_at) ON pipeline.qdrant_projection_v1_admissions TO qdrant_ci_operator",
+    ).execute(&pg.pool).await.unwrap();
     sqlx::query(
         "GRANT SELECT ON pipeline.qdrant_projection_v1_admissions TO qdrant_ci_executor,qdrant_ci_wrong_tenant",
     )
@@ -256,6 +260,15 @@ async fn admitted_qdrant_keyword_projection_recovers_after_receipt_failure_witho
             == Some(&admission.to_string())
     }), "independent gRPC did not observe admitted external business projection");
 
+    // A monotonic issuer revocation cannot pretend the already-started
+    // provider RPC never happened. Reconciliation after revocation must keep
+    // the immutable uncertainty barrier and recover exact remote success.
+    sqlx::query(
+        "UPDATE pipeline.qdrant_projection_v1_admissions
+         SET revoked_at=clock_timestamp() WHERE admission_id=$1",
+    ).bind(admission).execute(&operator).await
+        .expect("independently credentialed issuer revokes an already-started Qdrant admission");
+
     sqlx::query(
         "ALTER TABLE pipeline.qdrant_projection_v1_receipts DROP CONSTRAINT qdrant_ci_receipt_fault",
     )
@@ -316,7 +329,7 @@ async fn admitted_qdrant_keyword_projection_recovers_after_receipt_failure_witho
          VALUES ($1,$2,$3,$4,$5,'ci-parent','ci-parent-run','ci-missing-child',
                  'ci-missing-run',18,'keyword-missing',repeat('b',64),
                  encode(public.digest($6::bytea,'sha256'),'hex'),$6,
-                 clock_timestamp() + interval '10 minutes')",
+                 clock_timestamp() + interval '1 second')",
     )
     .bind(missing_admission)
     .bind(run_id)
@@ -325,13 +338,36 @@ async fn admitted_qdrant_keyword_projection_recovers_after_receipt_failure_witho
     .bind(&missing_keyword)
     .bind(&missing_bytes)
     .execute(&operator).await.unwrap();
+    let mut start_tx = executor.begin().await.unwrap();
     let started: String = sqlx::query_scalar(
         "SELECT pipeline.begin_qdrant_projection_v1($1,$2)",
     )
     .bind(missing_admission)
     .bind(&missing_bytes)
-    .fetch_one(&executor).await.unwrap();
+    .fetch_one(&mut *start_tx).await.unwrap();
     assert_eq!(started, "started");
+    // Effect-first concurrent race: the new attempt transaction holds the
+    // canonical run-status advisory fence and FOR SHARE lock. A concurrent
+    // terminal writer must fail instead of committing a terminal state while
+    // the first provider attempt is being durably admitted.
+    let mut status_writer = pg.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout='300ms'")
+        .execute(&mut *status_writer).await.unwrap();
+    let blocked_transition = sqlx::query(
+        "UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1",
+    ).bind(run_id).execute(&mut *status_writer).await
+     .expect_err("terminal writer advanced despite concurrent Qdrant first-start fence");
+    assert_eq!(blocked_transition.as_database_error().and_then(|err|err.code()).as_deref(),
+        Some("55P03"));
+    status_writer.rollback().await.unwrap();
+    start_tx.commit().await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let expired_reentry: String = sqlx::query_scalar(
+        "SELECT pipeline.begin_qdrant_projection_v1($1,$2)",
+    ).bind(missing_admission).bind(&missing_bytes)
+     .fetch_one(&executor).await.unwrap();
+    assert_eq!(expired_reentry,"uncertain",
+        "expired AFTER initial start may never erase unknown-outcome barrier or permit re-RPC");
     assert!(execute_admitted_qdrant_projection_v1(&executor, missing_admission)
         .await.is_err(), "an uncertain RPC cannot be repeated even if no point exists");
     let missing_state: String = sqlx::query_scalar(
