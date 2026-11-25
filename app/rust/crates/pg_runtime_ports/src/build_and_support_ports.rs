@@ -1,5 +1,5 @@
 #[async_trait]
-impl SeoBuildInputRepository for SqlxSeoRuntimeRepository<'_> {
+impl SeoBuildInputRepository for SqlxSeoPgRepository<'_> {
     async fn load_site_build_input(
         &self,
         run_id: &str,
@@ -9,7 +9,7 @@ impl SeoBuildInputRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
+impl SeoBuildRegistrationRepository for SqlxSeoPgRepository<'_> {
     async fn register_site_build_input(
         &self,
         request: &SeoSiteBuildRegistrationRequest,
@@ -127,7 +127,7 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl VerifiedSupportRepository for SqlxSeoRuntimeRepository<'_> {
+impl VerifiedSupportRepository for SqlxSeoPgRepository<'_> {
     async fn load_verified_support_bundle(
         &self,
         request: &VerifiedSupportBundleRequest,

@@ -1,5 +1,5 @@
 #[async_trait]
-impl SerpIngestRepository for SqlxSeoRuntimeRepository<'_> {
+impl SerpIngestRepository for SqlxSeoPgRepository<'_> {
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,
@@ -63,7 +63,7 @@ impl SerpIngestRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
+impl PlanningRepository for SqlxSeoPgRepository<'_> {
     async fn persist_serp_normalize_output(
         &self,
         input: &SerpNormalizeInputPayload,

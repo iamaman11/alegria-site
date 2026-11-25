@@ -44,8 +44,6 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use graph_neo4j;
 use serde_json::json;
-use sqlx::Row;
-use uuid::Uuid;
 
 pub struct SqlxSeoRuntimeRepository<'a> {
     pool: &'a AlegriaPgPool,
@@ -54,6 +52,10 @@ pub struct SqlxSeoRuntimeRepository<'a> {
 impl<'a> SqlxSeoRuntimeRepository<'a> {
     pub fn new(pool: &'a AlegriaPgPool) -> Self {
         Self { pool }
+    }
+
+    fn pg(&self) -> pg_runtime_ports::SqlxSeoPgRepository<'_> {
+        pg_runtime_ports::SqlxSeoPgRepository::new(self.pool)
     }
 }
 

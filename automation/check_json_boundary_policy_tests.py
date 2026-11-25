@@ -17,10 +17,22 @@ from check_json_boundary_policy import (
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
     def test_extracted_owner_json_grants_are_exact_files(self) -> None:
         self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {
+            "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
             "app/rust/crates/integration_data_fixtures/src/lib.rs",
             "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/integration_qdrant_e2e/src/tests/knowledge_read_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/publication_delivery_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/truth_adjudication_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/cms_review_pg_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/cms_cross_scope_pg_tests.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/cms_navigation_pg_tests.rs",
             "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
             "app/rust/crates/voyage_api/src/lib.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/pure_v3_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
         })
         for relative in EXTRACTED_OWNER_JSON_BOUNDARIES:
             with self.subTest(relative=relative):
@@ -29,8 +41,12 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
         for relative in (
             "app/rust/crates/integration_outbox_e2e/src/lib.rs",
             "app/rust/crates/integration_outbox_e2e/src/tests/new_json_test.rs",
+            "app/rust/crates/integration_qdrant_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_e2e/src/tests/new_json_test.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/new_json_test.rs",
             "app/rust/crates/projection_delivery/src/new_provider.rs",
             "app/rust/crates/voyage_api/src/operation.rs",
+            "app/rust/crates/pg_runtime_ports/src/new_port.rs",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))

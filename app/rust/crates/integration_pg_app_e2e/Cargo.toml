@@ -1,0 +1,49 @@
+[package]
+name = "integration_pg_app_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# Real SQLx transaction and public HTTP publication tests. No Temporal SDK,
+# graph or Qdrant dependency belongs in this owner; the isolated PG fixture
+# never starts fake provider containers or skips database checks.
+[features]
+default = []
+e2e = [
+  "dep:async-trait",
+  "dep:axum",
+  "dep:contracts",
+  "dep:infrastructure",
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/pg",
+  "dep:integration_harness",
+  "dep:pg_runtime_ports",
+  "dep:reqwest",
+  "dep:seo_application",
+  "dep:seo_domain",
+  "dep:seo_ports",
+  "dep:seo_steps",
+  "dep:serde_json",
+  "dep:serial_test",
+  "dep:sqlx",
+  "dep:tokio",
+  "dep:uuid",
+]
+
+[dependencies]
+async-trait = { version = "0.1", optional = true }
+axum = { version = "0.8.8", features = ["json"], optional = true }
+contracts = { path = "../contracts", optional = true }
+infrastructure = { path = "../infrastructure", optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+integration_harness = { path = "../integration_harness", default-features = false, optional = true }
+pg_runtime_ports = { path = "../pg_runtime_ports", optional = true }
+reqwest = { workspace = true, optional = true, features = ["json", "rustls"] }
+seo_application = { path = "../seo_application", optional = true }
+seo_domain = { path = "../seo_domain", optional = true }
+seo_ports = { path = "../seo_ports", optional = true }
+seo_steps = { path = "../seo_steps", optional = true }
+serde_json = { workspace = true, optional = true }
+serial_test = { version = "3.2.0", optional = true }
+sqlx = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }

@@ -86,6 +86,34 @@ class RustArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest"):
             artifacts.install("outbox_harness", SHA, bundle, target=self.root / "forged_install")
 
+    def test_next_physical_owner_artifacts_cannot_be_substituted_for_each_other(self) -> None:
+        # The new PG, Qdrant, Graph and Temporal E2E binaries are independently
+        # compiled, attest the same exact source SHA, and never satisfy one
+        # another's manifest. A graph test cannot accidentally run Temporal.
+        cases = {
+            "graph_harness": "integration_graph_e2e",
+            "qdrant_harness": "integration_qdrant_e2e",
+            "temporal_harness": "integration_temporal_e2e",
+            "pg_app_harness": "integration_pg_app_e2e",
+        }
+        for kind, package in cases.items():
+            with self.subTest(kind=kind):
+                source = self.executable(f"{package}-hash", kind.encode())
+                bundle = self.root / f"{kind}_bundle"
+                manifest = artifacts.package(kind, SHA, bundle, harness=source)
+                self.assertEqual(set(manifest["files"]), {f"{package}_test"})
+                installed = self.root / f"{kind}_installed"
+                for wrong in set(cases) - {kind}:
+                    with self.assertRaisesRegex(ValueError, "manifest"):
+                        artifacts.install(wrong, SHA, bundle, target=installed)
+                artifacts.install(kind, SHA, bundle, target=installed)
+                self.assertEqual(
+                    (installed / f"deps/{package}-ci-exact").read_bytes(), source.read_bytes(),
+                )
+                (bundle / f"{package}_test").write_bytes(b"changed after signing")
+                with self.assertRaisesRegex(ValueError, "digest"):
+                    artifacts.install(kind, SHA, bundle, target=self.root / f"{kind}_forged")
+
     def test_worker_owner_rejects_tamper_wrong_sha_and_wrong_kind(self) -> None:
         with patch.object(artifacts, "TARGET", self.target):
             self.executable("temporal_worker", b"legacy-real-binary")

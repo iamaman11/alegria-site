@@ -1,5 +1,5 @@
 #[async_trait]
-impl SectionTemplateRepository for SqlxSeoRuntimeRepository<'_> {
+impl SectionTemplateRepository for SqlxSeoPgRepository<'_> {
     async fn load_section_templates(
         &self,
         page_type_key: &str,
@@ -10,7 +10,7 @@ impl SectionTemplateRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl DraftRepository for SqlxSeoRuntimeRepository<'_> {
+impl DraftRepository for SqlxSeoPgRepository<'_> {
     async fn persist_draft_assemble_output(
         &self,
         run_id: &str,
@@ -45,20 +45,7 @@ impl DraftRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl EditorialGenerationPort for SqlxSeoRuntimeRepository<'_> {
-    async fn generate_editorial_draft(
-        &self,
-        input: &EditorialDraftGenerateInputPayload,
-    ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
-        if editorial_llm_adapter::chat_manual_selected(input) {
-            return manual_llm_queue::enqueue_editorial(self.pool, input).await;
-        }
-        editorial_llm_adapter::generate_editorial_draft(input).await
-    }
-}
-
-#[async_trait]
-impl CmsReviewPort for SqlxSeoRuntimeRepository<'_> {
+impl CmsReviewPort for SqlxSeoPgRepository<'_> {
     async fn persist_cms_publish_output(
         &self,
         input: &CmsPublishInputPayload,
@@ -78,7 +65,7 @@ impl CmsReviewPort for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl CmsReviewDecisionPort for SqlxSeoRuntimeRepository<'_> {
+impl CmsReviewDecisionPort for SqlxSeoPgRepository<'_> {
     async fn apply_human_review_decision(
         &self,
         request: &CmsReviewDecisionRequest,
@@ -88,7 +75,7 @@ impl CmsReviewDecisionPort for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl PublishArtifactRepository for SqlxSeoRuntimeRepository<'_> {
+impl PublishArtifactRepository for SqlxSeoPgRepository<'_> {
     fn resolve_publish_materialize_input(
         &self,
         input: &PublishMaterializeInputPayload,
@@ -114,7 +101,7 @@ impl PublishArtifactRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl VerifiedRulesReader for SqlxSeoRuntimeRepository<'_> {
+impl VerifiedRulesReader for SqlxSeoPgRepository<'_> {
     async fn read_verified_rules(
         &self,
         query: &VerifiedRulesQuery,

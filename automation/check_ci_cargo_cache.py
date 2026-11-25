@@ -17,9 +17,20 @@ import report_sccache_failures as sccache_reporter
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 OWNERS = (
-    "architecture-and-rust", "verify", "rust-e2e-harness",
+    "architecture-and-rust", "verify",
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
+    "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
     "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
 )
+READERS = OWNERS[1:]
+SOURCE_BOUND_COMPILERS = frozenset({
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
+    "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
+})
 
 
 def validate_cache_policy(workflow: str) -> None:
@@ -62,6 +73,26 @@ def validate_cache_policy(workflow: str) -> None:
             raise ValueError(f"{owner} must not initialize a second Cargo registry writer")
         if block.count("uses: actions/cache/restore@v4") != 1:
             raise ValueError(f"{owner} must restore Cargo sources without writing cache")
+        if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in block:
+            raise ValueError(f"{owner} must use read-only compiler object cache")
+        if ("SCCACHE_GHA_ENABLED: \"on\"" not in block
+                or "uses: actions/github-script@v8" not in block
+                or "core.exportVariable('ACTIONS_RESULTS_URL'," not in block
+                or "core.exportVariable('ACTIONS_RUNTIME_TOKEN'," not in block):
+            raise ValueError(f"{owner} must authenticate the read-only sccache backend")
+        if owner in SOURCE_BOUND_COMPILERS and (
+            "ref: ${{ github.sha }}" not in block
+            or "--report automation/reports/ci_impact.json" not in block
+            or "uses: actions/upload-artifact@v7" not in block
+            or "name: ci-owner-impact" not in block
+            or f"contains(fromJSON(needs.impact.outputs.selected_ci_jobs), '{owner}')" not in block
+        ):
+            raise ValueError(f"{owner} must compile and publish only exact-source evidence")
+    if ("--compile-harness-only" not in blocks["rust-e2e-truth-harness"]
+            or any("--compile-harness-only" in block for name, block in blocks.items()
+                   if name != "rust-e2e-truth-harness")
+            or "rust-e2e-truth-harness" not in blocks["rust-e2e-truth-harness"]):
+        raise ValueError("optional Truth certification is the only allowed broad test compiler")
     if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in verify:
         raise ValueError("verify Cargo compilation must use read-only compiler cache")
     for step_name in (
@@ -159,6 +190,30 @@ class CargoCachePolicy(unittest.TestCase):
         changed = original.replace("core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);", "// missing token export")
         with self.assertRaisesRegex(ValueError, "authenticated"):
             validate_cache_policy(changed)
+
+    def test_every_cargo_reader_must_authenticate_independent_sccache(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        for owner in READERS:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed_section, count = re.subn(
+                    r"core\.exportVariable\('ACTIONS_RUNTIME_TOKEN', [^\n]*\);",
+                    "// removed signed cache token", original[start:], count=1,
+                )
+                self.assertEqual(count, 1)
+                with self.assertRaisesRegex(ValueError, "authenticate|authenticated"):
+                    validate_cache_policy(original[:start] + changed_section)
+
+    def test_independent_compilers_must_checkout_selected_exact_source(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        for owner in SOURCE_BOUND_COMPILERS:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed = original[:start] + original[start:].replace(
+                    "ref: ${{ github.sha }}", "ref: main", 1,
+                )
+                with self.assertRaisesRegex(ValueError, "exact-source evidence"):
+                    validate_cache_policy(changed)
 
     def test_metrics_distinguish_uncached_target_and_missing_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -17,6 +17,12 @@ class IntegrationImageParityTests(unittest.TestCase):
         self.harness += "\n" + (
             ROOT / "app/rust/crates/integration_data_fixtures/src/lib.rs"
         ).read_text(encoding="utf-8")
+        self.harness += "\n" + (
+            ROOT / "app/rust/crates/integration_graph_fixtures/src/lib.rs"
+        ).read_text(encoding="utf-8")
+        self.harness += "\n" + (
+            ROOT / "app/rust/crates/integration_temporal_fixtures/src/lib.rs"
+        ).read_text(encoding="utf-8")
 
     def test_real_harness_matches_real_compose(self):
         self.assertEqual(image_contract_failures(self.harness, self.compose), [])

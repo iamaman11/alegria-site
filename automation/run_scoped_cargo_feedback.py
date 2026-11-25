@@ -20,7 +20,8 @@ from typing import Mapping
 
 from cargo_feedback import run_cargo
 from ci_impact import (
-    ROOT, SUITE_OWNERS, WORKSPACE, e2e_shard_commands_for_report,
+    ROOT, SUITE_OWNERS, WORKSPACE, E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS,
+    e2e_shard_commands_for_report,
     suite_commands_by_ci_job, suite_environment_for_report,
 )
 from dev_rust_feedback import commands_for_report
@@ -39,19 +40,44 @@ OUTBOX_E2E_PACKAGE = "integration_outbox_e2e"
 OUTBOX_E2E_COMMAND_PREFIX = (
     "cargo", "test", "-p", OUTBOX_E2E_PACKAGE, "--features", "e2e", "--lib",
 )
+GRAPH_E2E_PACKAGE = "integration_graph_e2e"
+QDRANT_E2E_PACKAGE = "integration_qdrant_e2e"
+TEMPORAL_E2E_PACKAGE = "integration_temporal_e2e"
+PG_APP_E2E_PACKAGE = "integration_pg_app_e2e"
+NEW_E2E_PACKAGE_PREFIXES = tuple(
+    ("cargo", "test", "-p", package, "--features", "e2e", "--lib")
+    for package in (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE)
+)
 E2E_COMMAND_PREFIXES = (
     VERIFY_E2E_COMMAND_PREFIX, PG_E2E_COMMAND_PREFIX, OUTBOX_E2E_COMMAND_PREFIX,
-)
+) + NEW_E2E_PACKAGE_PREFIXES
 VERIFY_E2E_COMMAND_SUFFIX = ("--locked", "--", "--nocapture")
 E2E_COMPILE = [
     *VERIFY_E2E_COMMAND_PREFIX, "--locked", "--no-run",
 ]
 PG_E2E_COMPILE = [*PG_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
 OUTBOX_E2E_COMPILE = [*OUTBOX_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
+NEW_E2E_COMPILES = {
+    package: [*prefix, "--locked", "--no-run"]
+    for package, prefix in zip(
+        (GRAPH_E2E_PACKAGE, QDRANT_E2E_PACKAGE, TEMPORAL_E2E_PACKAGE, PG_APP_E2E_PACKAGE),
+        NEW_E2E_PACKAGE_PREFIXES,
+    )
+}
+NEW_E2E_ARTIFACT_OWNERS = {
+    "graph_harness": GRAPH_E2E_PACKAGE,
+    "qdrant_harness": QDRANT_E2E_PACKAGE,
+    "temporal_harness": TEMPORAL_E2E_PACKAGE,
+    "pg_app_harness": PG_APP_E2E_PACKAGE,
+}
 EXACT_EXECUTABLE_NAMES = {
     "integration_harness": "integration_harness-ci-exact",
     PG_E2E_PACKAGE: "integration_pg_v3_e2e-ci-exact",
     OUTBOX_E2E_PACKAGE: "integration_outbox_e2e-ci-exact",
+    GRAPH_E2E_PACKAGE: "integration_graph_e2e-ci-exact",
+    QDRANT_E2E_PACKAGE: "integration_qdrant_e2e-ci-exact",
+    TEMPORAL_E2E_PACKAGE: "integration_temporal_e2e-ci-exact",
+    PG_APP_E2E_PACKAGE: "integration_pg_app_e2e-ci-exact",
 }
 E2E_MAX_PROCESSES = 2
 TEST_RESULT_COUNT = re.compile(r"test result: ok\. (\d+) passed;")
@@ -259,6 +285,7 @@ def run_exact_precompiled_e2e_shard(
     report: dict, shard: str, *, suite_job: str, prebuilt_executable: Path,
     prebuilt_pg_executable: Path | None = None,
     prebuilt_outbox_executable: Path | None = None,
+    extra_prebuilt_executables: Mapping[str, Path | None] | None = None,
 ) -> list[dict]:
     """Execute one nonempty, registry-owned E2E shard on its *own* CI runner.
 
@@ -294,6 +321,10 @@ def run_exact_precompiled_e2e_shard(
         PG_E2E_PACKAGE: prebuilt_pg_executable,
         OUTBOX_E2E_PACKAGE: prebuilt_outbox_executable,
     }
+    if extra_prebuilt_executables:
+        if not set(extra_prebuilt_executables) <= set(NEW_E2E_ARTIFACT_OWNERS.values()):
+            raise ValueError("unrecognized additional physical E2E owner")
+        executables.update(extra_prebuilt_executables)
     for name, command, _, _ in selected:
         package = e2e_package_for_command(command)
         executable = executables[package]
@@ -395,7 +426,7 @@ def main() -> int:
         help="For full impact only, require the parallel verify job to run cargo test --workspace",
     )
     parser.add_argument(
-        "--suite-job", choices=("architecture-and-rust", "verify"),
+        "--suite-job", choices=("architecture-and-rust", "verify", "auto"),
         default="architecture-and-rust",
         help="Existing CI owner executing this exact-source suite partition",
     )
@@ -409,34 +440,49 @@ def main() -> int:
                         help="Compile the independent PostgreSQL V3 E2E owner test target once")
     parser.add_argument("--compile-outbox-harness-only", action="store_true",
                         help="Compile the independent A14 Outbox E2E owner test target once")
+    parser.add_argument("--compile-owner-harness", choices=tuple(NEW_E2E_ARTIFACT_OWNERS),
+                        help="Compile one additional physically isolated exact-source E2E owner")
     parser.add_argument("--harness-bundle-dir", type=Path,
                         help="Fresh output directory for the single full-impact E2E compiler artifact")
     parser.add_argument("--pg-harness-bundle-dir", type=Path,
                         help="Fresh output directory for the independent PG V3 compiler artifact")
     parser.add_argument("--outbox-harness-bundle-dir", type=Path,
                         help="Fresh output directory for the independent A14 Outbox compiler artifact")
+    parser.add_argument("--owner-harness-bundle-dir", type=Path,
+                        help="Fresh output directory for the selected additional E2E owner")
     parser.add_argument("--execute-precompiled-e2e", action="store_true",
                         help="For full impact, run exact owner suites from previously verified binary artifacts")
     parser.add_argument("--e2e-shard",
                         help="Exact nonempty shard name selected by CI impact; full precompiled E2E only")
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
+    if args.suite_job == "auto":
+        if not args.execute_precompiled_e2e or not args.e2e_shard:
+            raise ValueError("automatic source-suite CI owner requires a real exact E2E shard")
+        if args.e2e_shard in E2E_ARCH_SHARDS:
+            args.suite_job = "architecture-and-rust"
+        elif args.e2e_shard in E2E_VERIFY_SHARDS:
+            args.suite_job = "verify"
+        else:
+            raise ValueError("unknown physical shard has no authorized source-suite CI owner")
     actual_sha = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
-    compiling = args.compile_harness_only or args.compile_pg_harness_only or args.compile_outbox_harness_only
+    compiling = (args.compile_harness_only or args.compile_pg_harness_only
+                 or args.compile_outbox_harness_only or bool(args.compile_owner_harness))
     if compiling or args.execute_precompiled_e2e:
         if (report.get("analysis") != "full"
                 or compiling == args.execute_precompiled_e2e
                 or sum((args.compile_harness_only, args.compile_pg_harness_only,
-                        args.compile_outbox_harness_only)) > 1
+                        args.compile_outbox_harness_only, bool(args.compile_owner_harness))) > 1
                 or (compiling and args.e2e_shard is not None)
                 or args.delegate_workspace_unit_tests_to_verify
                 or (args.compile_harness_only != (args.harness_bundle_dir is not None))
                 or (args.compile_pg_harness_only != (args.pg_harness_bundle_dir is not None))
                 or (args.compile_outbox_harness_only != (args.outbox_harness_bundle_dir is not None))
+                or (bool(args.compile_owner_harness) != (args.owner_harness_bundle_dir is not None))
                 or (args.parallel_verify_e2e and args.suite_job != "verify")
                 or not {"architecture-and-rust", "verify"}.issubset(report.get("selected_ci_jobs", []))):
             raise ValueError("full exact-source compiler/E2E stage must be exclusive and correctly gated")
@@ -461,6 +507,16 @@ def main() -> int:
             package_ci_artifact("outbox_harness", actual_sha, args.outbox_harness_bundle_dir, harness=executable)
             print("CI_OUTBOX_E2E_HARNESS_BUILD=PASS", flush=True)
             return 0
+        if args.compile_owner_harness:
+            kind = args.compile_owner_harness
+            package = NEW_E2E_ARTIFACT_OWNERS[kind]
+            command = NEW_E2E_COMPILES[package]
+            print("CI_PHYSICAL_E2E_PRECOMPILE owner=" + package + " COMMAND=" + " ".join(command), flush=True)
+            compilation = run_cargo(command, cwd=WORKSPACE)
+            executable = precompiled_verify_executable(compilation, package=package)
+            package_ci_artifact(kind, actual_sha, args.owner_harness_bundle_dir, harness=executable)
+            print(f"CI_PHYSICAL_E2E_HARNESS_BUILD=PASS owner={package}", flush=True)
+            return 0
         if args.e2e_shard is not None:
             if args.compile_harness_only or args.parallel_verify_e2e:
                 raise ValueError("a precompiled shard cannot compile or request old worker-level parallelism")
@@ -469,6 +525,10 @@ def main() -> int:
                 prebuilt_executable=exact_e2e_executable("integration_harness"),
                 prebuilt_pg_executable=exact_e2e_executable(PG_E2E_PACKAGE),
                 prebuilt_outbox_executable=exact_e2e_executable(OUTBOX_E2E_PACKAGE),
+                extra_prebuilt_executables={
+                    package: exact_e2e_executable(package)
+                    for package in NEW_E2E_ARTIFACT_OWNERS.values()
+                },
             )
             print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} shard={args.e2e_shard} "
                   f"tests={sum(row['matched_tests'] for row in results)}", flush=True)
@@ -483,7 +543,7 @@ def main() -> int:
         print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} suites={len(suites)} tests={sum(row['matched_tests'] for row in results)}", flush=True)
         return 0
     if (args.harness_bundle_dir is not None or args.pg_harness_bundle_dir is not None
-            or args.outbox_harness_bundle_dir is not None
+            or args.outbox_harness_bundle_dir is not None or args.owner_harness_bundle_dir is not None
             or args.e2e_shard is not None):
         raise ValueError("harness bundle is valid only for the dedicated full compiler stage")
     if args.suite_job == "verify":

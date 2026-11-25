@@ -20,7 +20,6 @@ LIB_REQUIRED_SNIPPETS = [
     "SEO_LLM_LOCAL_ENDPOINT",
     "InfraHarness",
     "TemporalHarness",
-    "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
 ]
 
 ENV_REQUIRED_SNIPPETS = [
@@ -105,7 +104,21 @@ def main() -> int:
         print("FAIL integration_harness lib_missing=" + ",".join(missing_lib))
         return 1
 
+    # The full four-provider scenario belongs to the opt-in Temporal owner,
+    # never to a PG-only synthetic placeholder or the broad test executable.
+    temporal_tests = ROOT / "app/rust/crates/integration_temporal_e2e/src/lib.rs"
+    temporal_lib = read_with_includes(temporal_tests)
+    if "fn draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness()" not in temporal_lib:
+        print("FAIL integration_harness missing genuine full-infra Temporal owner test")
+        return 1
+
     env_text = (ROOT / "app/rust/crates/integration_harness/src/env_overrides.rs").read_text()
+    if "pub use integration_test_env::*;" not in env_text:
+        print("FAIL integration_harness env re-export missing")
+        return 1
+    # The real RAII implementation is shared across independent Cargo test
+    # owners; retain strict restoration checks against its one source.
+    env_text += "\n" + (ROOT / "app/rust/crates/integration_test_env/src/lib.rs").read_text()
     missing_env = [snippet for snippet in ENV_REQUIRED_SNIPPETS if snippet not in env_text]
     if missing_env:
         print("FAIL integration_harness env_missing=" + ",".join(missing_env))
@@ -123,6 +136,22 @@ def main() -> int:
         print("FAIL integration_harness missing shared real-container fixtures")
         return 1
     containers_text += "\n" + shared_fixtures.read_text(encoding="utf-8")
+    if "pub use integration_graph_fixtures::Neo4jHarness;" not in containers_text:
+        print("FAIL integration_harness missing shared Neo4j re-export")
+        return 1
+    graph_fixtures = ROOT / "app/rust/crates/integration_graph_fixtures/src/lib.rs"
+    if not graph_fixtures.exists():
+        print("FAIL integration_harness missing shared real Neo4j fixture")
+        return 1
+    containers_text += "\n" + graph_fixtures.read_text(encoding="utf-8")
+    temporal_fixture = ROOT / "app/rust/crates/integration_temporal_fixtures/src/lib.rs"
+    if "pub use integration_temporal_fixtures::TemporalHarness;" not in containers_text:
+        print("FAIL integration_harness missing real Temporal fixture re-export")
+        return 1
+    if not temporal_fixture.exists():
+        print("FAIL integration_harness missing real Temporal fixture")
+        return 1
+    containers_text += "\n" + temporal_fixture.read_text(encoding="utf-8")
     missing_containers = [
         snippet for snippet in CONTAINERS_REQUIRED_SNIPPETS if snippet not in containers_text
     ]

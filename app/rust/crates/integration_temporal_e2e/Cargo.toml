@@ -1,0 +1,67 @@
+[package]
+name = "integration_temporal_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# The five canonical/full-stack Temporal scenarios run against real disposable
+# PostgreSQL, Qdrant, Neo4j, Temporal and exact-source Worker binaries. This
+# opt-in package never needs the broad harness's test executable.
+[features]
+default = []
+e2e = [
+  "dep:anyhow",
+  "dep:async-trait",
+  "dep:contracts",
+  "dep:graph_neo4j",
+  "dep:infrastructure",
+  "dep:integration_harness",
+  "integration_harness/e2e",
+  "dep:operation_protocol",
+  "dep:postgres_store",
+  "dep:primitives",
+  "dep:projection_delivery",
+  "dep:prost",
+  "dep:runtime_composition",
+  "dep:seo_application",
+  "dep:seo_domain",
+  "dep:seo_ports",
+  "dep:seo_steps",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:serial_test",
+  "dep:sqlx",
+  "dep:temporal_gateway",
+  "dep:temporalio-client",
+  "dep:temporalio-common",
+  "dep:tokio",
+  "dep:uuid",
+  "dep:vector_qdrant",
+]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+async-trait = { version = "0.1", optional = true }
+contracts = { path = "../contracts", optional = true }
+graph_neo4j = { path = "../graph_neo4j", optional = true }
+infrastructure = { path = "../infrastructure", optional = true }
+integration_harness = { path = "../integration_harness", default-features = false, optional = true }
+operation_protocol = { path = "../operation_protocol", optional = true }
+postgres_store = { path = "../postgres_store", optional = true }
+primitives = { path = "../primitives", optional = true }
+projection_delivery = { path = "../projection_delivery", optional = true }
+prost = { workspace = true, optional = true }
+runtime_composition = { path = "../runtime_composition", optional = true }
+seo_application = { path = "../seo_application", optional = true }
+seo_domain = { path = "../seo_domain", optional = true }
+seo_ports = { path = "../seo_ports", optional = true }
+seo_steps = { path = "../seo_steps", optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+serial_test = { version = "3.2.0", optional = true }
+sqlx = { workspace = true, optional = true }
+temporal_gateway = { path = "../temporal_gateway", optional = true }
+temporalio-client = { workspace = true, optional = true }
+temporalio-common = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }

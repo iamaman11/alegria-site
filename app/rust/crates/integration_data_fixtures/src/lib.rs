@@ -1,9 +1,10 @@
 //! Shared real-container test fixtures, independent of runtime composition.
 //! Production code must not acquire a dependency on this fixture-only crate.
 
-#![cfg(feature = "e2e")]
+#![cfg(any(feature = "pg", feature = "qdrant"))]
 
 use anyhow::{Context, Result};
+#[cfg(feature = "pg")]
 use sqlx::{postgres::PgPoolOptions, types::Json, PgPool};
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
@@ -11,8 +12,10 @@ use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
 };
 use tokio::time::{sleep, Duration};
+#[cfg(feature = "qdrant")]
 use vector_qdrant::Qdrant;
 
+#[cfg(feature = "pg")]
 #[derive(Debug)]
 pub struct PostgresHarness {
     pub database_url: String,
@@ -20,6 +23,7 @@ pub struct PostgresHarness {
     _container: ContainerAsync<GenericImage>,
 }
 
+#[cfg(feature = "qdrant")]
 pub struct QdrantHarness {
     pub qdrant_url: String,
     pub qdrant_rest_url: String,
@@ -27,6 +31,7 @@ pub struct QdrantHarness {
     _container: ContainerAsync<GenericImage>,
 }
 
+#[cfg(feature = "pg")]
 impl PostgresHarness {
     pub async fn start() -> Result<Self> {
         let image = GenericImage::new("postgres", "18.7-alpine")
@@ -80,6 +85,7 @@ impl PostgresHarness {
     }
 }
 
+#[cfg(feature = "qdrant")]
 impl QdrantHarness {
     pub async fn start() -> Result<Self> {
         let image = GenericImage::new("qdrant/qdrant", "v1.20.1")
@@ -129,6 +135,7 @@ impl QdrantHarness {
     }
 }
 
+#[cfg(feature = "qdrant")]
 async fn probe_qdrant(client: &Qdrant) -> Result<()> {
     let mut last_error = None;
     for _ in 0..20 {
@@ -142,6 +149,7 @@ async fn probe_qdrant(client: &Qdrant) -> Result<()> {
         .context("probe qdrant harness failed")
 }
 
+#[cfg(feature = "pg")]
 async fn bootstrap_schema(pool: &PgPool) -> Result<()> {
     let schema = include_str!("../../../../db/schema.sql");
     sqlx::raw_sql(schema)
@@ -153,6 +161,7 @@ async fn bootstrap_schema(pool: &PgPool) -> Result<()> {
 
 /// Seed the same real visa context and concept rows used by Truth and Outbox
 /// transaction E2E. Shared by both owners to keep the SQL contract identical.
+#[cfg(feature = "pg")]
 pub async fn seed_truth_context_and_concept(
     pool: &PgPool,
     context_key: &str,
@@ -197,6 +206,7 @@ pub async fn seed_truth_context_and_concept(
 
 /// Insert actual raw.pages and raw.sections rows for SQL Truth extraction,
 /// returning their canonical persisted identities instead of invented IDs.
+#[cfg(feature = "pg")]
 pub async fn seed_raw_page_with_section(
     pool: &PgPool,
     url: &str,

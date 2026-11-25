@@ -1,0 +1,45 @@
+[package]
+name = "integration_qdrant_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# The knowledge A13 and REST-to-gRPC projection checks own one real disposable
+# Qdrant E2E binary. The broad integration harness is imported only for its
+# ordinary HTTP stubs/env helpers, never with its heavyweight e2e feature.
+[features]
+default = []
+e2e = [
+  "dep:contracts",
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/e2e",
+  "dep:integration_harness",
+  "dep:primitives",
+  "dep:projection_delivery",
+  "dep:prost",
+  "dep:runtime_composition",
+  "dep:seo_application",
+  "dep:seo_ports",
+  "dep:serial_test",
+  "dep:sqlx",
+  "dep:tokio",
+  "dep:uuid",
+  "dep:vector_qdrant",
+]
+
+[dependencies]
+contracts = { path = "../contracts", optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+integration_harness = { path = "../integration_harness", default-features = false, optional = true }
+primitives = { path = "../primitives", optional = true }
+projection_delivery = { path = "../projection_delivery", optional = true }
+prost = { workspace = true, optional = true }
+runtime_composition = { path = "../runtime_composition", optional = true }
+seo_application = { path = "../seo_application", optional = true }
+seo_domain = { path = "../seo_domain" }
+seo_ports = { path = "../seo_ports", optional = true }
+serial_test = { version = "3.2.0", optional = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }

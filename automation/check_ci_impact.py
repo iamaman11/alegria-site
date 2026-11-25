@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from ci_impact import (
     CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
-    E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
+    E2E_RUNNER_PARTITIONS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
     FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
@@ -26,6 +26,8 @@ from ci_impact import (
 from dev_rust_feedback import commands_for_report
 from run_main_cache_prime import prime_commands_for_report
 from run_scoped_cargo_feedback import require_clean_truth_filter_environment
+
+NONTRUTH_FULL_CI_OWNERS = set(CI_PR_OWNERS) - {"rust-e2e-truth-harness", "rust-truth-e2e"}
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -41,6 +43,10 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/integration_harness": "integration_harness",
             "app/rust/crates/integration_outbox_e2e": "integration_outbox_e2e",
             "app/rust/crates/integration_pg_v3_e2e": "integration_pg_v3_e2e",
+            "app/rust/crates/integration_graph_e2e": "integration_graph_e2e",
+            "app/rust/crates/integration_qdrant_e2e": "integration_qdrant_e2e",
+            "app/rust/crates/integration_pg_app_e2e": "integration_pg_app_e2e",
+            "app/rust/crates/integration_temporal_e2e": "integration_temporal_e2e",
             "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
             "app/rust/crates/seo_domain": "seo_domain",
@@ -63,6 +69,10 @@ class ImpactFixtures(unittest.TestCase):
             "integration_harness": set(),
             "integration_outbox_e2e": set(),
             "integration_pg_v3_e2e": set(),
+            "integration_graph_e2e": set(),
+            "integration_qdrant_e2e": set(),
+            "integration_pg_app_e2e": set(),
+            "integration_temporal_e2e": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
@@ -103,7 +113,9 @@ class ImpactFixtures(unittest.TestCase):
         paths = [".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"]
         report = self.impact(*paths)
         self.assertEqual(report["scope"], "full")
-        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS) - {
+            "rust-e2e-truth-harness", "rust-truth-e2e",
+        })
         self.assertIn("temporal-worker", report["selected_images"])
         decision = worker_release_decision(report, paths, manual=False)
         self.assertFalse(decision["worker_required"])
@@ -112,7 +124,9 @@ class ImpactFixtures(unittest.TestCase):
     def test_shared_real_provider_fixtures_fail_closed_across_both_e2e_crates(self) -> None:
         report = self.impact("app/rust/crates/integration_data_fixtures/src/postgres.rs")
         self.assertEqual(report["scope"], "full")
-        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS) - {
+            "rust-e2e-truth-harness", "rust-truth-e2e",
+        })
         self.assertIn("outbox_a14", report["selected_suites"])
         self.assertIn("knowledge_a13", report["selected_suites"])
         self.assertIn("pg_effect_v3", report["selected_suites"])
@@ -122,16 +136,18 @@ class ImpactFixtures(unittest.TestCase):
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
                              for _, _, _, count in rows), 38)
-        self.assertTrue(all(shards[shard] for shard in E2E_ARCH_RUNNER_SHARDS
+        self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
     def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
         self.assertTrue({
-            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-pg-app-harness",
+            "rust-e2e-temporal-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
             "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
-            "rust-architecture-e2e", "rust-verify-e2e", "rust-outbox-e2e",
+            "rust-graph-e2e", "rust-qdrant-e2e", "rust-pg-app-e2e", "rust-temporal-legacy-e2e",
+            "rust-temporal-v3-e2e", "rust-outbox-e2e",
         } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
         assignments = suite_commands_by_ci_job(report)
@@ -152,8 +168,20 @@ class ImpactFixtures(unittest.TestCase):
         for owner in ("pg_effect_v3", "pg_temporal_v3"):
             self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_pg_v3_e2e")
         self.assertEqual(SUITE_OWNERS["outbox_a14"]["command"][3], "integration_outbox_e2e")
-        for owner in set(SUITE_OWNERS) - {"pg_effect_v3", "pg_temporal_v3", "outbox_a14"}:
-            self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_harness")
+        package_owners = {
+            "integration_harness": {"truth_certification"},
+            "integration_graph_e2e": {"graph_query"},
+            "integration_qdrant_e2e": {"knowledge_a13", "vector_projection"},
+            "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
+            "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
+                                       "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity"},
+            "integration_pg_v3_e2e": {"pg_effect_v3", "pg_temporal_v3"},
+            "integration_outbox_e2e": {"outbox_a14"},
+        }
+        self.assertEqual(set().union(*package_owners.values()), set(SUITE_OWNERS))
+        for package, suites in package_owners.items():
+            for suite in suites:
+                self.assertEqual(SUITE_OWNERS[suite]["command"][3], package)
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["command"][7], "temporal_effect_v3_")
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
             "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
@@ -196,28 +224,26 @@ class ImpactFixtures(unittest.TestCase):
         }, set())
         self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 2))
         self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
-        self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["verify_c"])
+        self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
 
     def test_pg_runner_does_not_require_legacy_harness_or_drop_live_shards(self) -> None:
         self.assertEqual(E2E_PG_SHARDS, ("pg_temporal", "verify_d"))
         self.assertEqual(E2E_OUTBOX_SHARDS, ("outbox",))
-        self.assertEqual(set(E2E_ARCH_RUNNER_SHARDS), set(E2E_ARCH_SHARDS) - set(E2E_PG_SHARDS))
-        self.assertEqual(set(E2E_VERIFY_RUNNER_SHARDS), set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS) - set(E2E_OUTBOX_SHARDS))
         self.assertEqual(
-            set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS) | set(E2E_OUTBOX_SHARDS),
+            set().union(*(set(names) for names in E2E_RUNNER_PARTITIONS.values())),
             set(E2E_SHARD_RUNS),
         )
+        self.assertEqual(sum(len(names) for names in E2E_RUNNER_PARTITIONS.values()), len(E2E_SHARD_RUNS))
         self.assertEqual({suite for shard in E2E_PG_SHARDS
                           for suite, *_ in E2E_SHARD_RUNS[shard]}, {"pg_temporal_v3", "pg_effect_v3"})
         self.assertEqual(SUITE_OWNERS["outbox_a14"]["runtime_binaries"], {
             "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
         })
         self.assertEqual(E2E_SHARD_RUNS["outbox"], (("outbox_a14", "outbox_a14_", 9),))
-        self.assertEqual({*E2E_SHARD_RUNS["verify_b"]}, {
-            ("knowledge_a13", "knowledge_a13_", 3),
-            ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
-        })
+        self.assertEqual(E2E_SHARD_RUNS["qdrant_knowledge"], (("knowledge_a13", "knowledge_a13_", 3),))
+        self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
+                      E2E_SHARD_RUNS["pg_app_delivery"])
 
     def test_full_real_e2e_shards_cover_all_38_existing_tests_without_duplicate_filters(self) -> None:
         # Select all known live sources, including the optional canonical
@@ -260,7 +286,7 @@ class ImpactFixtures(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not cover|lost a mandatory"):
                 e2e_shard_commands_for_report(report)
         duplicated = dict(E2E_SHARD_RUNS)
-        duplicated["verify_a"] = (*duplicated["verify_a"], duplicated["verify_a"][0])
+        duplicated["pg_app_delivery"] = (*duplicated["pg_app_delivery"], duplicated["pg_app_delivery"][0])
         with patch.dict("ci_impact.E2E_SHARD_RUNS", duplicated, clear=True):
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 e2e_shard_commands_for_report(report)
@@ -269,7 +295,7 @@ class ImpactFixtures(unittest.TestCase):
             e2e_shard_commands_for_report(scoped)
 
     def test_real_canonical_temporal_test_inventory_is_exactly_sharded(self) -> None:
-        source_root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_harness/src/tests"
+        source_root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_temporal_e2e/src/tests"
         declared = set()
         for source in source_root.glob("*.rs"):
             declared.update(re.findall(
@@ -368,8 +394,10 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_full_only_compiler_handoff_jobs_not_selected_for_scoped_changes(self) -> None:
         full_only = {
-            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
-            "rust-architecture-e2e", "rust-verify-e2e",
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-pg-app-harness",
+            "rust-e2e-temporal-harness", "rust-e2e-truth-harness", "rust-e2e-pg-harness",
+            "rust-e2e-outbox-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            *E2E_RUNNER_PARTITIONS,
         }
         for changed in (
             "app/rust/services/temporal/src/main.rs",
@@ -387,7 +415,12 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertFalse(full_only & set(report["selected_ci_jobs"]))
         full = self.impact(".github/workflows/ci.yml")
         self.assertEqual(full["scope"], "full")
-        self.assertTrue(full_only <= set(full["selected_ci_jobs"]))
+        self.assertEqual(full_only - {"rust-e2e-truth-harness", "rust-truth-e2e"},
+                         full_only & set(full["selected_ci_jobs"]))
+        self.assertNotIn("rust-e2e-truth-harness", full["selected_ci_jobs"])
+        fixture_full = self.impact(".github/workflows/ci.yml", TRUTH_FIXTURE_PREFIX + "candidate.html")
+        self.assertIn("rust-e2e-truth-harness", fixture_full["selected_ci_jobs"])
+        self.assertIn("rust-truth-e2e", fixture_full["selected_ci_jobs"])
 
     def test_pg_v3_e2e_is_selected_by_real_hitl_mutation_and_shared_protocol(self) -> None:
         # The V3 effect calls the existing HITL SQL owner directly. A change
@@ -446,7 +479,7 @@ class ImpactFixtures(unittest.TestCase):
             with self.subTest(path=path):
                 report = self.impact(path)
                 self.assertEqual(report["scope"], "full")
-                self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+                self.assertEqual(set(report["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
                 self.assertFalse(worker_release_decision(report, [path], manual=False)["worker_required"])
 
         diagnostic = "automation/report_sccache_failures.py"
@@ -669,25 +702,23 @@ class ImpactFixtures(unittest.TestCase):
                 }:
                     self.assertIn("draft_qa_scenario", report["selected_suites"])
 
-        # Unit-level QA passes are not enough: ensure the bound E2E command
-        # exercises the actual persistence path with its existing full harness.
+        # Domain policy changes select BOTH the genuine full-infrastructure
+        # Temporal scenario and independent PostgreSQL fault-injection owner.
         self.assertEqual(SUITE_OWNERS["draft_qa_scenario"]["command"][:7], (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib",
         ))
-        # One Cargo test filter executes both the successful full scenario
-        # and the SQL fault-injection rollback test, without a second job.
-        self.assertIn("draft_qa_", SUITE_OWNERS["draft_qa_scenario"]["command"])
+        self.assertEqual(SUITE_OWNERS["draft_qa_pg_persistence"]["command"][3], "integration_pg_app_e2e")
         repo = Path(__file__).resolve().parents[1]
-        scenario_test = repo / "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs"
-        fault_test = repo / "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs"
+        scenario_test = repo / "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs"
+        fault_test = repo / "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs"
         self.assertIn("fn draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness()", scenario_test.read_text())
         self.assertIn("fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft()", fault_test.read_text())
-        self.assertIn("draft_qa_scenario", self.impact("app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs")["selected_suites"])
+        self.assertIn("draft_qa_pg_persistence", self.impact("app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs")["selected_suites"])
         self.assertIn("cms_revision_", SUITE_OWNERS["cms_review_revision"]["command"])
-        cms_test = repo / "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs"
+        cms_test = repo / "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs"
         self.assertIn("fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_body_sections()", cms_test.read_text())
-        self.assertIn("cms_atomic_artifact_fault", cms_test.read_text())
+        self.assertIn("cms_revision_", cms_test.read_text())
 
     def test_main_prime_no_compilation_for_runtime_fixture_only(self) -> None:
         report = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path.html")
@@ -850,7 +881,7 @@ class ImpactFixtures(unittest.TestCase):
         )
         self.assertEqual(result["scope"], "full")
         self.assertEqual(set(result["affected_crates"]), set(reverse))
-        self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(result["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
 
     def test_isolated_gsc_does_not_trigger_other_services(self) -> None:
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
@@ -1019,7 +1050,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(got["selected_suites"], ["graph_query"])
         self.assertEqual(
             dict(suite_commands_for_report(got))["graph_query"],
-            ["cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            ["cargo", "test", "-p", "integration_graph_e2e", "--features", "e2e",
              "--lib", "graph_capability_", "--locked", "--", "--nocapture"],
         )
 
@@ -1127,7 +1158,7 @@ class ImpactFixtures(unittest.TestCase):
             with self.subTest(path=path):
                 result = self.impact(path)
                 self.assertEqual(result["scope"], "full")
-                self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
+                self.assertEqual(set(result["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
 
     def test_ci_only_file_does_not_hide_a_real_runtime_change(self) -> None:
         result = self.impact(
@@ -1195,14 +1226,16 @@ class ImpactFixtures(unittest.TestCase):
         outcome = self.impact(path)
         self.assertEqual(outcome["scope"], "scoped")
         self.assertIn("draft_qa_scenario", outcome["selected_suites"])
+        self.assertIn("draft_qa_pg_persistence", outcome["selected_suites"])
         self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
-        self.assertIn("draft_qa_", dict(suite_commands_for_report(outcome))["draft_qa_scenario"])
+        self.assertIn("draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft",
+                      dict(suite_commands_for_report(outcome))["draft_qa_pg_persistence"])
 
     def test_planning_and_projection_atomicity_select_actual_postgres_suite(self) -> None:
         for path in (
             "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
             "app/rust/crates/seo_domain/src/link_recommendation.rs",
-            "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
+            "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
@@ -1275,9 +1308,9 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
 
     def test_real_temporal_editorial_gate_e2e_selects_both_runtime_and_cms(self) -> None:
-        outcome = self.impact("app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs")
+        outcome = self.impact("app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs")
         self.assertIn("temporal_restart", outcome["selected_suites"])
-        self.assertIn("cms_review_revision", outcome["selected_suites"])
+        self.assertNotIn("cms_review_revision", outcome["selected_suites"])
         command = dict(suite_commands_for_report(outcome))["temporal_restart"]
         self.assertIn("canonical_temporal_", command)
 
@@ -1401,7 +1434,7 @@ class ImpactFixtures(unittest.TestCase):
             {name for name, owner in SUITE_OWNERS.items() if owner["on_unknown_global_input"]},
         )
         self.assertEqual(outcome["selected_images"], ["temporal-worker"])
-        self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(outcome["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
         self.assertTrue(outcome["full_scope_reasons"])
 
     def test_unknown_or_missing_suite_in_report_is_rejected(self) -> None:

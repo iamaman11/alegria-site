@@ -14,10 +14,13 @@ from check_rust_adapter_boundaries import (
     PG_E2E_DIR,
     PG_E2E_SRC,
     PG_E2E_TEMPORAL_SDKS,
+    PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS,
+    PG_RUNTIME_MANIFEST,
     RUST_ROOT,
     VOYAGE_MANIFEST,
     pg_e2e_direct_temporal_sdk_allowed,
     provider_delivery_closure_failures,
+    pg_runtime_closure_failures,
     workspace_dependency_closure,
 )
 
@@ -64,6 +67,21 @@ class PgE2eSdkBoundaryTests(unittest.TestCase):
             MANIFEST_DEP_EXCEPTIONS[(PG_E2E_DIR / "Cargo.toml").resolve()],
             PG_E2E_TEMPORAL_SDKS,
         )
+
+
+class PgRuntimeOwnerBoundaryTests(unittest.TestCase):
+    def test_pg_repository_is_a_real_provider_free_cargo_owner(self) -> None:
+        closure, direct = workspace_dependency_closure(PG_RUNTIME_MANIFEST)
+        self.assertEqual(pg_runtime_closure_failures(closure, direct), [])
+        self.assertTrue({"pg_runtime_ports", "postgres_store", "seo_ports"} <= closure)
+
+    def test_any_provider_or_temporal_reconnection_fails_closed(self) -> None:
+        closure, direct = workspace_dependency_closure(PG_RUNTIME_MANIFEST)
+        for forbidden in PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS:
+            with self.subTest(owner=forbidden):
+                self.assertIn(forbidden, " ".join(
+                    pg_runtime_closure_failures(closure | {forbidden}, direct)
+                ))
 
 
 class OutboxProviderDeliveryBoundaryTests(unittest.TestCase):

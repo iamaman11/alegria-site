@@ -1613,6 +1613,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph_capability"
+version = "0.1.0"
+dependencies = [
+ "graph_neo4j",
+ "primitives",
+]
+
+[[package]]
 name = "graph_neo4j"
 version = "0.1.0"
 dependencies = [
@@ -2149,6 +2157,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_graph_e2e"
+version = "0.1.0"
+dependencies = [
+ "graph_capability",
+ "graph_neo4j",
+ "integration_graph_fixtures",
+ "integration_test_env",
+ "serial_test",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "integration_graph_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "graph_neo4j",
+ "testcontainers",
+ "tokio",
+]
+
+[[package]]
 name = "integration_harness"
 version = "0.1.0"
 dependencies = [
@@ -2159,6 +2190,9 @@ dependencies = [
  "graph_neo4j",
  "infrastructure",
  "integration_data_fixtures",
+ "integration_graph_fixtures",
+ "integration_temporal_fixtures",
+ "integration_test_env",
  "operation_protocol",
  "postgres_store",
  "primitives",
@@ -2177,7 +2211,6 @@ dependencies = [
  "temporal_gateway",
  "temporalio-client",
  "temporalio-common",
- "temporalio-sdk-core",
  "testcontainers",
  "tokio",
  "uuid",
@@ -2209,6 +2242,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_pg_app_e2e"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "contracts",
+ "infrastructure",
+ "integration_data_fixtures",
+ "integration_harness",
+ "pg_runtime_ports",
+ "reqwest 0.13.5",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "integration_qdrant_e2e"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "integration_data_fixtures",
+ "integration_harness",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "runtime_composition",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
 name = "integration_pg_v3_e2e"
 version = "0.1.0"
 dependencies = [
@@ -2225,6 +2303,54 @@ dependencies = [
  "tokio",
  "uuid",
 ]
+
+[[package]]
+name = "integration_temporal_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "contracts",
+ "graph_neo4j",
+ "infrastructure",
+ "integration_harness",
+ "operation_protocol",
+ "postgres_store",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "runtime_composition",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_temporal_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "temporalio-client",
+ "temporalio-sdk-core",
+ "testcontainers",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "integration_test_env"
+version = "0.1.0"
 
 [[package]]
 name = "inventory"
@@ -3229,6 +3355,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg_runtime_ports"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "contracts",
+ "infrastructure",
+ "primitives",
+ "runtime_models",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "sqlx",
+ "uuid",
+]
+
+[[package]]
 name = "phf"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4160,9 +4303,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "contracts",
+ "graph_capability",
  "graph_neo4j",
  "infrastructure",
  "postgres_store",
+ "pg_runtime_ports",
  "primitives",
  "prost",
  "runtime_models",

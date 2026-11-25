@@ -1,0 +1,20 @@
+[package]
+name = "pg_runtime_ports"
+version = "0.1.0"
+edition = "2021"
+
+# Production PostgreSQL repository for SEO application ports. This crate owns
+# the actual SQL-oriented implementations; graph/semantic/provider capability
+# dispatch stays in runtime_composition's local adapter wrapper.
+[dependencies]
+contracts = { path = "../contracts" }
+infrastructure = { path = "../infrastructure" }
+primitives = { path = "../primitives" }
+runtime_models = { path = "../runtime_models" }
+seo_domain = { path = "../seo_domain" }
+seo_ports = { path = "../seo_ports" }
+seo_steps = { path = "../seo_steps" }
+async-trait = "0.1"
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }

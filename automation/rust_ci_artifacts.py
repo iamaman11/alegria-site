@@ -27,6 +27,12 @@ KINDS = {
     "harness": ("integration_harness_test",),
     "pg_harness": ("integration_pg_v3_e2e_test",),
     "outbox_harness": ("integration_outbox_e2e_test",),
+    # Each physically separate E2E owner must transport a distinct compiled
+    # executable. Never alias these to the old monolithic harness artifact.
+    "graph_harness": ("integration_graph_e2e_test",),
+    "qdrant_harness": ("integration_qdrant_e2e_test",),
+    "temporal_harness": ("integration_temporal_e2e_test",),
+    "pg_app_harness": ("integration_pg_app_e2e_test",),
     "legacy": ("temporal_worker", "outbox_worker"),
     "v3": ("temporal_orchestrator", "temporal_pg_effects"),
 }
@@ -55,7 +61,8 @@ def digest(path: Path) -> tuple[str, int]:
 def source_binaries(kind: str, *, harness: Path | None = None) -> dict[str, Path]:
     if kind not in KINDS:
         raise ValueError(f"unknown Rust CI artifact kind {kind}")
-    if kind in ("harness", "pg_harness", "outbox_harness"):
+    if kind in ("harness", "pg_harness", "outbox_harness", "graph_harness", "qdrant_harness",
+                "temporal_harness", "pg_app_harness"):
         if harness is None:
             raise ValueError("the harness bundle needs the compiler-reported test executable")
         return {KINDS[kind][0]: harness.resolve()}
@@ -126,6 +133,10 @@ def install(kind: str, source_sha: str, bundle: Path, *, target: Path = TARGET) 
             "harness": "deps/integration_harness-ci-exact",
             "pg_harness": "deps/integration_pg_v3_e2e-ci-exact",
             "outbox_harness": "deps/integration_outbox_e2e-ci-exact",
+            "graph_harness": "deps/integration_graph_e2e-ci-exact",
+            "qdrant_harness": "deps/integration_qdrant_e2e-ci-exact",
+            "temporal_harness": "deps/integration_temporal_e2e-ci-exact",
+            "pg_app_harness": "deps/integration_pg_app_e2e-ci-exact",
         }
         destination = target / exact_tests.get(kind, name)
         destination.parent.mkdir(parents=True, exist_ok=True)

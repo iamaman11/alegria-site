@@ -1,6 +1,6 @@
-use primitives::errors::DomainError;
+//! Neo4j capability and schema preflight; never owns PostgreSQL or Temporal.
 
-use graph_neo4j;
+use primitives::errors::DomainError;
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name)

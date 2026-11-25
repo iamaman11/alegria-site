@@ -39,6 +39,9 @@ GLOBAL_FILES = {
     "app/rust/Cargo.toml",
     "app/rust/rust-toolchain.toml",
     "rust-toolchain.toml",
+    # The concrete typed PG adapter root changes multiple application ports.
+    # Keep such edits full-source until per-trait impact can be proven.
+    "app/rust/crates/pg_runtime_ports/src/lib.rs",
 }
 
 # Only contracts with a verified generator/consumer are scoped. Other schemas
@@ -169,6 +172,7 @@ PUBLISHING_A17_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publication_release.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/renderer_refresh.rs",
     "app/rust/crates/integration_harness/src/tests/publication_delivery_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/publication_delivery_tests.rs",
 }
 
 # A14 exercises one real PostgreSQL lease/outbox and Qdrant materialization.
@@ -205,6 +209,8 @@ TRUTH_ADJUDICATION_PATHS = {
     "app/rust/services/temporal/src/activities/runtime.rs",
     "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
     "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/truth_adjudication_tests.rs",
 }
 
 # An actual PostgreSQL revision-bound human review exercises the domain
@@ -224,7 +230,7 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs",
-    "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/draft_publish_ports.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
@@ -232,6 +238,11 @@ CMS_REVIEW_PATHS = {
     "app/rust/services/cli_tools/src/cli/cms_decision.rs",
     "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_review_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_cross_scope_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_navigation_pg_tests.rs",
 }
 
 # The full-scenario and fault-injected PostgreSQL tests exercise both
@@ -251,6 +262,8 @@ DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
     "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs",
+    "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
 }
 
 # Real PostgreSQL rollback checks for planning/link-recommendation writes.
@@ -259,12 +272,14 @@ DRAFT_QA_SCENARIO_PATHS = {
 PLANNING_ATOMICITY_PATHS = {
     "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
     "app/rust/crates/seo_domain/src/link_recommendation.rs",
-    "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/planning_atomic_pg_tests.rs",
 }
 
 
@@ -316,12 +331,13 @@ KNOWLEDGE_A13_PATHS = {
     "app/rust/crates/runtime_composition/src/adapters/semantic_neighbor_search_adapter.rs",
     "app/rust/crates/seo_application/src/context_bundle.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_context_bundle_adapter.rs",
-    "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/draft_publish_ports.rs",
     "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
     "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
     "app/rust/crates/seo_application/src/drafting.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/crates/integration_harness/src/tests/knowledge_read_tests.rs",
+    "app/rust/crates/integration_qdrant_e2e/src/tests/knowledge_read_tests.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/triple_builder.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/completeness_resolution.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
@@ -338,7 +354,7 @@ SUITE_OWNERS = {
         "lock_crates": {"infrastructure", "seo_application"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "planning_atomic_", "--locked", "--", "--nocapture",
         ),
     },
@@ -348,8 +364,19 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "runtime_models", "seo_application", "seo_steps"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "draft_qa_",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
+            "--lib", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    "draft_qa_pg_persistence": {
+        "paths": DRAFT_QA_SCENARIO_PATHS,
+        "prefixes": ("app/rust/crates/integration_pg_app_e2e/",),
+        "lock_crates": {"seo_domain", "runtime_models", "seo_application", "seo_steps"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -359,7 +386,7 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "seo_application", "seo_ports", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "cms_revision_",
             "--locked", "--", "--nocapture",
         ),
@@ -370,7 +397,7 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "seo_application", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "publishing_a17_postgres_outbox_http_faults_and_recovery",
             "--locked", "--", "--nocapture",
         ),
@@ -393,17 +420,17 @@ SUITE_OWNERS = {
         "lock_crates": {"truth_domain"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "truth_adjudication_", "--locked", "--", "--nocapture",
         ),
     },
     "knowledge_a13": {
         "paths": KNOWLEDGE_A13_PATHS,
-        "prefixes": (),
+        "prefixes": ("app/rust/crates/integration_qdrant_e2e/",),
         "lock_crates": {"seo_application", "seo_ports", "vector_qdrant", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
             "--lib", "knowledge_a13_", "--locked", "--", "--nocapture",
         ),
     },
@@ -426,12 +453,19 @@ SUITE_OWNERS = {
             # bootstrap boundary. Changing it must run the real graph race.
             "app/rust/crates/integration_harness/src/containers.rs",
             "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+            "app/rust/crates/integration_graph_e2e/src/lib.rs",
+            "app/rust/crates/integration_graph_e2e/src/tests/graph_capability_probe_tests.rs",
+            "app/rust/crates/integration_graph_e2e/src/tests/graph_capability_link_projection_tests.rs",
+            "app/rust/crates/integration_graph_fixtures/src/lib.rs",
+            "app/rust/crates/graph_capability/src/lib.rs",
         },
-        "prefixes": ("app/rust/crates/graph_neo4j/",),
+        "prefixes": ("app/rust/crates/graph_neo4j/", "app/rust/crates/integration_graph_e2e/",
+                     "app/rust/crates/integration_graph_fixtures/", "app/rust/crates/graph_capability/",
+                     "app/rust/crates/integration_test_env/"),
         "lock_crates": {"graph_neo4j"},
         "on_unknown_global_input": False,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_graph_e2e", "--features", "e2e",
             # Both the context-key probe and real Neo4j scoped-edge regression
             # share the graph capability prefix. This selects BOTH without
             # adding a suite, job or unguarded provider-side traversal.
@@ -439,12 +473,13 @@ SUITE_OWNERS = {
         ),
     },
     "vector_projection": {
-        "paths": set(),
-        "prefixes": ("app/rust/crates/vector_qdrant/",),
+        "paths": {"app/rust/crates/integration_qdrant_e2e/src/lib.rs",
+                  "app/rust/crates/integration_qdrant_e2e/src/tests/qdrant_rest_projection_tests.rs"},
+        "prefixes": ("app/rust/crates/vector_qdrant/", "app/rust/crates/integration_qdrant_e2e/"),
         "lock_crates": {"vector_qdrant"},
         "on_unknown_global_input": False,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
             "--lib", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval",
             "--locked", "--", "--nocapture",
         ),
@@ -454,6 +489,9 @@ SUITE_OWNERS = {
             "app/rust/services/temporal/Cargo.toml",
             "app/contracts/proto/temporal_payloads.proto",
             "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_temporal_fixtures/src/lib.rs",
             # These domain/editorial decisions are executed by the real
             # canonical Temporal page workflow even when its orchestration
             # source is untouched. A policy-only diff must still exercise it.
@@ -469,7 +507,8 @@ SUITE_OWNERS = {
             "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
             "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
         },
-        "prefixes": ("app/rust/services/temporal/src/",),
+        "prefixes": ("app/rust/services/temporal/src/", "app/rust/crates/integration_temporal_e2e/",
+                     "app/rust/crates/integration_temporal_fixtures/"),
         "lock_crates": {"temporal_worker"},
         # This separate live E2E also opens the canonical happy-path JSON and
         # its HTML pages. Do not let fixture-only narrowing skip its consumer.
@@ -481,7 +520,7 @@ SUITE_OWNERS = {
         "prepare": WORKER_E2E_PREPARE,
         "runtime_binaries": WORKER_E2E_RUNTIME_BINARIES,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib", "canonical_temporal_",
             "--locked", "--", "--nocapture",
         ),
@@ -491,6 +530,7 @@ SUITE_OWNERS = {
             "app/rust/services/temporal_orchestrator/Cargo.toml",
             "app/rust/crates/integration_harness/src/lib.rs",
             "app/rust/crates/integration_harness/src/tests/pure_v3_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/pure_v3_temporal_tests.rs",
             "app/rust/crates/temporal_gateway/src/lib.rs",
             # The Workflow calls this real executor; changes to immutable
             # plan validation and payload handling require real History replay.
@@ -510,7 +550,7 @@ SUITE_OWNERS = {
         "prepare": PURE_V3_E2E_PREPARE,
         "runtime_binaries": PURE_V3_E2E_RUNTIME_BINARIES,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib", "pure_v3_", "--locked", "--", "--nocapture",
         ),
     },
@@ -646,15 +686,23 @@ def main_cache_prime_required(changed: list[str]) -> bool:
 # only this planner can mark an owner not applicable to an exact source diff.
 CI_PR_OWNERS = (
     "architecture-and-rust",
-    "rust-e2e-harness",
+    "rust-e2e-graph-harness",
+    "rust-e2e-qdrant-harness",
+    "rust-e2e-pg-app-harness",
+    "rust-e2e-temporal-harness",
     "rust-e2e-pg-harness",
     "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
     "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
-    "rust-architecture-e2e",
-    "rust-verify-e2e",
+    "rust-graph-e2e",
+    "rust-qdrant-e2e",
+    "rust-pg-app-e2e",
+    "rust-temporal-legacy-e2e",
+    "rust-temporal-v3-e2e",
     "rust-pg-e2e",
     "rust-outbox-e2e",
+    "rust-truth-e2e",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
@@ -675,7 +723,14 @@ def ci_jobs_for_change(
     for the disposable PostgreSQL/Qdrant/Neo4j adapters exercised by suites.
     """
     if scope == "full":
-        return {name: ["fail-closed: global or unknown impact"] for name in CI_PR_OWNERS}
+        required = {name: ["fail-closed: global or unknown impact"] for name in CI_PR_OWNERS}
+        # Optional Truth certification still has one real broad-harness test;
+        # build/execute that physical compiler only when a live fixture
+        # selects this suite. No omitted test is silently reported as green.
+        if "truth_certification" not in suites:
+            del required["rust-e2e-truth-harness"]
+            del required["rust-truth-e2e"]
+        return required
 
     changed = set(paths)
     selected: dict[str, list[str]] = {}
@@ -847,7 +902,7 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
-    "draft_qa_scenario", "knowledge_a13", "outbox_a14",
+    "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
     "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
 })
@@ -865,20 +920,34 @@ E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
     "vector", "truth_certification",
 )
-E2E_VERIFY_SHARDS = ("verify_a", "verify_b", "verify_c", "verify_d", "outbox")
-# Execution (not business-suite) routing: the physically independent PG V3
-# owner must never wait for compilation of the unrelated legacy E2E harness.
-# Preserve the original source-suite owner partition above for exhaustive
-# exact-filter/count verification and fail-closed impact selection.
+E2E_VERIFY_SHARDS = (
+    "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
+    "pg_app_delivery", "temporal_draft", "temporal_pure", "verify_d", "outbox",
+)
+# The business-suite source owner (architecture/verify) is orthogonal to its
+# physical Cargo compiler and independent provider runner. Each shard belongs
+# to exactly one runtime job: none may wait for a broad harness dependency.
+E2E_GRAPH_SHARDS = ("graph",)
+E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
+E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
+E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
+E2E_TEMPORAL_V3_SHARDS = ("temporal_pure",)
 E2E_PG_SHARDS = ("pg_temporal", "verify_d")
 E2E_OUTBOX_SHARDS = ("outbox",)
-E2E_ARCH_RUNNER_SHARDS = tuple(name for name in E2E_ARCH_SHARDS if name not in E2E_PG_SHARDS)
-E2E_VERIFY_RUNNER_SHARDS = tuple(
-    name for name in E2E_VERIFY_SHARDS if name not in E2E_PG_SHARDS + E2E_OUTBOX_SHARDS
-)
-if (set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS)
-        | set(E2E_OUTBOX_SHARDS)
-        != set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)):
+E2E_TRUTH_SHARDS = ("truth_certification",)
+E2E_RUNNER_PARTITIONS = {
+    "rust-graph-e2e": E2E_GRAPH_SHARDS,
+    "rust-qdrant-e2e": E2E_QDRANT_SHARDS,
+    "rust-pg-app-e2e": E2E_PG_APP_SHARDS,
+    "rust-temporal-legacy-e2e": E2E_TEMPORAL_LEGACY_SHARDS,
+    "rust-temporal-v3-e2e": E2E_TEMPORAL_V3_SHARDS,
+    "rust-pg-e2e": E2E_PG_SHARDS,
+    "rust-outbox-e2e": E2E_OUTBOX_SHARDS,
+    "rust-truth-e2e": E2E_TRUTH_SHARDS,
+}
+if (set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values()))
+        != set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)
+        or sum(map(len, E2E_RUNNER_PARTITIONS.values())) != len(E2E_ARCH_SHARDS) + len(E2E_VERIFY_SHARDS)):
     raise ValueError("independent E2E runner partition lost a required shard")
 E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "graph": (("graph_query", "graph_capability_", 2),),
@@ -894,19 +963,17 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
     ),
-    # Measured full-scope CI #45515259024: 31 verify-side tests in total, nine
-    # of which now compile and execute through a separate Outbox owner crate.
-    "verify_a": (("draft_qa_scenario", "draft_qa_", 2),
-                 ("truth_adjudication_integrity", "truth_adjudication_", 3)),
-    "verify_b": (("knowledge_a13", "knowledge_a13_", 3),
-                 ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1)),
+    "temporal_draft": (("draft_qa_scenario", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness", 1),),
+    "temporal_pure": (("pure_dag_v3", "pure_v3_", 1),),
+    "qdrant_knowledge": (("knowledge_a13", "knowledge_a13_", 3),),
+    "pg_app_truth": (("truth_adjudication_integrity", "truth_adjudication_", 3),),
+    "pg_app_cms": (("cms_review_revision", "cms_revision_", 4),),
+    "pg_app_planning": (("planning_atomicity", "planning_atomic_", 6),),
+    "pg_app_delivery": (
+        ("draft_qa_pg_persistence", "draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft", 1),
+        ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
+    ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    "verify_c": (("cms_review_revision", "cms_revision_", 4),
-                 ("planning_atomicity", "planning_atomic_", 6),
-                 # Pure DAG owns the independent V3 executor but tests the
-                 # legacy broad harness. Keep it on a broad-harness runner;
-                 # this frees verify_d to run on PG-only compiler evidence.
-                 ("pure_dag_v3", "pure_v3_", 1)),
     "verify_d": (("pg_effect_v3", "pg_v3_", 2),),
 }
 

@@ -8,6 +8,10 @@ default = []
 e2e = [
   "dep:integration_data_fixtures",
   "integration_data_fixtures/e2e",
+  "dep:integration_graph_fixtures",
+  "integration_graph_fixtures/e2e",
+  "dep:integration_temporal_fixtures",
+  "integration_temporal_fixtures/e2e",
   "dep:infrastructure",
   "dep:runtime_composition",
   "dep:graph_neo4j",
@@ -15,7 +19,6 @@ e2e = [
   "dep:sqlx",
   "dep:temporalio-client",
   "dep:temporalio-common",
-  "dep:temporalio-sdk-core",
   "dep:temporal_gateway",
   "dep:testcontainers",
   "dep:uuid",
@@ -24,6 +27,9 @@ e2e = [
 [dependencies]
 anyhow = { workspace = true }
 integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+integration_graph_fixtures = { path = "../integration_graph_fixtures", optional = true }
+integration_test_env = { path = "../integration_test_env" }
+integration_temporal_fixtures = { path = "../integration_temporal_fixtures", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -37,7 +43,6 @@ infrastructure = { path = "../infrastructure", optional = true }
 runtime_composition = { path = "../runtime_composition", optional = true }
 temporalio-client = { workspace = true, optional = true }
 temporalio-common = { workspace = true, optional = true }
-temporalio-sdk-core = { workspace = true, optional = true }
 temporal_gateway = { path = "../temporal_gateway", optional = true }
 uuid = { workspace = true, optional = true }
 

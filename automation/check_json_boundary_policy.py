@@ -25,10 +25,30 @@ PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
 # from the previously permitted infrastructure/runtime adapter directories.
 # Explicit file grants keep new modules in these crates deny-by-default.
 EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
+    # SQLx adapter serializes captured DataForSEO rows to their canonical
+    # JSONB wire representation. No other new PG port file gets a free grant.
+    "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
     "app/rust/crates/integration_data_fixtures/src/lib.rs",
     "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+    # Authentic Qdrant/PG test fixture JSON, moved from the broad harness.
+    # No blanket JSON permission is granted to the new production-adjacent crate.
+    "app/rust/crates/integration_qdrant_e2e/src/tests/knowledge_read_tests.rs",
+    # Real PostgreSQL/HTTP fault-injection tests moved byte-for-byte from the
+    # broad test harness, not permission to use JSON in production PG ports.
+    "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/publication_delivery_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/truth_adjudication_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_review_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_cross_scope_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_navigation_pg_tests.rs",
     "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
     "app/rust/crates/voyage_api/src/lib.rs",
+    # Real Temporal/history and full-stack tests were moved verbatim out of
+    # the broad harness. Grant exact test files, never an E2E crate prefix.
+    "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
+    "app/rust/crates/integration_temporal_e2e/src/tests/pure_v3_temporal_tests.rs",
+    "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
 })
 
 FORBIDDEN_PATTERNS = {

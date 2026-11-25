@@ -1,0 +1,28 @@
+[package]
+name = "integration_graph_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# Independent, opt-in real Neo4j owner tests. No runtime_composition,
+# infrastructure, PostgreSQL, Qdrant or Temporal dependency in the test owner.
+[features]
+default = []
+e2e = [
+  "dep:graph_capability",
+  "dep:graph_neo4j",
+  "dep:integration_graph_fixtures",
+  "integration_graph_fixtures/e2e",
+  "dep:integration_test_env",
+  "dep:serial_test",
+  "dep:tokio",
+  "dep:uuid",
+]
+
+[dependencies]
+graph_capability = { path = "../graph_capability", optional = true }
+graph_neo4j = { path = "../graph_neo4j", optional = true }
+integration_graph_fixtures = { path = "../integration_graph_fixtures", optional = true }
+integration_test_env = { path = "../integration_test_env", optional = true }
+serial_test = { version = "3.2.0", optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }

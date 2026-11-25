@@ -12,7 +12,7 @@ SCENARIO = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "scena
 CLI = ROOT / "app" / "rust" / "services" / "cli_tools" / "src" / "main.rs"
 METRICS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "metrics.rs"
 GATE = ROOT / "automation" / "temporal_production_gate.sh"
-HARNESS = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src" / "lib.rs"
+TEMPORAL_E2E = ROOT / "app" / "rust" / "crates" / "integration_temporal_e2e" / "src" / "lib.rs"
 
 
 def read_with_includes(path: Path) -> str:
@@ -77,7 +77,7 @@ def main() -> int:
     cli = read_with_includes(CLI)
     metrics = read_with_includes(METRICS)
     gate = read_with_includes(GATE)
-    harness = read_with_includes(HARNESS)
+    temporal_e2e = read_with_includes(TEMPORAL_E2E)
 
     for needle in [
         "pub struct SeoPhaseReport",
@@ -125,8 +125,8 @@ def main() -> int:
         "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
         "phase_reports.iter().any",
     ]:
-        if not check_contains(harness, needle):
-            failures.append(f"integration harness missing `{needle}`")
+        if not check_contains(temporal_e2e, needle):
+            failures.append(f"independent real Temporal E2E owner missing `{needle}`")
 
     if failures:
         print("RUN_REPORT_COMPLETENESS: FAILED")

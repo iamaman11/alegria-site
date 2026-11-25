@@ -7,14 +7,22 @@ edition = "2021"
 # harness and isolated Outbox owner. No production runtime/Temporal/Neo4j edge.
 [features]
 default = []
-e2e = [
+pg = [
   "dep:anyhow",
   "dep:sqlx",
   "dep:serde_json",
   "dep:testcontainers",
   "dep:tokio",
+]
+qdrant = [
+  "dep:anyhow",
+  "dep:testcontainers",
+  "dep:tokio",
   "dep:vector_qdrant",
 ]
+# The existing real PG+Qdrant contract is preserved for broad/A14 consumers.
+# New PG-only owners can omit Qdrant's provider client entirely.
+e2e = ["pg", "qdrant"]
 
 [dependencies]
 anyhow = { workspace = true, optional = true }

@@ -22,6 +22,7 @@ from ci_impact import (
 )
 from run_scoped_cargo_feedback import (
     E2E_COMPILE, PG_E2E_COMPILE, OUTBOX_E2E_COMPILE,
+    NEW_E2E_ARTIFACT_OWNERS, NEW_E2E_COMPILES,
     cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
     run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
@@ -348,7 +349,8 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             "cms_review_revision", "draft_qa_scenario", "knowledge_a13",
         ]))["verify"]
         self.assertEqual([exact_verify_e2e_filter(command) for _, command in assigned], [
-            "cms_revision_", "draft_qa_", "knowledge_a13_",
+            "cms_revision_", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
+            "knowledge_a13_",
         ])
         with self.assertRaisesRegex(ValueError, "exact, locked"):
             exact_verify_e2e_filter([
@@ -424,6 +426,32 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     ]}, package="integration_harness")
                 with self.assertRaisesRegex(ValueError, "unsupported"):
                     precompiled_verify_executable({}, package="unreviewed_test_owner")
+
+    def test_new_physical_owner_compilers_have_distinct_locked_test_targets(self) -> None:
+        self.assertEqual(NEW_E2E_ARTIFACT_OWNERS, {
+            "graph_harness": "integration_graph_e2e",
+            "qdrant_harness": "integration_qdrant_e2e",
+            "temporal_harness": "integration_temporal_e2e",
+            "pg_app_harness": "integration_pg_app_e2e",
+        })
+        for package in NEW_E2E_ARTIFACT_OWNERS.values():
+            with self.subTest(package=package):
+                self.assertEqual(NEW_E2E_COMPILES[package], [
+                    "cargo", "test", "-p", package, "--features", "e2e",
+                    "--lib", "--locked", "--no-run",
+                ])
+                filter_command = [
+                    "cargo", "test", "-p", package, "--features", "e2e",
+                    "--lib", "true_real_owner_", "--locked", "--", "--nocapture",
+                ]
+                self.assertEqual(exact_verify_e2e_filter(filter_command), "true_real_owner_")
+                for corrupt in (
+                    filter_command[:7] + ["", *filter_command[8:]],
+                    filter_command[:7] + ["--skip", *filter_command[8:]],
+                    filter_command[:9] + ["--ignored", "--nocapture"],
+                ):
+                    with self.assertRaisesRegex(ValueError, "exact, locked"):
+                        exact_verify_e2e_filter(corrupt)
 
     def test_outbox_a14_compiler_is_independent_and_keeps_nine_exact_tests(self) -> None:
         self.assertEqual(OUTBOX_E2E_COMPILE, [
@@ -560,7 +588,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "app/rust"
-            binary = workspace / "target/debug/deps/integration_harness-ci-exact"
+            binary = workspace / "target/debug/deps/integration_temporal_e2e-ci-exact"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"exact-source test bundle")
             binary.chmod(0o755)
@@ -582,6 +610,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 result = run_exact_precompiled_e2e_shard(
                     report, "temporal_manual", suite_job="architecture-and-rust",
                     prebuilt_executable=binary,
+                    extra_prebuilt_executables={"integration_temporal_e2e": binary},
                 )
                 self.assertEqual(sum(row["matched_tests"] for row in result), 2)
                 self.assertIn("CI_E2E_SHARD=PASS shard=temporal_manual filters=2 tests=2",
@@ -628,13 +657,14 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         shards = {
             "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 2)],
             "pg_temporal": [("pg_temporal_v3", temporal_command, "temporal_effect_v3_", 1)],
-            "verify_c": [("pure_dag_v3", pure_command, "pure_v3_", 1)],
+            "temporal_pure": [("pure_dag_v3", pure_command, "pure_v3_", 1)],
         }
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "app/rust"
             debug = workspace / "target/debug/deps"
             debug.mkdir(parents=True)
             harness = debug / "integration_harness-ci-exact"
+            temporal = debug / "integration_temporal_e2e-ci-exact"
             pg = debug / "integration_pg_v3_e2e-ci-exact"
             # Critically the PG-only job installs no monolithic test binary.
             # Both PG shards must pass before such an artifact even exists.
@@ -670,11 +700,12 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 )
                 self.assertEqual(sum(row["matched_tests"] for row in architecture), 1)
                 self.assertFalse(harness.exists(), "PG owner must not consume broad harness")
-                harness.write_bytes(b"exact-source verified artifact")
-                harness.chmod(0o755)
+                temporal.write_bytes(b"exact-source verified artifact")
+                temporal.chmod(0o755)
                 pure = run_exact_precompiled_e2e_shard(
-                    report, "verify_c", suite_job="verify", prebuilt_executable=harness,
+                    report, "temporal_pure", suite_job="verify", prebuilt_executable=harness,
                     prebuilt_pg_executable=pg,
+                    extra_prebuilt_executables={"integration_temporal_e2e": temporal},
                 )
                 self.assertEqual(sum(row["matched_tests"] for row in pure), 1)
                 with self.assertRaisesRegex(ValueError, "verified integration_pg_v3_e2e"):
@@ -689,129 +720,58 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             self.assertEqual(actual, [
                 ("pg_effect_v3", pg, "pg_v3_", 2),
                 ("pg_temporal_v3", pg, "temporal_effect_v3_", 1),
-                ("pure_dag_v3", harness, "pure_v3_", 1),
+                ("pure_dag_v3", temporal, "pure_v3_", 1),
             ])
 
-    def test_parallel_verify_compiles_once_and_runs_every_suite_in_two_processes(self) -> None:
+    def test_legacy_bulk_verify_rejects_mixed_physical_package_compilation(self) -> None:
         selected = ["cms_review_revision", "draft_qa_scenario", "knowledge_a13"]
         suites = suite_commands_by_ci_job(self.report(selected))["verify"]
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "target"
-            binary = target / "debug/deps/integration_harness-exact"
-            binary.parent.mkdir(parents=True)
-            binary.write_bytes(b"compiled test binary")
-            binary.chmod(0o755)
-            started = threading.Barrier(2, timeout=3)
-            seen: list[str] = []
-            lock = threading.Lock()
-
-            def execution(name: str, command: list[str], *_args: object) -> dict:
-                with lock:
-                    seen.append(name)
-                if len(seen) <= 2:
-                    started.wait()
-                return {"suite": name, "selected_cargo_command": command}
-
-            with (
-                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}),
-                patch("run_scoped_cargo_feedback.run_cargo", return_value={
-                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
-                }) as compile_cargo,
-                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
-            ):
-                results = run_precompiled_e2e_suites(
+        with patch("run_scoped_cargo_feedback.run_cargo") as compiler:
+            with self.assertRaisesRegex(ValueError, "mixed E2E owner binaries"):
+                run_precompiled_e2e_suites(
                     self.report(selected), suites, suite_job="verify",
                 )
-            compile_cargo.assert_called_once_with(E2E_COMPILE, cwd=WORKSPACE)
-            self.assertEqual(set(seen), set(selected))
-            self.assertEqual([result.get("suite") for result in results[1:]], selected)
-            self.assertEqual(len(results), len(selected) + 1)
+        compiler.assert_not_called()
 
-    def test_architecture_reuses_one_harness_and_serializes_real_container_suites(self) -> None:
-        # CI #492 empirically showed that concurrent Neo4j and Temporal starts
-        # competed for Docker resources. Even distinct processes/containers
-        # should run one at a time on the architecture owner.
+    def test_legacy_bulk_architecture_rejects_mixed_physical_packages(self) -> None:
         selected = ["graph_query", "vector_projection", "temporal_restart"]
         suites = suite_commands_by_ci_job(self.report(selected))["architecture-and-rust"]
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "target"
-            binary = target / "debug/deps/integration_harness-exact"
-            binary.parent.mkdir(parents=True)
-            binary.write_bytes(b"compiled test binary")
-            binary.chmod(0o755)
-            launched: list[str] = []
-
-            def execution(name: str, command: list[str], *_args: object) -> dict:
-                launched.append(name)
-                return {"suite": name, "selected_cargo_command": command}
-
-            with (
-                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}),
-                patch("run_scoped_cargo_feedback.run_cargo", return_value={
-                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
-                }) as compile_cargo,
-                patch("run_scoped_cargo_feedback.suite_runtime_environment", return_value={}),
-                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
-                patch("run_scoped_cargo_feedback.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pool_factory,
-            ):
-                results = run_precompiled_e2e_suites(
+        with patch("run_scoped_cargo_feedback.run_cargo") as compiler:
+            with self.assertRaisesRegex(ValueError, "mixed E2E owner binaries"):
+                run_precompiled_e2e_suites(
                     self.report(selected), suites, suite_job="architecture-and-rust",
                 )
-            compile_cargo.assert_called_once_with(E2E_COMPILE, cwd=WORKSPACE)
-            pool_factory.assert_called_once_with(max_workers=1)
-            self.assertEqual(launched, selected)
-            self.assertEqual([row["suite"] for row in results[1:]], selected)
+        compiler.assert_not_called()
 
-    def test_serial_architecture_rejects_missing_or_foreign_suite_before_compilation(self) -> None:
+    def test_legacy_bulk_cannot_bypass_test_source_owner_validation(self) -> None:
         selected = ["graph_query", "temporal_restart"]
         suites = suite_commands_by_ci_job(self.report(selected))["architecture-and-rust"]
-        with patch("run_scoped_cargo_feedback.run_cargo") as compile_cargo:
-            with self.assertRaisesRegex(ValueError, "exact suite owner partition"):
+        with patch("run_scoped_cargo_feedback.run_cargo") as compiler:
+            with self.assertRaisesRegex(ValueError, "mixed E2E owner binaries"):
                 run_precompiled_e2e_suites(
                     self.report(selected), suites[:1] + [(
                         "vector_projection", list(SUITE_OWNERS["vector_projection"]["command"]),
                     )], suite_job="architecture-and-rust",
                 )
-        compile_cargo.assert_not_called()
+        compiler.assert_not_called()
 
-    def test_parallel_verify_does_not_turn_failed_process_into_green(self) -> None:
-        selected = ["cms_review_revision", "draft_qa_scenario"]
-        suites = suite_commands_by_ci_job(self.report(selected))["verify"]
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "target"
-            binary = target / "debug/deps/integration_harness-exact"
-            binary.parent.mkdir(parents=True)
-            binary.write_bytes(b"compiled test binary")
-            binary.chmod(0o755)
-            ran: list[str] = []
-
-            def execution(name: str, *_args: object) -> dict:
-                ran.append(name)
-                if name == "cms_review_revision":
-                    raise RuntimeError("intentional failure")
-                return {"suite": name}
-
-            with (
-                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}),
-                patch("run_scoped_cargo_feedback.run_cargo", return_value={
-                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
-                }),
-                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "1 mandatory E2E suites failed"):
-                    run_precompiled_e2e_suites(
-                        self.report(selected), suites, suite_job="verify",
-                    )
-            self.assertEqual(set(ran), set(selected))
-
-    def test_duplicate_parallel_filter_rejected_before_cargo_compilation(self) -> None:
-        suite = ("cms_review_revision", list(SUITE_OWNERS["cms_review_revision"]["command"]))
-        with patch("run_scoped_cargo_feedback.run_cargo") as compile_cargo:
-            with self.assertRaisesRegex(ValueError, "duplicated filters"):
-                run_precompiled_e2e_suites(
-                    self.report(["cms_review_revision"]), [suite, suite], suite_job="verify",
-                )
-        compile_cargo.assert_not_called()
+    def test_legacy_bulk_verify_cannot_turn_failed_or_duplicate_process_green(self) -> None:
+        for selected, suites in (
+            (["cms_review_revision", "draft_qa_scenario"], None),
+            (["cms_review_revision"], [
+                ("cms_review_revision", list(SUITE_OWNERS["cms_review_revision"]["command"])),
+            ] * 2),
+        ):
+            with self.subTest(selected=selected):
+                report = self.report(selected)
+                if suites is None:
+                    suites = suite_commands_by_ci_job(report)["verify"]
+                with patch("run_scoped_cargo_feedback.run_cargo") as compiler:
+                    with self.assertRaisesRegex(ValueError, "mixed E2E owner binaries"):
+                        run_precompiled_e2e_suites(
+                            report, suites, suite_job="verify",
+                        )
+                compiler.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -292,7 +292,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     let pool = &pg.pool;
     let root = std::env::temp_dir().join(format!("alegria-a17-{}", Uuid::new_v4()));
     std::fs::create_dir(&root).unwrap();
-    let _env = crate::env_overrides::EnvOverrideGuard::apply([
+    let _env = integration_harness::env_overrides::EnvOverrideGuard::apply([
         (
             "SEO_STATIC_OUTPUT_DIR".to_string(),
             root.join("public").to_str().unwrap().into(),

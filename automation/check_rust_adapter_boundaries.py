@@ -12,6 +12,7 @@ RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
 POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
+PG_RUNTIME_MANIFEST = RUST_ROOT / "crates" / "pg_runtime_ports" / "Cargo.toml"
 OUTBOX_MANIFEST = RUST_ROOT / "services" / "outbox_worker" / "Cargo.toml"
 DELIVERY_MANIFEST = RUST_ROOT / "crates" / "projection_delivery" / "Cargo.toml"
 VOYAGE_MANIFEST = RUST_ROOT / "crates" / "voyage_api" / "Cargo.toml"
@@ -21,9 +22,17 @@ INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harnes
 # adapter or a back door for unrelated provider SDKs.
 PG_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_v3_e2e"
 PG_E2E_SRC = PG_E2E_DIR / "src"
+PG_APP_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_app_e2e"
+PG_APP_HTTP_FAULT_FILE = PG_APP_E2E_DIR / "src/tests/publication_delivery_tests.rs"
 PG_E2E_TEMPORAL_SDKS = frozenset({
     "temporalio-client", "temporalio-common", "temporalio-sdk-core",
 })
+TEMPORAL_FIXTURE_DIR = RUST_ROOT / "crates" / "integration_temporal_fixtures"
+TEMPORAL_FIXTURE_SRC = TEMPORAL_FIXTURE_DIR / "src"
+TEMPORAL_FIXTURE_SDKS = frozenset({"temporalio-client", "temporalio-sdk-core"})
+TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_temporal_e2e"
+TEMPORAL_E2E_SRC = TEMPORAL_E2E_DIR / "src"
+TEMPORAL_E2E_SDKS = frozenset({"temporalio-client", "temporalio-common"})
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
@@ -87,11 +96,20 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-sdk-core",
     },
     (PG_E2E_DIR / "Cargo.toml").resolve(): PG_E2E_TEMPORAL_SDKS,
+    # Genuine disposable Temporal server and client probe for real E2E only;
+    # no other provider SDK or production use-case is exempted.
+    (TEMPORAL_FIXTURE_DIR / "Cargo.toml").resolve(): TEMPORAL_FIXTURE_SDKS,
+    # Actual five-scenario Temporal/full-infra test owner: native SDK History
+    # and PostgreSQL are allowed only in this opt-in test package.
+    (TEMPORAL_E2E_DIR / "Cargo.toml").resolve(): TEMPORAL_E2E_SDKS | {"sqlx"},
     # Test-only A14 package exercises real PostgreSQL transactions directly.
     # Grant precisely SQLx, not unrelated provider or Temporal SDK imports.
     (RUST_ROOT / "crates" / "integration_outbox_e2e" / "Cargo.toml").resolve(): {"sqlx"},
     # Shared real PG/Qdrant setup used by multiple integration executables.
     (RUST_ROOT / "crates" / "integration_data_fixtures" / "Cargo.toml").resolve(): {"sqlx"},
+    # The exact isolated A17 test does real HTTP readback and injects 503s.
+    # No unrelated module inherits a provider SDK escape hatch.
+    (PG_APP_E2E_DIR / "Cargo.toml").resolve(): {"reqwest", "sqlx"},
 }
 
 ENFORCED_DEP_KEYS = [
@@ -184,6 +202,20 @@ DELIVERY_FORBIDDEN_LOCAL_OWNERS = frozenset({
 DELIVERY_REQUIRED_DIRECT_OWNERS = frozenset({
     "postgres_store", "graph_neo4j", "vector_qdrant", "voyage_api",
 })
+PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "runtime_composition", "graph_neo4j", "vector_qdrant",
+    "temporal_gateway", "temporal_worker", "outbox_worker",
+})
+
+
+def pg_runtime_closure_failures(closure: set[str], direct: set[str]) -> list[str]:
+    failures = [
+        f"pg_runtime_ports Cargo closure imports forbidden provider/Temporal owner `{name}`"
+        for name in sorted(closure & PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS)
+    ]
+    for name in sorted({"infrastructure", "seo_ports"} - direct):
+        failures.append(f"pg_runtime_ports requires direct production port owner `{name}`")
+    return failures
 
 
 def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
@@ -284,7 +316,19 @@ def main() -> int:
             continue
         text = file_path.read_text(encoding="utf-8")
         for pat in FORBIDDEN_DIRECT_IN_USE_CASES:
+            if file_path == PG_APP_HTTP_FAULT_FILE and "reqwest" in pat.pattern:
+                continue
             if pg_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
+                f"{sdk.replace('-', '_')}::" in pat.pattern
+                for sdk in TEMPORAL_FIXTURE_SDKS
+            ):
+                continue
+            if TEMPORAL_E2E_SRC in file_path.parents and any(
+                f"{sdk.replace('-', '_')}::" in pat.pattern
+                for sdk in TEMPORAL_E2E_SDKS
+            ):
                 continue
             # Temporal's Workflow/Activity SDK belongs to its runtime, and
             # client-only SDKs belong to the independent Temporal gateway.
@@ -373,6 +417,13 @@ def main() -> int:
     try:
         infra_closure, infra_direct = workspace_dependency_closure(INFRA_MANIFEST)
         composition_closure, composition_direct = workspace_dependency_closure(COMPOSITION_MANIFEST)
+        pg_runtime_closure, pg_runtime_direct = workspace_dependency_closure(PG_RUNTIME_MANIFEST)
+        violations.extend(pg_runtime_closure_failures(pg_runtime_closure, pg_runtime_direct))
+        if "pg_runtime_ports" not in composition_direct:
+            violations.append("runtime_composition must delegate actual PG ports to pg_runtime_ports")
+        for stale in ("build_and_support_ports.rs", "planning_ports.rs", "draft_publish_context_ports.rs"):
+            if (COMPOSITION_MANIFEST.parent / "src" / "adapters" / "seo_ports_sqlx_adapter" / stale).exists():
+                violations.append(f"duplicated SQL port code still in runtime_composition: {stale}")
         for forbidden in ("graph_neo4j", "vector_qdrant", "runtime_composition"):
             if forbidden in infra_closure:
                 violations.append(
