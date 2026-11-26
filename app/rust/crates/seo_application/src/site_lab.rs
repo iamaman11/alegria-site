@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId, ExecutionPlan,
-    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef, PlanError,
-    PlanHash, PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
+    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef,
+    PlanError, PlanHash, PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,7 +32,9 @@ pub struct RecipeSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecipeInput {
-    External { artifact: ArtifactId },
+    External {
+        artifact: ArtifactId,
+    },
     Produced {
         step: OperationInstanceId,
         port: PortId,
@@ -165,10 +167,9 @@ impl SiteLabError {
                 "missing_provenance",
                 "Provide source provenance; runtime admission must verify it independently.",
             ),
-            Self::InvalidPlan(PlanError::UnknownInstance(_)) => (
-                "unknown_step",
-                "Select a step that exists in this recipe.",
-            ),
+            Self::InvalidPlan(PlanError::UnknownInstance(_)) => {
+                ("unknown_step", "Select a step that exists in this recipe.")
+            }
             Self::InvalidPlan(_) => (
                 "invalid_recipe",
                 "Inspect the exact offending step, port or contract and correct the recipe.",
@@ -309,12 +310,9 @@ pub fn preview_recipe(
         .nodes
         .iter()
         .filter(|node| {
-            catalog
-                .contract(&node.operation)
-                .is_some_and(|contract| {
-                    !contract.effects.is_empty()
-                        || contract.idempotency != IdempotencyPolicy::Pure
-                })
+            catalog.contract(&node.operation).is_some_and(|contract| {
+                !contract.effects.is_empty() || contract.idempotency != IdempotencyPolicy::Pure
+            })
         })
         .map(|node| node.instance.clone())
         .collect();

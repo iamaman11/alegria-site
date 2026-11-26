@@ -113,22 +113,14 @@ fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
     let catalog_after = describe_tools(&registry).unwrap();
     assert_eq!(catalog_after.len(), 6);
     assert!(catalog_after.iter().any(|tool| {
-        tool.operation == op("future.search_demand")
-            && tool.readiness == "requires_owner_admission"
+        tool.operation == op("future.search_demand") && tool.readiness == "requires_owner_admission"
     }));
 
     let external_recipe = SiteRecipe {
         schema_revision: 1,
         scope: recipe().scope,
-        sources: BTreeMap::from([(
-            ArtifactId::from("query"),
-            source("research.query_input"),
-        )]),
-        steps: vec![step(
-            "demand",
-            "future.search_demand",
-            external("query"),
-        )],
+        sources: BTreeMap::from([(ArtifactId::from("query"), source("research.query_input"))]),
+        steps: vec![step("demand", "future.search_demand", external("query"))],
     };
     let preview = preview_recipe(&external_recipe, &registry).unwrap();
     assert_eq!(preview.execution, "not_started");
@@ -175,7 +167,10 @@ fn invalid_ports_and_missing_producers_produce_actionable_errors() {
     let mut wrong_type = recipe();
     wrong_type.steps[1].inputs = external("topics");
     assert_eq!(
-        preview_recipe(&wrong_type, &registry).unwrap_err().problem().code,
+        preview_recipe(&wrong_type, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "incompatible_ports"
     );
 
@@ -199,13 +194,19 @@ fn cycles_and_undeclared_sources_fail_closed() {
         .after
         .insert(OperationInstanceId::from("canonicalize"));
     assert_eq!(
-        preview_recipe(&cyclic, &registry).unwrap_err().problem().code,
+        preview_recipe(&cyclic, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "recipe_cycle"
     );
     let mut unknown = recipe();
     unknown.sources.remove(&ArtifactId::from("mentions"));
     assert_eq!(
-        preview_recipe(&unknown, &registry).unwrap_err().problem().code,
+        preview_recipe(&unknown, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "missing_source"
     );
 }
