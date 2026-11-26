@@ -303,10 +303,7 @@ fn serve_site_lab_mcp<R: std::io::BufRead, W: std::io::Write>(
 }
 
 fn mcp_site_lab_server() -> Result<i32> {
-    let registry = seo_application::operation_adapter::semantic_extraction_registry()
-        .context("register Site Lab MCP operations")?;
-    let catalog = seo_application::site_lab::installed_semantic_lab_catalog(registry.catalog().clone())
-        .context("register trusted Site Lab MCP parameter contracts")?;
+    let catalog = site_lab_installed_catalog()?;
     serve_site_lab_mcp(std::io::stdin().lock(), std::io::stdout().lock(), &catalog)?;
     Ok(0)
 }

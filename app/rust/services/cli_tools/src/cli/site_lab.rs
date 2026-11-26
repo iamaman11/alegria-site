@@ -4,7 +4,7 @@ use seo_application::operation_adapter::semantic_extraction_registry;
 use seo_application::site_lab::{
     compare_executions, describe_tools, diff_recipes, inspect_execution,
     installed_semantic_lab_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
-    SiteRecipe,
+    SiteLabCatalog, SiteRecipe,
 };
 
 const SITE_LAB_SAVED_MAX_BYTES: u64 = 512 * 1024;
@@ -127,12 +127,34 @@ fn site_lab_read_execution(
     ))
 }
 
-fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
+/// Match the native Temporal worker's operator-owned trust root, never a
+/// path/manifest supplied by MCP tool arguments or a recipe. An installed
+/// remote owner remains subject to independent ValidateOnly and admission.
+fn site_lab_installed_catalog() -> Result<SiteLabCatalog> {
     // The registry is compiled from actual, trusted owner operations. User
     // recipes cannot inject contracts, owner routes, credentials or task queues.
     let registry = semantic_extraction_registry().context("register Site Lab operations")?;
-    let installed = installed_semantic_lab_catalog(registry.catalog().clone())
+    let mut installed = installed_semantic_lab_catalog(registry.catalog().clone())
         .context("register trusted Site Lab parameter contracts")?;
+    if let Some(path) = std::env::var_os("TEMPORAL_OPERATION_DAG_CATALOG_PATH") {
+        let bundle = trusted_owner_catalog::load_trusted_owner_bundle(std::path::Path::new(&path))
+            .context("read operator-owned Temporal owner routes for Site Lab")?;
+        for contract in bundle.routes.catalog().contracts() {
+            anyhow::ensure!(
+                installed.catalog().contract(&contract.reference).is_none(),
+                "trusted owner route conflicts with a built-in Site Lab operation"
+            );
+            installed.register_contract(contract.clone())?;
+            if let Some(schema) = bundle.parameter_schemas.get(&contract.reference) {
+                installed.register_remote(&contract.reference, &contract.fingerprint()?, schema.clone())?;
+            }
+        }
+    }
+    Ok(installed)
+}
+
+fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
+    let installed = site_lab_installed_catalog()?;
     let catalog = &installed;
 
     match action {

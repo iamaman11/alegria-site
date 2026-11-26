@@ -23,7 +23,7 @@ use url::Url;
 use futures_util as _;
 use temporalio_common as _;
 
-mod owner_catalog;
+use trusted_owner_catalog as owner_catalog;
 #[cfg(feature = "legacy-qdrant-v1")]
 mod qdrant_child_wire_json;
 mod replay;

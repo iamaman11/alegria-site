@@ -22,7 +22,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
     def test_native_v6_json_exceptions_are_only_eight_typed_wire_boundaries(self) -> None:
         self.assertEqual(NATIVE_OWNER_V6_JSON_BOUNDARIES, {
             "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v2.rs",
-            "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
+            "app/rust/crates/trusted_owner_catalog/src/lib.rs",
             "app/rust/services/temporal_pg_effects/src/operator_owner_v1.rs",
             "app/rust/services/temporal_qdrant_effects/src/operator_v2.rs",
             "app/rust/crates/qdrant_contracts/src/qdrant_owner_generic_v1.rs",
@@ -43,6 +43,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/crates/operation_protocol/src/owner_dispatch.rs",
             "app/rust/crates/seo_application/src/operation_adapter/generic_dag_v1.rs",
             "app/rust/services/temporal_orchestrator/src/workflow.rs",
+            "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
             "app/rust/services/temporal_orchestrator/src/owner_catalog_v2.rs",
             "app/rust/services/temporal_pg_effects/src/main.rs",
             "app/rust/services/temporal_pg_effects/src/owner_v2.rs",

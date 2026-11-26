@@ -102,12 +102,14 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
 # wire/config adapters, not a grant to the provider-free DAG runner, domain
 # contracts generally, owner Activities, or any future sibling module.
 NATIVE_OWNER_V6_JSON_BOUNDARIES = frozenset({
+    # One audited file loader shared by the generic parent and ChatGPT authoring.
+    # Root-owned /etc/alegria path checks are mandatory before decoding routes.
+    "app/rust/crates/trusted_owner_catalog/src/lib.rs",
     # The Qdrant-owned V2 contract parses the immutable typed command envelope
     # to verify its exact bytes before a provider Activity can be admitted.
     "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v2.rs",
     # The Temporal parent decodes trusted deployment route configuration,
     # never arbitrary caller-supplied routes or effect implementations.
-    "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
     # Separately credentialed PG operator decodes strict CLI requests and
     # server-issued Temporal History when verifying one exact owner child.
     "app/rust/services/temporal_pg_effects/src/operator_owner_v1.rs",

@@ -23,6 +23,7 @@ members = [
   "crates/voyage_api",
   "crates/runtime_models",
   "crates/operation_protocol",
+  "crates/trusted_owner_catalog",
   "crates/postgres_store",
   "crates/pg_runtime_ports",
   "crates/policies",

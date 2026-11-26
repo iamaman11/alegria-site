@@ -54,6 +54,14 @@ does **not** itself instruct Temporal to target a matching Worker Deployment
 version; real owner Worker Versioning/routing evidence remains a separate
 production requirement.
 
+The provider-free `trusted_owner_catalog` loader is now shared by the Temporal
+orchestrator and Site Lab MCP/CLI. Catalog `schema_revision: 2` requires an
+additional `parameter_schema` JSON object for each entry, exposed for typed
+ChatGPT authoring but **never** treated as runtime admission. Historical v1
+catalogs remain valid for pinned Temporal routes without authoring parameters.
+The trust path and root-ownership checks are identical; operator-installed
+catalog changes require process restart, not a rebuild of the DAG parent.
+
 In a disposable GitHub Actions E2E runner, install the *actual* trusted file
 with root privileges and exercise the production trust path. There is no
 environment-variable bypass:

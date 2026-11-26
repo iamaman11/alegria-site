@@ -23,6 +23,7 @@ temporalio-workflow = { workspace = true }
 url = { workspace = true }
 seo_application = { path = "../../crates/seo_application", optional = true }
 operation_protocol = { path = "../../crates/operation_protocol" }
+trusted_owner_catalog = { path = "../../crates/trusted_owner_catalog" }
 qdrant_contracts = { path = "../../crates/qdrant_contracts", optional = true } # frozen V1 only
 serde = { workspace = true }
 futures-util = "0.3"

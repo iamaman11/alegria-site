@@ -1,18 +1,20 @@
-//! Deployment-owned catalog for native, statically typed owner child routes.
+//! Shared, deployment-owned catalog for native, statically typed owner child routes.
 //!
 //! This JSON file is a process configuration trust root, NOT a DAG-manifest
 //! field. The worker reads it once; every Workflow Start History pins the
 //! exact subset of registered routes, checked again on every replay. A changed
 //! catalog must not silently reinterpret an already started Workflow.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{
-    OperationContract, PinnedOwnerRouteV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
+    OperationContract, OperationRef, PinnedOwnerRouteV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
     OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
+use serde_json::Value;
 
 const TRUSTED_CATALOG_ROOT: &str = "/etc/alegria";
 const MAX_CATALOG_BYTES: u64 = 1024 * 1024;
@@ -96,6 +98,16 @@ struct TrustedCatalogFileV1 {
 struct TrustedRegistrationV1 {
     contract: OperationContract,
     route: PinnedOwnerRouteV1,
+    /// Optional in historical v1; mandatory in v2 for rich owner parameters.
+    #[serde(default)]
+    parameter_schema: Option<Value>,
+}
+
+/// The same verified source drives Temporal routing and ChatGPT discovery.
+/// Schema presence alone never authorizes an owner call or an effect.
+pub struct TrustedOwnerCatalog {
+    pub routes: TrustedRouteCatalog,
+    pub parameter_schemas: BTreeMap<OperationRef, Value>,
 }
 
 fn register_trusted_entry(
@@ -122,7 +134,11 @@ fn register_trusted_entry(
     Ok(())
 }
 
-pub(crate) fn load_trusted_owner_catalog(path: &Path) -> Result<TrustedRouteCatalog> {
+pub fn load_trusted_owner_catalog(path: &Path) -> Result<TrustedRouteCatalog> {
+    Ok(load_trusted_owner_bundle(path)?.routes)
+}
+
+pub fn load_trusted_owner_bundle(path: &Path) -> Result<TrustedOwnerCatalog> {
     anyhow::ensure!(
         path.is_absolute(),
         "trusted route catalog path must be absolute"
@@ -130,24 +146,40 @@ pub(crate) fn load_trusted_owner_catalog(path: &Path) -> Result<TrustedRouteCata
     validate_config_file_trust(path)?;
     let data = std::fs::read(path)
         .with_context(|| format!("read operator-owned route catalog {}", path.display()))?;
+    decode_trusted_catalog(&data)
+}
+
+fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
     let config: TrustedCatalogFileV1 =
-        serde_json::from_slice(&data).context("decode trusted owner route catalog")?;
+        serde_json::from_slice(data).context("decode trusted owner route catalog")?;
     anyhow::ensure!(
-        config.schema_revision == 1,
+        config.schema_revision == 1 || config.schema_revision == 2,
         "unsupported trusted route catalog version"
     );
     anyhow::ensure!(!config.entries.is_empty(), "trusted route catalog is empty");
     let mut catalog = TrustedRouteCatalog::default();
+    let mut parameter_schemas = BTreeMap::new();
     for entry in config.entries {
+        let operation = entry.contract.reference.clone();
+        if config.schema_revision == 1 {
+            anyhow::ensure!(entry.parameter_schema.is_none(), "v1 owner routes cannot declare parameter schemas");
+        } else {
+            let schema = entry.parameter_schema.as_ref().context("v2 owner must declare its own parameter schema")?;
+            anyhow::ensure!(schema.get("type").and_then(Value::as_str) == Some("object"), "owner parameter schema must describe an object");
+        }
+        if let Some(schema) = &entry.parameter_schema {
+            parameter_schemas.insert(operation, schema.clone());
+        }
         register_trusted_entry(&mut catalog, entry)?;
     }
-    Ok(catalog)
+    Ok(TrustedOwnerCatalog { routes: catalog, parameter_schemas })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use operation_protocol::{IdempotencyPolicy, OperationId, OperationOwnerId, OperationRef};
+    use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
     fn registered_test_owner() -> TrustedRegistrationV1 {
@@ -171,7 +203,48 @@ mod tests {
             task_queue: "alegria-test-owner-v1".to_string(),
             build_id: "0123456789abcdef0123456789abcdef01234567".to_string(),
         };
-        TrustedRegistrationV1 { contract, route }
+        TrustedRegistrationV1 { contract, route, parameter_schema: None }
+    }
+
+    fn manifest(revision: u16, schema: Option<Value>) -> Vec<u8> {
+        let entry = registered_test_owner();
+        let mut record = json!({"contract":entry.contract,"route":entry.route});
+        if let Some(schema) = schema {
+            record["parameter_schema"] = schema;
+        }
+        serde_json::to_vec(&json!({"schema_revision":revision,"entries":[record]})).unwrap()
+    }
+
+    #[test]
+    fn historical_v1_routes_remain_usable_but_have_no_unverified_schema() {
+        let loaded = decode_trusted_catalog(&manifest(1, None)).unwrap();
+        assert_eq!(loaded.routes.catalog().contracts().count(), 1);
+        assert!(loaded.parameter_schemas.is_empty());
+        assert!(decode_trusted_catalog(&manifest(1, Some(json!({"type":"object"})))).is_err());
+    }
+
+    #[test]
+    fn v2_owner_schema_is_required_typed_and_pinned_to_registered_route() {
+        let schema = json!({"type":"object","properties":{"top_k":{"type":"integer"}}});
+        let loaded = decode_trusted_catalog(&manifest(2, Some(schema.clone()))).unwrap();
+        let operation = registered_test_owner().contract.reference;
+        assert_eq!(loaded.parameter_schemas[&operation], schema);
+        assert_eq!(loaded.routes.catalog().contracts().count(), 1);
+        assert!(decode_trusted_catalog(&manifest(2, None)).is_err());
+        assert!(decode_trusted_catalog(&manifest(2, Some(json!({"type":"string"})))).is_err());
+        assert!(decode_trusted_catalog(&manifest(3, Some(schema))).is_err());
+    }
+
+    #[test]
+    fn duplicate_or_forged_owner_registration_cannot_appear_in_catalog() {
+        let entry = registered_test_owner();
+        let payload = json!({"contract":entry.contract,"route":entry.route,"parameter_schema":{"type":"object"}});
+        let duplicates = serde_json::to_vec(&json!({"schema_revision":2,"entries":[payload.clone(),payload.clone()]})).unwrap();
+        assert!(decode_trusted_catalog(&duplicates).is_err());
+        let mut forged = payload;
+        forged["route"]["contract_hash"] = json!("false-fingerprint");
+        let forged = serde_json::to_vec(&json!({"schema_revision":2,"entries":[forged]})).unwrap();
+        assert!(decode_trusted_catalog(&forged).is_err());
     }
 
     #[test]

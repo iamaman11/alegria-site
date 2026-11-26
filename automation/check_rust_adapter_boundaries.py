@@ -65,7 +65,7 @@ DAG_PROVIDER_CRATES = frozenset({
     "qdrant_effects_core", "pg_runtime_ports", "runtime_composition", "infrastructure",
 })
 DAG_GENERIC_NEUTRAL_SOURCE = (
-    TEMPORAL_ORCHESTRATOR_SRC / "owner_catalog.rs",
+    RUST_ROOT / "crates" / "trusted_owner_catalog" / "src" / "lib.rs",
 )
 DAG_PG_OWNED_SOURCE = (
     TEMPORAL_PG_EFFECTS_SRC / "operator_owner_v1.rs",
