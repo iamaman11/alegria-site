@@ -1,6 +1,9 @@
 {
   "schema_revision": 1,
-  "scope": { "tenant_id": "example", "run_id": "hypothesis-001" },
+  "scope": {
+    "tenant_id": "example",
+    "run_id": "hypothesis-001"
+  },
   "sources": {
     "mentions": {
       "schema": { "id": "semantic.entity_span_input", "revision": 1 },

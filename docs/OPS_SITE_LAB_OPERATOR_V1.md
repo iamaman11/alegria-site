@@ -12,8 +12,8 @@
 
 ```bash
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab tools
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file docs/examples/site_lab_recipe_v1.json
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --first-file docs/examples/site_lab_recipe_v1.json --second-file docs/examples/site_lab_recipe_v1_alternative.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file docs/site_lab_recipe_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --first-file docs/site_lab_recipe_v1.json --second-file docs/site_lab_recipe_v1_alternative.json
 ```
 
 Оба примера используют одни и те же задекларированные источники. Во втором `editorial` ждёт `canonicalize`; можно проверить, как это меняет зависимости. Это **не A/B-тест с трафиком**.
