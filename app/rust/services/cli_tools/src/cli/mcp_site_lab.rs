@@ -59,6 +59,12 @@ struct McpCompareExecutions {
     second: McpSavedExecution,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpNeedEvidence {
+    batch: seo_application::site_lab::ConsumerNeedEvidenceBatchV1,
+}
+
 fn mcp_object_schema(fields: Value, required: &[&str]) -> Value {
     json!({
         "type": "object",
@@ -149,6 +155,33 @@ fn mcp_saved_execution_schema() -> Value {
     }), &["plan","receipt"])
 }
 
+fn mcp_need_evidence_schema() -> Value {
+    // This schema is for MCP discovery; strongly typed, deny-unknown-fields
+    // Rust DTOs and strict size/hash/scope checks remain authoritative.
+    let source = mcp_object_schema(json!({
+        "source_id":{"type":"string"}, "tenant_id":{"type":"string"},
+        "source_run_id":{"type":"string"}, "retrieval_channel":{"type":"string"},
+        "representation":{"enum":["primary_document","search_snippet","derived_summary","mirrored_document"]},
+        "primary_origin_id":{"type":"string"}, "primary_document_id":{"type":"string"},
+        "provenance_locator":{"type":"string"}, "document_payload_hash":{"type":"string"}
+    }), &["source_id","tenant_id","source_run_id","retrieval_channel","representation","primary_origin_id","primary_document_id","provenance_locator","document_payload_hash"]);
+    let observation = mcp_object_schema(json!({
+        "observation_id":{"type":"string"}, "need_key":{"type":"string"},
+        "asserted_need":{"type":"string"}, "context":{"type":"string"},
+        "excerpt":{"type":"string"}, "excerpt_hash":{"type":"string"}, "source":source
+    }), &["observation_id","need_key","asserted_need","context","excerpt","excerpt_hash","source"]);
+    let hypothesis = mcp_object_schema(json!({
+        "need_key":{"type":"string"}, "proposed_site_change":{"type":"string"},
+        "expected_benefit":{"type":"string"}
+    }), &["need_key","proposed_site_change","expected_benefit"]);
+    mcp_object_schema(json!({"batch":mcp_object_schema(json!({
+        "schema_revision":{"const":1},
+        "scope":mcp_object_schema(json!({"tenant_id":{"type":"string"},"run_id":{"type":"string"}}), &["tenant_id","run_id"]),
+        "observations":{"type":"array","maxItems":128,"items":observation},
+        "hypotheses":{"type":"array","minItems":1,"maxItems":32,"items":hypothesis}
+    }), &["schema_revision","scope","observations","hypotheses"])}), &["batch"])
+}
+
 fn mcp_site_lab_tools() -> Value {
     json!({"tools":[
         {
@@ -201,6 +234,12 @@ fn mcp_site_lab_tools() -> Value {
             "description":"Locally inspect and compare two distinct typed V2 plan/receipt pairs, only with equal tenant and exact original source bytes. Hash-only structural differences, not measured SEO or Temporal History attestation. No file paths.",
             "inputSchema":mcp_object_schema(json!({"first":mcp_saved_execution_schema(),"second":mcp_saved_execution_schema()}), &["first","second"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_evidence", "title":"Assess independent consumer needs evidence",
+            "description":"Group typed consumer-need observations and site hypotheses; count only distinct claimed primary publisher/document/content sources, never SERP snippets or mirrors. Structural candidate only: no provider, source or Temporal attestation.",
+            "inputSchema":mcp_need_evidence_schema(),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
         }
     ]})
 }
@@ -225,7 +264,7 @@ fn mcp_edit_preview_status(preview_status: &str) -> &'static str {
 fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_lab::SiteLabCatalog) -> (Value, bool) {
     use seo_application::site_lab::{
         compare_executions, describe_tools, diff_recipes, inspect_execution, preview_recipe,
-        revise_recipe, suggest_compatible_inputs, SiteRecipe,
+        preview_consumer_need_evidence, revise_recipe, suggest_compatible_inputs, SiteRecipe,
     };
 
     match name {
@@ -297,6 +336,17 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
             ) {
                 Ok(comparison) => (json!(comparison), false),
                 Err(error) => (json!(error.problem()), true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        "site_lab_evidence" => match serde_json::from_value::<McpNeedEvidence>(args) {
+            Ok(input) => match preview_consumer_need_evidence(&input.batch) {
+                Ok(assessment) => (json!(assessment), false),
+                Err(error) => (json!({
+                    "status":"invalid", "code":"consumer_evidence_invalid",
+                    "message":error.to_string(),
+                    "next_action":"Correct the typed source identities, hashes, tenant scope or bounded observations. Separate source/owner attestation remains required."
+                }), true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
@@ -454,9 +504,9 @@ mod site_lab_mcp_tests {
             .map(|line| serde_json::from_slice(line).unwrap()).collect();
         assert_eq!(replies.len(), 3);
         assert_eq!(replies[0]["result"]["capabilities"]["tools"]["listChanged"], false);
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 8);
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 9);
         assert!(replies[1]["result"].to_string().len() < 24_576, "tools/list should fit a compact model context");
-        for name in ["site_lab_connections", "site_lab_inspect", "site_lab_compare_results"] {
+        for name in ["site_lab_connections", "site_lab_inspect", "site_lab_compare_results", "site_lab_evidence"] {
             assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().any(|tool| tool["name"] == name));
         }
         assert_eq!(replies[2]["result"]["structuredContent"]["operations"].as_array().unwrap().len(), 5);
@@ -472,6 +522,41 @@ mod site_lab_mcp_tests {
         assert_eq!(hint["result"]["structuredContent"]["status"], "schema_candidates_only");
         assert_eq!(hint["result"]["structuredContent"]["execution"], "not_started");
         assert!(hint["result"]["structuredContent"]["ports"].as_array().unwrap().is_empty());
+    }
+
+    fn evidence_observation(id: &str, kind: &str, origin: &str, document: &str) -> Value {
+        let excerpt = format!("synthetic evidence for {id}");
+        json!({
+            "observation_id":id,"need_key":"price-clarity",
+            "asserted_need":"Know final price", "context":"Synthetic test evidence",
+            "excerpt":excerpt, "excerpt_hash":primitives::hash::blake3_hex(excerpt.as_bytes()),
+            "source":{
+                "source_id":id, "tenant_id":"tenant-a", "source_run_id":"source-fixture",
+                "retrieval_channel":"synthetic-test", "representation":kind,
+                "primary_origin_id":origin,"primary_document_id":document,
+                "provenance_locator":format!("synthetic://test/{id}"),
+                "document_payload_hash":primitives::hash::blake3_hex(document.as_bytes())
+            }
+        })
+    }
+
+    #[test]
+    fn mcp_need_evidence_never_claims_attested_source_or_site_outcome() {
+        let batch = json!({
+            "schema_revision":1,
+            "scope":{"tenant_id":"tenant-a","run_id":"research-one"},
+            "observations":[
+                evidence_observation("serp-a", "search_snippet", "origin-a", "doc-a"),
+                evidence_observation("page-a", "primary_document", "origin-a", "doc-a")
+            ],
+            "hypotheses":[{"need_key":"price-clarity","proposed_site_change":"Show full pricing","expected_benefit":"Clearer comparison"}]
+        });
+        let preview = tool_call("site_lab_evidence", json!({"batch":batch}));
+        assert_eq!(preview["result"]["isError"], false);
+        assert_eq!(preview["result"]["structuredContent"]["status"], "structural_only_unattested");
+        assert_eq!(preview["result"]["structuredContent"]["assessments"][0]["status"], "insufficient_evidence");
+        assert_eq!(preview["result"]["structuredContent"]["assessments"][0]["source_authentication"], "not_checked");
+        assert!(!preview.to_string().contains("synthetic evidence for page-a"));
     }
 
     #[test]

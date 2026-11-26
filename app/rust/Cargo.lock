@@ -948,6 +948,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "dataforseo_contracts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "operation_protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "deadpool"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6700,6 +6712,16 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "web_fetch_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "serde",
+ "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]

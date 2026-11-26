@@ -1,0 +1,14 @@
+[package]
+name = "dataforseo_contracts"
+version = "0.1.0"
+edition = "2021"
+
+# Pure provider-owned contract only. The paid HTTP adapter, SQL claim,
+# Temporal Worker and separately credentialed operator are NOT linked here.
+[dependencies]
+operation_protocol = { path = "../operation_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }

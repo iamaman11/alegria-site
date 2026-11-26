@@ -19,6 +19,8 @@ members = [
   "crates/projection_delivery",
   "crates/projection_contracts",
   "crates/qdrant_contracts",
+  "crates/dataforseo_contracts",
+  "crates/web_fetch_contracts",
   "crates/qdrant_effects_core",
   "crates/voyage_api",
   "crates/runtime_models",

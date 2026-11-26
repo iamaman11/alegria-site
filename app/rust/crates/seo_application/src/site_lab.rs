@@ -17,6 +17,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod parameters_json;
+mod evidence;
+pub use evidence::{
+    preview_consumer_need_evidence, ConsumerNeedAssessmentV1, ConsumerNeedEvidenceBatchV1,
+    ConsumerNeedEvidenceError, ConsumerNeedEvidencePointerV1, ConsumerNeedEvidencePreviewV1,
+    ConsumerNeedEvidenceStatusV1, ConsumerNeedHypothesisV1, ConsumerNeedObservationV1,
+    NeedEvidenceRepresentationV1, NeedEvidenceSourceV1, NEED_EVIDENCE_SCHEMA_REVISION_V1,
+};
 pub use parameters_json::{
     installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
     RecipeParameters, SiteLabCatalog,
