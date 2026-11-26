@@ -263,6 +263,7 @@ jobs:
           python3 automation/test_causal_revision_contract.py
           python3 automation/test_neo4j_schema_contract.py
           python3 automation/test_operation_freshness_contract.py
+          python3 automation/test_v3_effect_owner_boundary.py
 
       - name: Regression-test fast CI timing and failure propagation
         run: |

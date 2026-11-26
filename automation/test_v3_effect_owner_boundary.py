@@ -50,14 +50,13 @@ class PgTruthReviewOwnerBoundaryTests(unittest.TestCase):
         self.assertTrue(boundary.check_atomic_v1_truth_write(altered))
 
     def test_canonical_reconcile_cannot_verify_truth_or_remove_snapshot_fence(self) -> None:
-        path = boundary.PG_RECONCILE if boundary.PG_RECONCILE.exists() else boundary.LEGACY_RECONCILE
-        original = path.read_text(encoding="utf-8")
+        original = boundary.RECONCILE_MIGRATION.read_text(encoding="utf-8")
         self.assertEqual([], boundary.check_truth_reconcile_sql(original))
-        marker = "Ok(result.rows_affected())"
+        marker = "RETURN created_count;"
         self.assertIn(marker, boundary.reconcile_function(original))
         dangerous = original.replace(
             marker,
-            'let _sql = "UPDATE verified.rule_instances SET epistemic_status = \'verified\'";\n    ' + marker,
+            "UPDATE verified.rule_instances SET epistemic_status = 'verified';\n    " + marker,
             1,
         )
         self.assertTrue(any(
@@ -68,6 +67,21 @@ class PgTruthReviewOwnerBoundaryTests(unittest.TestCase):
         self.assertTrue(any(
             "lost SQL fence: ON CONFLICT (task_key) DO NOTHING" in violation
             for violation in boundary.check_truth_reconcile_sql(no_fence)
+        ))
+
+    def test_canonical_invoker_and_migration_schema_parity_are_enforced(self) -> None:
+        migration = boundary.RECONCILE_MIGRATION.read_text(encoding="utf-8")
+        schema = boundary.RECONCILE_SCHEMA.read_text(encoding="utf-8")
+        self.assertEqual(boundary.reconcile_function(migration), boundary.reconcile_function(schema))
+        self.assertEqual([], boundary.check_truth_reconcile_sql(schema))
+        self.assertTrue(boundary.check_truth_reconcile_sql(
+            boundary.reconcile_function(migration).replace("SECURITY INVOKER", "SECURITY DEFINER", 1)
+        ))
+        caller = boundary.PG_RECONCILE.read_text(encoding="utf-8")
+        self.assertEqual([], boundary.check_truth_reconcile_wiring(caller))
+        self.assertTrue(boundary.check_truth_reconcile_wiring(
+            caller.replace("SELECT site.reconcile_truth_candidate_reviews_v1($1, $2)",
+                           "SELECT site.untrusted_reconcile($1, $2)", 1)
         ))
 
     def test_pg_owner_dependency_closure_rejects_transitive_mixed_facade(self) -> None:

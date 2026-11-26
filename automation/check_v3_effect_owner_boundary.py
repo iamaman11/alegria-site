@@ -20,6 +20,8 @@ CLI_TYPES = RUST / "services/cli_tools/src/cli/types.rs"
 TRUTH_WRITE = RUST / "crates/infrastructure/src/adapters/sqlx_truth_write_adapter.rs"
 LEGACY_RECONCILE = RUST / "crates/infrastructure/src/adapters/sqlx_hitl_adapter.rs"
 PG_RECONCILE = RUST / "crates/postgres_store/src/sqlx_hitl_adapter.rs"
+RECONCILE_MIGRATION = ROOT / "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql"
+RECONCILE_SCHEMA = ROOT / "app/db/schema.sql"
 PG_MANIFEST = RUST / "crates/postgres_store/Cargo.toml"
 OWNER_SERVICE = RUST / "services/temporal_pg_effects"
 WORKSPACE_MANIFEST = RUST / "Cargo.toml"
@@ -92,22 +94,27 @@ def check_direct_pg_owner_routing(root: Path) -> list[str]:
     return errors
 
 
-def reconcile_function(source: str) -> str:
-    marker = "pub async fn reconcile_truth_candidate_reviews_in_tx"
+def sql_function(source: str, qualified_name: str) -> str:
+    marker = f"CREATE OR REPLACE FUNCTION {qualified_name}("
     start = source.find(marker)
     if start < 0:
         return ""
-    # Top-level Rust function's closing brace is at column zero. Any nested
-    # SQL closures/branches are indented; no provider calls are executed here.
-    closing = re.search(r"(?m)^}\s*$", source[start:])
-    return source[start : start + closing.end()] if closing else ""
+    end = source.find("$$;", start)
+    return source[start : end + len("$$;")] if end >= 0 else ""
+
+
+def reconcile_function(source: str) -> str:
+    # The canonical policy moved from inline Rust to SECURITY INVOKER SQL.
+    return sql_function(source, "site.reconcile_truth_candidate_reviews_v1")
 
 
 def check_truth_reconcile_sql(source: str) -> list[str]:
     errors: list[str] = []
     body = reconcile_function(source)
     if not body:
-        return ["canonical in-tx Truth review reconcile function missing"]
+        return ["canonical SQL Truth review reconcile function missing"]
+    if not re.search(r"\bSECURITY\s+INVOKER\b", body, re.IGNORECASE):
+        errors.append("Truth review reconcile must remain SECURITY INVOKER")
     expected = (
         "UPDATE site.seo_hitl_tasks", "INSERT INTO site.seo_hitl_tasks",
         "extracted.rule_candidates", "source_snapshot_hash", "needs_hitl",
@@ -126,6 +133,12 @@ def check_truth_reconcile_sql(source: str) -> list[str]:
     if "audit_log_payload" not in body:
         errors.append("Truth review reconcile lost its durable audit append")
     return errors
+
+
+def check_truth_reconcile_wiring(source: str) -> list[str]:
+    if 'sqlx::query_scalar("SELECT site.reconcile_truth_candidate_reviews_v1($1, $2)")' not in source:
+        return ["PG Truth review Rust caller must use the canonical invoker SQL function"]
+    return []
 
 
 def cargo_runtime_closure(manifest: Path) -> set[str]:
@@ -201,8 +214,14 @@ def check_v3_worker(root: Path = ROOT) -> tuple[list[str], list[str]]:
         errors.append("PG owner missing typed Truth review effect contract module")
     else:
         owner_sources += "\n" + typed_contract.read_text(encoding="utf-8")
+    capability_sql = sql_function(
+        RECONCILE_MIGRATION.read_text(encoding="utf-8"),
+        "pipeline.consume_pg_truth_review_v1",
+    )
+    if not capability_sql:
+        errors.append("PG Truth review privileged SQL admission capability missing")
     for contract_part in ("pg.truth.reconcile_candidate_reviews", "pg.truth.review_queue.reconcile"):
-        if contract_part not in owner_sources:
+        if contract_part not in owner_sources + capability_sql:
             errors.append(f"PG owner has no declared effect contract identity: {contract_part}")
     for admission_source in (
         "pipeline.pg_effect_v3_admissions", "pipeline.pg_effect_v3_receipts",
@@ -210,7 +229,7 @@ def check_v3_worker(root: Path = ROOT) -> tuple[list[str], list[str]]:
         "newer.created_at >= this_run.created_at", "pg_advisory_xact_lock",
         "hashtextextended", "truth-context|", "has_table_privilege",
     ):
-        if admission_source not in owner_sources:
+        if admission_source not in owner_sources + capability_sql:
             errors.append(f"PG effect admission lost authoritative stale-run fence: {admission_source}")
     return errors, notes
 
@@ -226,7 +245,13 @@ def audit(root: Path = ROOT) -> tuple[list[str], list[str]]:
     errors.extend(check_disabled_cli_diagnostic(cli_types.read_text(encoding="utf-8")))
     errors.extend(check_atomic_v1_truth_write(truth.read_text(encoding="utf-8")))
     source = pg if pg.exists() else legacy
-    errors.extend(check_truth_reconcile_sql(source.read_text(encoding="utf-8")))
+    errors.extend(check_truth_reconcile_wiring(source.read_text(encoding="utf-8")))
+    migration_sql = RECONCILE_MIGRATION.read_text(encoding="utf-8")
+    schema_sql = RECONCILE_SCHEMA.read_text(encoding="utf-8")
+    errors.extend(check_truth_reconcile_sql(migration_sql))
+    errors.extend(check_truth_reconcile_sql(schema_sql))
+    if reconcile_function(migration_sql) != reconcile_function(schema_sql):
+        errors.append("deployed Truth review reconcile schema differs from its migration")
     errors.extend(check_direct_pg_owner_routing(root))
     owner_errors, notes = check_v3_worker(root)
     return errors + owner_errors, notes
