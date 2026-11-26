@@ -117,7 +117,7 @@ fn expected_owner_child_id_for_parent(
     }
 }
 
-fn is_canonical_blake3_hash(value: &str) -> bool {
+pub(crate) fn is_canonical_blake3_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()

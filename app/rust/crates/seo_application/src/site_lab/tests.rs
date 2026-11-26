@@ -307,6 +307,60 @@ enum HybridSearchMode {
     Sparse,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct LenientOwnerParameters {
+    top_k: u16,
+}
+
+#[test]
+fn owner_dto_cannot_silently_discard_unknown_author_settings() {
+    let mut installed = catalog();
+    let operation = op("future.lenient_owner");
+    installed
+        .register_contract(OperationContract {
+            reference: operation.clone(),
+            owner: OperationOwnerId::from("future_owner"),
+            inputs: BTreeMap::from([(
+                PortId::from("input"),
+                source("semantic.entity_span_input").schema,
+            )]),
+            outputs: BTreeMap::from([(
+                PortId::from("output"),
+                source("semantic.entity_span_output").schema,
+            )]),
+            invalidates: BTreeSet::new(),
+            effects: BTreeSet::new(),
+            idempotency: IdempotencyPolicy::Pure,
+        })
+        .unwrap();
+    let fingerprint = installed
+        .catalog()
+        .contract(&operation)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    installed
+        .register_local::<LenientOwnerParameters>(
+            &operation,
+            &fingerprint,
+            json!({"type": "object", "properties": {"top_k": {"type": "integer"}}}),
+        )
+        .unwrap();
+    let mut authoring = recipe();
+    authoring.steps = vec![step(
+        "lenient",
+        "future.lenient_owner",
+        external("mentions"),
+    )];
+    authoring.steps[0].parameters = json!({"top_k": 10, "future_advanced_mode": "needed"}).into();
+    let problem = preview_recipe(&authoring, &installed)
+        .unwrap_err()
+        .problem();
+    assert_eq!(problem.code, "operation_parameters_invalid");
+    assert_eq!(problem.step, Some(OperationInstanceId::from("lenient")));
+    assert!(!problem.message.contains("future_advanced_mode"));
+}
+
 #[test]
 fn legacy_recipes_remain_valid_without_parameters_but_require_v2_for_parameters() {
     let registry = catalog();
@@ -389,13 +443,10 @@ fn installed_rust_parameters_are_typed_and_change_recipe_identity() {
     assert_ne!(diff.first.parameter_hashes, diff.second.parameter_hashes);
 
     second.steps[0].parameters = json!({"mode": "hybrid", "top_k": "40"}).into();
-    assert_eq!(
-        preview_recipe(&second, &registry)
-            .unwrap_err()
-            .problem()
-            .code,
-        "operation_parameters_invalid"
-    );
+    let type_problem = preview_recipe(&second, &registry).unwrap_err().problem();
+    assert_eq!(type_problem.code, "operation_parameters_invalid");
+    assert_eq!(type_problem.step, Some(OperationInstanceId::from("search")));
+    assert!(!type_problem.message.contains("40"));
     second.steps[0].parameters = json!({"mode": "hybrid", "top_k": 0}).into();
     assert_eq!(
         preview_recipe(&second, &registry)
@@ -428,13 +479,9 @@ fn pure_operations_reject_extra_settings_and_untrusted_schema_replacement() {
     let registry = catalog();
     let mut recipe = recipe();
     recipe.steps[0].parameters = json!({"top_k": 10}).into();
-    assert_eq!(
-        preview_recipe(&recipe, &registry)
-            .unwrap_err()
-            .problem()
-            .code,
-        "operation_parameters_invalid"
-    );
+    let extra_problem = preview_recipe(&recipe, &registry).unwrap_err().problem();
+    assert_eq!(extra_problem.code, "operation_parameters_invalid");
+    assert_eq!(extra_problem.step, Some(OperationInstanceId::from("extract")));
     let mut registry = catalog();
     let operation = op("semantic.entity_spans");
     let fingerprint = registry
@@ -479,13 +526,11 @@ fn missing_schema_fails_closed_and_schema_changes_invalidate_recipe_identity() {
     first_catalog.register_contract(contract.clone()).unwrap();
     let mut first = recipe();
     first.steps = vec![step("remote", "future.provider_read", external("mentions"))];
-    assert_eq!(
-        preview_recipe(&first, &first_catalog)
-            .unwrap_err()
-            .problem()
-            .code,
-        "operation_parameters_invalid"
-    );
+    let missing_problem = preview_recipe(&first, &first_catalog)
+        .unwrap_err()
+        .problem();
+    assert_eq!(missing_problem.code, "operation_parameter_schema_missing");
+    assert_eq!(missing_problem.step, Some(OperationInstanceId::from("remote")));
     let tool = describe_tools(&first_catalog).unwrap();
     assert_eq!(
         tool.iter()

@@ -19,6 +19,29 @@ use thiserror::Error;
 
 type DecodeParameters = Box<dyn Fn(&Value) -> Result<Vec<u8>, String> + Send + Sync>;
 
+/// A provider DTO may not use `deny_unknown_fields`, or a nested serde DTO
+/// may silently drop a newly added provider option. Fail closed if any value
+/// supplied by the author disappears or changes on typed round-trip. Fields
+/// added by DTO defaults are permitted; author-provided settings are never
+/// silently ignored by the generic composer.
+fn preserves_authored_fields(authored: &Value, normalized: &Value) -> bool {
+    match (authored, normalized) {
+        (Value::Object(given), Value::Object(typed)) => given.iter().all(|(key, value)| {
+            typed
+                .get(key)
+                .is_some_and(|typed_value| preserves_authored_fields(value, typed_value))
+        }),
+        (Value::Array(given), Value::Array(typed)) => {
+            given.len() == typed.len()
+                && given
+                    .iter()
+                    .zip(typed)
+                    .all(|(given, typed)| preserves_authored_fields(given, typed))
+        }
+        _ => authored == normalized,
+    }
+}
+
 struct ParameterDescriptor {
     contract_hash: ContractHash,
     schema: Value,
@@ -134,6 +157,11 @@ impl SiteLabCatalog {
                 local_decoder: Some(Box::new(|value: &Value| {
                     let decoded: T = serde_json::from_value(value.clone())
                         .map_err(|_| "invalid typed parameters".to_owned())?;
+                    let normalized = serde_json::to_value(&decoded)
+                        .map_err(|_| "parameter normalization failed".to_owned())?;
+                    if !preserves_authored_fields(value, &normalized) {
+                        return Err("typed parameters dropped or changed authored settings".to_owned());
+                    }
                     serde_json::to_vec(&decoded).map_err(|_| "parameter encoding failed".to_owned())
                 })),
                 ..descriptor

@@ -135,6 +135,15 @@ pub enum SiteLabError {
     TooManySteps(usize),
     #[error("operation {0:?} is not registered by an installed owner")]
     UnavailableOperation(OperationRef),
+    #[error(
+        "step {step:?} ({operation:?}) has invalid or unavailable typed parameters: {source}"
+    )]
+    StepParameters {
+        step: OperationInstanceId,
+        operation: OperationRef,
+        #[source]
+        source: ParameterError,
+    },
     #[error(transparent)]
     InvalidParameters(#[from] ParameterError),
     #[error("recipe parameters cannot be encoded")]
@@ -149,6 +158,9 @@ pub struct SiteLabProblem {
     pub code: &'static str,
     pub message: String,
     pub next_action: &'static str,
+    /// Identifies the exact recipe step without copying parameter values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<OperationInstanceId>,
 }
 
 impl SiteLabError {
@@ -169,6 +181,24 @@ impl SiteLabError {
             Self::UnavailableOperation(_) => (
                 "operation_unavailable",
                 "Inspect the catalog and install an independently authorized owner adapter.",
+            ),
+            Self::StepParameters {
+                source: ParameterError::MissingSchema,
+                ..
+            } => (
+                "operation_parameter_schema_missing",
+                "Install this owner's trusted parameter contract; recipe JSON cannot supply it.",
+            ),
+            Self::StepParameters {
+                source: ParameterError::MismatchedContract,
+                ..
+            } => (
+                "operation_parameter_contract_mismatch",
+                "Refresh the trusted operation catalog; do not reinterpret a stale parameter schema.",
+            ),
+            Self::StepParameters { .. } => (
+                "operation_parameters_invalid",
+                "Correct this step using the installed operation's exact typed parameter schema.",
             ),
             Self::InvalidParameters(_) | Self::ParameterEncoding => (
                 "operation_parameters_invalid",
@@ -207,6 +237,10 @@ impl SiteLabError {
             code,
             message: self.to_string(),
             next_action,
+            step: match self {
+                Self::StepParameters { step, .. } => Some(step.clone()),
+                _ => None,
+            },
         }
     }
 }
@@ -349,7 +383,13 @@ pub fn preview_recipe(
     let mut parameter_hashes = BTreeMap::new();
     let mut steps_requiring_owner_parameter_validation = Vec::new();
     for step in &recipe.steps {
-        let checked = catalog.validate(&step.operation, &step.parameters)?;
+        let checked = catalog
+            .validate(&step.operation, &step.parameters)
+            .map_err(|source| SiteLabError::StepParameters {
+                step: step.id.clone(),
+                operation: step.operation.clone(),
+                source,
+            })?;
         if checked.verification == "requires_owner_validate_only" {
             steps_requiring_owner_parameter_validation.push(step.id.clone());
         }

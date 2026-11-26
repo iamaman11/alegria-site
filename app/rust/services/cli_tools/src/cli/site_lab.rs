@@ -20,24 +20,49 @@ fn site_lab_problem(code: &str, message: &str, next_action: &str) -> Value {
     })
 }
 
+/// A single bounded stdin payload removes temporary files from ChatGPT/CLI
+/// authoring, but never grants a runtime or provider execution capability.
+fn site_lab_open_input(path: &str) -> std::io::Result<Box<dyn Read>> {
+    if path == "-" {
+        Ok(Box::new(std::io::stdin()))
+    } else {
+        Ok(Box::new(fs::File::open(path)?))
+    }
+}
+
+fn site_lab_bounded_bytes(reader: impl Read, limit: u64) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn site_lab_reused_stdin(paths: &[&str]) -> bool {
+    paths.iter().filter(|path| **path == "-").count() > 1
+}
+
+fn site_lab_stdin_conflict() -> Value {
+    site_lab_problem(
+        "stdin_reused",
+        "Only one input may read stdin ('-') in the same Site Lab command.",
+        "Pass one JSON input via '-' and the remaining input files by explicit paths.",
+    )
+}
+
 fn site_lab_read_recipe(path: &str) -> std::result::Result<SiteRecipe, Value> {
-    let file = fs::File::open(path).map_err(|error| {
+    let reader = site_lab_open_input(path).map_err(|_| {
         site_lab_problem(
             "recipe_file_unavailable",
-            &format!("Cannot open recipe: {error}"),
-            "Check --recipe-file/--first-file/--second-file and local file access.",
+            "Cannot open the requested recipe input.",
+            "Check recipe file access or pass '-' to read a single JSON payload from stdin.",
         )
     })?;
-    let mut bytes = Vec::new();
-    file.take(SITE_LAB_RECIPE_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            site_lab_problem(
-                "recipe_read_failed",
-                &format!("Cannot read recipe: {error}"),
-                "Make the recipe readable and retry.",
-            )
-        })?;
+    let bytes = site_lab_bounded_bytes(reader, SITE_LAB_RECIPE_MAX_BYTES).map_err(|error| {
+        site_lab_problem(
+            "recipe_read_failed",
+            &format!("Cannot read recipe input: {error}"),
+            "Make the recipe readable and retry.",
+        )
+    })?;
     if bytes.len() as u64 > SITE_LAB_RECIPE_MAX_BYTES {
         return Err(site_lab_problem(
             "recipe_too_large",
@@ -62,23 +87,20 @@ fn site_lab_print<T: serde::Serialize>(report: &T) -> Result<()> {
 fn site_lab_read_saved<T: serde::de::DeserializeOwned>(
     path: &str,
 ) -> std::result::Result<T, Value> {
-    let file = fs::File::open(path).map_err(|_| {
+    let reader = site_lab_open_input(path).map_err(|_| {
         site_lab_problem(
             "saved_file_unavailable",
-            "Cannot open the requested saved plan or receipt.",
-            "Pass a readable --plan-file or --receipt-file from a completed run.",
+            "Cannot open the requested saved plan or receipt input.",
+            "Pass a readable saved file or '-' for one bounded stdin input.",
         )
     })?;
-    let mut bytes = Vec::new();
-    file.take(SITE_LAB_SAVED_MAX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| {
-            site_lab_problem(
-                "saved_read_failed",
-                "Cannot read the saved file.",
-                "Check file permissions and retry.",
-            )
-        })?;
+    let bytes = site_lab_bounded_bytes(reader, SITE_LAB_SAVED_MAX_BYTES).map_err(|_| {
+        site_lab_problem(
+            "saved_read_failed",
+            "Cannot read the saved file.",
+            "Check file permissions and retry.",
+        )
+    })?;
     if bytes.len() as u64 > SITE_LAB_SAVED_MAX_BYTES {
         return Err(site_lab_problem(
             "saved_file_too_large",
@@ -142,6 +164,10 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
             first_file,
             second_file,
         } => {
+            if site_lab_reused_stdin(&[&first_file, &second_file]) {
+                site_lab_print(&site_lab_stdin_conflict())?;
+                return Ok(2);
+            }
             let first = match site_lab_read_recipe(&first_file) {
                 Ok(recipe) => recipe,
                 Err(problem) => {
@@ -168,6 +194,10 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
             plan_file,
             receipt_file,
         } => {
+            if site_lab_reused_stdin(&[&plan_file, &receipt_file]) {
+                site_lab_print(&site_lab_stdin_conflict())?;
+                return Ok(2);
+            }
             let (plan, receipt) = match site_lab_read_execution(&plan_file, &receipt_file) {
                 Ok(saved) => saved,
                 Err(problem) => {
@@ -189,6 +219,15 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
             second_plan_file,
             second_receipt_file,
         } => {
+            if site_lab_reused_stdin(&[
+                &first_plan_file,
+                &first_receipt_file,
+                &second_plan_file,
+                &second_receipt_file,
+            ]) {
+                site_lab_print(&site_lab_stdin_conflict())?;
+                return Ok(2);
+            }
             let (first_plan, first_receipt) =
                 match site_lab_read_execution(&first_plan_file, &first_receipt_file) {
                     Ok(saved) => saved,
@@ -232,6 +271,7 @@ mod site_lab_cli_tests {
         for args in [
             vec!["cli_tools", "site-lab", "tools"],
             vec!["cli_tools", "site-lab", "check", "--recipe-file", "recipe.json"],
+            vec!["cli_tools", "site-lab", "check", "--recipe-file", "-"],
             vec![
                 "cli_tools",
                 "site-lab",
@@ -286,5 +326,27 @@ mod site_lab_cli_tests {
                 "recipe unexpectedly accepted {field}"
             );
         }
+    }
+
+    #[test]
+    fn machine_json_stdin_is_single_use_and_has_explicit_budgets() {
+        assert!(!site_lab_reused_stdin(&["-", "a.json"]));
+        assert!(!site_lab_reused_stdin(&["a.json", "b.json"]));
+        assert!(site_lab_reused_stdin(&["-", "-", "c.json"]));
+        assert_eq!(site_lab_stdin_conflict()["code"], "stdin_reused");
+
+        let max = SITE_LAB_RECIPE_MAX_BYTES as usize;
+        let exact = site_lab_bounded_bytes(
+            std::io::Cursor::new(vec![b'x'; max]),
+            SITE_LAB_RECIPE_MAX_BYTES,
+        )
+        .unwrap();
+        assert_eq!(exact.len(), max);
+        let oversized = site_lab_bounded_bytes(
+            std::io::Cursor::new(vec![b'x'; max + 10]),
+            SITE_LAB_RECIPE_MAX_BYTES,
+        )
+        .unwrap();
+        assert_eq!(oversized.len(), max + 1);
     }
 }

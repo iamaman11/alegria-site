@@ -643,6 +643,176 @@ mod tests {
         OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
     };
 
+    fn site_lab_expected_start(run: &OperationDagRunV6) -> crate::SiteLabExpectedStartV1 {
+        crate::SiteLabExpectedStartV1 {
+            schema_revision: crate::SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+            plan_hash: run.plan.hash.clone(),
+            command_hashes: run
+                .owner_commands
+                .iter()
+                .map(|(instance, command)| {
+                    (
+                        instance.clone(),
+                        crate::owner_content_hash(&command.command_bytes),
+                    )
+                })
+                .collect(),
+            source_payload_hashes: run
+                .admitted
+                .iter()
+                .map(|(artifact_id, artifact)| {
+                    (
+                        artifact_id.clone(),
+                        crate::owner_content_hash(&artifact.payload),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn site_lab_start_preflight_is_only_a_hash_only_unadmitted_result() {
+        let (run, routes) = setup();
+        let expected = site_lab_expected_start(&run);
+        let report = crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+            .expect("existing V2 machine accepts the unchanged snapshot");
+        assert_eq!(report.status, "preflight_only_not_admitted");
+        assert_eq!(report.execution, "not_started");
+        assert_eq!(report.owner_admission, "not_issued");
+        assert_eq!(report.source_authentication, "not_checked");
+        assert_eq!(report.steps_requiring_owner_validate_only.len(), 2);
+        assert_eq!(report.command_hashes, expected.command_hashes);
+        assert!(report.source_payload_hashes.is_empty());
+    }
+
+    #[test]
+    fn site_lab_preflight_rejects_changed_owner_bytes_and_unpinned_command_set() {
+        let (run, routes) = setup();
+        let expected = site_lab_expected_start(&run);
+        let mut changed = run.clone();
+        changed
+            .owner_commands
+            .get_mut(&OperationInstanceId::from("consumer"))
+            .unwrap()
+            .command_bytes
+            .push(b'!');
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&changed, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::CommandDigestMismatch(instance))
+                if instance.as_str() == "consumer"
+        ));
+
+        let mut incomplete = expected.clone();
+        incomplete
+            .command_hashes
+            .remove(&OperationInstanceId::from("producer"));
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &incomplete),
+            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+        ));
+        let mut wrong_hash = expected;
+        wrong_hash.command_hashes.insert(
+            OperationInstanceId::from("producer"),
+            "not-canonical".to_owned(),
+        );
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &wrong_hash),
+            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+        ));
+
+        let mut wrong_plan = site_lab_expected_start(&run);
+        wrong_plan.plan_hash = PlanHash::from("different-plan");
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &wrong_plan),
+            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+        ));
+    }
+
+    #[test]
+    fn site_lab_preflight_reuses_the_native_validator_for_plan_routes_and_sources() {
+        let (run, routes) = setup();
+        let expected = site_lab_expected_start(&run);
+        let mut tampered_plan = run.clone();
+        tampered_plan.plan.nodes[0].outputs.clear();
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&tampered_plan, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+
+        let mut tampered_route = run.clone();
+        tampered_route.pinned_routes[0].task_queue = "untrusted-queue".to_owned();
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(&tampered_route, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+
+        let mut source_run = run;
+        let source_id = ArtifactId::from("external-document");
+        source_run.plan.external_artifacts.insert(
+            source_id.clone(),
+            crate::ExternalArtifact {
+                schema: schema(),
+                scope: scope(),
+                provenance: "trusted-source".to_owned(),
+            },
+        );
+        source_run.plan.nodes[1].inputs.insert(
+            PortId::from("source"),
+            ArtifactBinding::External {
+                artifact: source_id.clone(),
+            },
+        );
+        source_run.plan = source_run.plan.seal(routes.catalog()).unwrap();
+        source_run.admitted.insert(
+            source_id,
+            AdmittedArtifactV1 {
+                schema: schema(),
+                scope: scope(),
+                provenance: "trusted-source".to_owned(),
+                payload: b"same-looking-bytes-not-admitted".to_vec(),
+            },
+        );
+        let source_expectation = site_lab_expected_start(&source_run);
+        let original = crate::preflight_unadmitted_site_lab_v2_start(
+            &source_run,
+            &routes,
+            &source_expectation,
+        )
+        .unwrap();
+        assert_eq!(original.source_payload_hashes.len(), 1);
+
+        let mut changed_payload = source_run.clone();
+        changed_payload
+            .admitted
+            .get_mut(&ArtifactId::from("external-document"))
+            .unwrap()
+            .payload
+            .push(b'!');
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(
+                &changed_payload,
+                &routes,
+                &source_expectation
+            ),
+            Err(crate::SiteLabStartPreflightError::SourceDigestMismatch(artifact))
+                if artifact.as_str() == "external-document"
+        ));
+
+        source_run
+            .admitted
+            .get_mut(&ArtifactId::from("external-document"))
+            .unwrap()
+            .provenance = "wrong-source-revision".to_owned();
+        assert!(matches!(
+            crate::preflight_unadmitted_site_lab_v2_start(
+                &source_run,
+                &routes,
+                &source_expectation
+            ),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+    }
+
     const PARENT_WORKFLOW_ID: &str = "alegria-operation-dag-v1-run-a";
 
     fn scope() -> RunScope {

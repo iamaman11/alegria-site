@@ -18,6 +18,14 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab inspect -
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
 ```
 
+Для ChatGPT/скриптов допустим **один ограниченный JSON из stdin** без промежуточного файла:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file - < docs/site_lab_recipe_v1.json
+```
+
+То же работает с `diff`, `inspect` и `compare-results`. Если команда получает несколько файлов, только один аргумент может быть `-`; иначе возвращаются JSON `code: stdin_reused` и exit code 2. Бюджеты остаются прежними: рецепт 256 KiB, каждый сохранённый план/receipt 512 KiB. Открываемые пути в ошибках не раскрываются. **Штатного MCP-сервера для Site Lab в репозитории пока нет**: машиночитаемый CLI — переиспользуемая граница для будущего тонкого MCP-адаптера, не отдельный DAG-движок.
+
 Оба примера используют одни и те же задекларированные источники. Во втором `editorial` ждёт `canonicalize`; можно проверить, как это меняет зависимости. Оба файла сохранили историческое имя `*_v1.json` ради прежних ссылок, но содержат `schema_revision: 2` и поле `parameters: {}` у шагов. Рецепты с ревизией **1** и без параметров остаются совместимыми. Это **не A/B-тест с трафиком**.
 
 ## Как типизированно подключать шаги
@@ -42,6 +50,8 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-r
 
 Для операции с локально установленным Rust DTO значение `parameters` десериализуется **в конкретный тип владельца** (`typed_local`): неизвестные ключи/неверные типы отклоняются, если DTO их запрещает. JSON Schema показывает редактору допустимые поля, но не подменяет этот DTO и сама по себе не является исполняемым валидатором. Для отдельно развёрнутого владельца каталог может опубликовать `requires_owner_validate_only`: синтаксис фиксируется, однако **до независимого owner ValidateOnly нельзя считать значения проверенными, а эффект — разрешённым**. Проверка этого owner-child пока не реализована в Site Lab.
 
+Дополнительная защита `typed_local`: введённые поля должны сохраняться при строгом DTO round-trip. Даже если сам владелец забыл `deny_unknown_fields`, **молчаливое отбрасывание** нового, вложенного или продвинутого параметра отклоняется. Значения параметров не выводятся в JSON-диагностику.
+
 При добавлении нового провайдера необходимо зарегистрировать *его* доверенный `OperationContract` и схему параметров, связанную с отпечатком контракта; граф и CLI при этом остаются без provider-specific ветвей. Реестр, устанавливаемый CLI сегодня, содержит только пять pure semantic операций с пустыми параметрами. Реальные Qdrant/Neo4j/Voyage/Google операции **ещё не опубликованы через этот каталог**.
 
 ## Что показывает результат
@@ -53,6 +63,7 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-r
 - `steps_requiring_owner_admission`: операции с эффектами; в предварительном просмотре они допустимы **только как схема**, не как право вызвать провайдера.
 - `source_authentication: not_verified`, `execution: not_started`: данные не загружались, Temporal не запускался, внешние эффекты не выполнялись.
 - `invalid`: код проблемы, текст и `next_action`; завершение команды с кодом 2. Размер JSON ограничен 256 KiB; неизвестные поля уровня рецепта запрещены, а поля параметров проверяются только когда доступен локальный DTO.
+- Ошибки параметров дополнительно содержат **`step`** с точным `OperationInstanceId`, а не только общую причину. Для отсутствующей схемы — `operation_parameter_schema_missing`, для несовпадения отпечатка установленного контракта — `operation_parameter_contract_mismatch`. Ни DTO-значения, ни команды владельцев в сообщение не копируются.
 - `structural_comparison_only`: проверены две структуры с объявленными источниками; результатов ранжирования, конверсии и поведения пользователей пока нет.
 - `self_consistent_not_attested`: `inspect` проверил исходный **сохранённый** `ExecutionPlan` и конечный `OperationDagReceiptV1` V2 по доверенному каталогу: хеш плана, детерминированный порядок, полный набор external/produced артефактов, схемы, scope, каждый owner result, payload/result/receipt hashes и V2 Child Workflow ID. Это **локальная проверка согласованности**, а не серверное подтверждение Temporal History или долговечной записи owner.
 - `same_source_bytes_structural_result_comparison`: `compare-results` сравнивает выходные артефакты двух **разных** run_id только при идентичных реальных байтах исходных артефактов, tenant, source schema и provenance. Показывает изменившиеся хеши (`added/removed/modified/schema_changed`) и количество неизменённых выходов, но **не делает** выводов об эффективности SEO/сайта.
@@ -61,6 +72,12 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-r
 Команды `inspect`/`compare-results` работают с типизированными сохранёнными JSON-планами и V2-квитанциями, **не** с пользовательским recipe JSON. Файлы должны поступать из отдельного доверенного экспортёра завершённых Temporal-run; такой экспортёр через MCP пока не готов. Утилиты принимают файлы как *недоверенные* и сверяют операции с установленным `semantic_extraction_registry` (сейчас 5 pure-операций). Квитанции ещё не подключённых PG/Qdrant/Neo4j owner-контрактов честно отклоняются — подгружать контракт из того же файла нельзя. Максимум каждого входа — 512 KiB, данные источников, содержимое страниц, байты owner receipt и credentials в выдачу не копируются.
 
 `inspect` не обращается к Temporal API, PostgreSQL или другим поставщикам. В отчёте явно указаны `temporal_history_attestation: not_checked`, `owner_receipt_attestation: not_checked`, `source_authentication: not_checked`. Самосогласованную подделку файлов он **не может** отличить от настоящего завершённого выполнения: для P0 нужны серверные History и отдельно подтверждённые владельцами записи эффектов.
+
+## Нативная проверка перед будущим Temporal Start
+
+В `operation_protocol` есть **read-only** `preflight_unadmitted_site_lab_v2_start`. Она принимает уже построенный `OperationDagRunV6`, тот же доверенный `TrustedRouteCatalog` и заранее записанные ожидаемые `plan_hash`, хеши точных owner-command bytes и исходных payload bytes. Сначала выполняется **существующая** проверка V2 DAG/маршрутов/контрактов/источников, затем сверяются все ожидаемые BLAKE3-хеши. Подмена команды, отдельного источника, плана или маршрута завершится отказом. Результат имеет статус `preflight_only_not_admitted` и не содержит raw payloads.
+
+Это **не команда запуска CLI** и не серверное подтверждение подлинности данных. Предполагается, что ожидаемые хеши позднее выдаст доверенный типизированный owner codec/issuer; произвольные хеши, присланные пользователем, не создают полномочий. В этой функции **нет** Temporal Start, выполнения owner-child `ValidateOnly`, допуска эффектов, аттестации History или связи с `recipe_hash`: все эти части остаются P0.
 
 ## Расширение возможностей
 

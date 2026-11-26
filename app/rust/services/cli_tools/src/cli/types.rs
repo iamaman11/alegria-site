@@ -71,20 +71,25 @@ enum SiteLabCommand {
     Tools,
     /// Validate a versioned recipe without running or authenticating sources.
     Check {
+        /// Recipe JSON path, or '-' for one bounded stdin JSON payload.
         #[arg(long)]
         recipe_file: String,
     },
     /// Compare two plans structurally; does not measure SEO outcomes.
     Diff {
+        /// First recipe JSON path (or '-' for stdin).
         #[arg(long)]
         first_file: String,
+        /// Second recipe JSON path (or '-' for stdin; only one stdin permitted).
         #[arg(long)]
         second_file: String,
     },
     /// Inspect an already completed V2 DAG receipt, without live attestation.
     Inspect {
+        /// Saved plan JSON path, or '-' for one bounded stdin payload.
         #[arg(long)]
         plan_file: String,
+        /// Saved receipt JSON path (or '-' if plan is a file).
         #[arg(long)]
         receipt_file: String,
     },
