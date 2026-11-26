@@ -114,7 +114,10 @@ fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
             idempotency: IdempotencyPolicy::Idempotent,
         })
         .unwrap();
-    let contract = registry.catalog().contract(&op("future.search_demand")).unwrap();
+    let contract = registry
+        .catalog()
+        .contract(&op("future.search_demand"))
+        .unwrap();
     let fingerprint = contract.fingerprint().unwrap();
     registry
         .register_remote(
@@ -315,7 +318,10 @@ fn legacy_recipes_remain_valid_without_parameters_but_require_v2_for_parameters(
 
     legacy.steps[0].parameters = json!({"unexpected": "value"}).into();
     assert_eq!(
-        preview_recipe(&legacy, &registry).unwrap_err().problem().code,
+        preview_recipe(&legacy, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "recipe_revision_unsupported"
     );
 }
@@ -366,7 +372,12 @@ fn installed_rust_parameters_are_typed_and_change_recipe_identity() {
     first.steps = vec![step("search", "qdrant.hybrid_search", external("mentions"))];
     first.steps[0].parameters = json!({"mode": "hybrid", "top_k": 20}).into();
     let first_preview = preview_recipe(&first, &registry).unwrap();
-    assert_eq!(first_preview.steps_requiring_owner_parameter_validation.len(), 0);
+    assert_eq!(
+        first_preview
+            .steps_requiring_owner_parameter_validation
+            .len(),
+        0
+    );
     assert_eq!(first_preview.steps_requiring_owner_admission.len(), 1);
 
     let mut second = first.clone();
@@ -378,23 +389,35 @@ fn installed_rust_parameters_are_typed_and_change_recipe_identity() {
 
     second.steps[0].parameters = json!({"mode": "hybrid", "top_k": "40"}).into();
     assert_eq!(
-        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        preview_recipe(&second, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
     second.steps[0].parameters = json!({"mode": "hybrid", "top_k": 0}).into();
     assert_eq!(
-        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        preview_recipe(&second, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
     second.steps[0].parameters = json!({"mode": "unknown", "top_k": 40}).into();
     assert_eq!(
-        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        preview_recipe(&second, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
     second.steps[0].parameters =
         json!({"mode": "hybrid", "top_k": 40, "api_key": "should-never-be-in-recipe"}).into();
     assert_eq!(
-        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        preview_recipe(&second, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
 }
@@ -405,7 +428,10 @@ fn pure_operations_reject_extra_settings_and_untrusted_schema_replacement() {
     let mut recipe = recipe();
     recipe.steps[0].parameters = json!({"top_k": 10}).into();
     assert_eq!(
-        preview_recipe(&recipe, &registry).unwrap_err().problem().code,
+        preview_recipe(&recipe, &registry)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
     let mut registry = catalog();
@@ -453,7 +479,10 @@ fn missing_schema_fails_closed_and_schema_changes_invalidate_recipe_identity() {
     let mut first = recipe();
     first.steps = vec![step("remote", "future.provider_read", external("mentions"))];
     assert_eq!(
-        preview_recipe(&first, &first_catalog).unwrap_err().problem().code,
+        preview_recipe(&first, &first_catalog)
+            .unwrap_err()
+            .problem()
+            .code,
         "operation_parameters_invalid"
     );
     let tool = describe_tools(&first_catalog).unwrap();
@@ -487,5 +516,8 @@ fn missing_schema_fails_closed_and_schema_changes_invalidate_recipe_identity() {
     let next_preview = preview_recipe(&first, &next_catalog).unwrap();
     assert_eq!(first_preview.plan_hash, next_preview.plan_hash);
     assert_ne!(first_preview.recipe_hash, next_preview.recipe_hash);
-    assert_ne!(first_preview.parameter_hashes, next_preview.parameter_hashes);
+    assert_ne!(
+        first_preview.parameter_hashes,
+        next_preview.parameter_hashes
+    );
 }

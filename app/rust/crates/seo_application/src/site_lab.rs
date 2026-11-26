@@ -125,7 +125,9 @@ pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, 
 
 #[derive(Debug, Error)]
 pub enum SiteLabError {
-    #[error("unsupported recipe revision {0}; supported revisions are 1 (without parameters) and 2")]
+    #[error(
+        "unsupported recipe revision {0}; supported revisions are 1 (without parameters) and 2"
+    )]
     UnsupportedRevision(u16),
     #[error("recipe must include at least one operation")]
     EmptyRecipe,
@@ -365,9 +367,12 @@ pub fn preview_recipe(
         .nodes
         .iter()
         .filter(|node| {
-            catalog.catalog().contract(&node.operation).is_some_and(|contract| {
-                !contract.effects.is_empty() || contract.idempotency != IdempotencyPolicy::Pure
-            })
+            catalog
+                .catalog()
+                .contract(&node.operation)
+                .is_some_and(|contract| {
+                    !contract.effects.is_empty() || contract.idempotency != IdempotencyPolicy::Pure
+                })
         })
         .map(|node| node.instance.clone())
         .collect();
