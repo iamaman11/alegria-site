@@ -826,7 +826,8 @@ async fn mixed_v2_native_roles(
              UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BOOLEAN)
              TO {pg_worker},{pg_issuer},{q_worker},{q_issuer};
          GRANT SELECT ON pipeline.qdrant_projection_v4_admissions TO {q_worker};
-         GRANT INSERT ON pipeline.qdrant_projection_v4_admissions TO {q_issuer};
+         GRANT INSERT, UPDATE(revoked_at) ON pipeline.qdrant_projection_v4_admissions TO {q_issuer};
+         GRANT SELECT(admission_id,revoked_at) ON pipeline.qdrant_projection_v4_admissions TO {q_issuer};
          GRANT EXECUTE ON FUNCTION pipeline.begin_qdrant_projection_v4(UUID,BYTEA,TEXT),
              pipeline.confirm_qdrant_projection_v4(UUID,BYTEA,TEXT) TO {q_worker};
          GRANT EXECUTE ON FUNCTION pipeline.verify_qdrant_operator_resignal_v4(
@@ -2095,6 +2096,24 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             ).unwrap();
             vector_qdrant::projection_commands::upsert_projection(upsert)
                 .await.expect("provider accepted write before the lost SQL receipt");
+            // Revoking a previously started admission must stop any NEW
+            // operator signal, but it cannot erase a provider write already
+            // accepted before the crash. The same Child must reconcile that
+            // exact point and persist its missing immutable SQL receipt.
+            let issuer_dsn = fs::read_to_string(&roles.qdrant_operator_secret).unwrap();
+            let issuer_pool = sqlx::PgPool::connect(&issuer_dsn).await.unwrap();
+            sqlx::query(
+                "UPDATE pipeline.qdrant_projection_v4_admissions
+                    SET revoked_at=clock_timestamp() WHERE admission_id=$1"
+            ).bind(q_admission).execute(&issuer_pool).await
+                .expect("only original issuer may revoke started V4 admission");
+            let revoked_at_server: bool = sqlx::query_scalar(
+                "SELECT revoked_at IS NOT NULL AND revoked_at<=clock_timestamp()
+                   FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            assert!(revoked_at_server, "V4 revocation must use server time");
+            assert!(!q_issuer(&q_request, tenant).status.success(),
+                "revoked V4 admission must reject re-signal before Worker restart");
             qdrant_guard.0 = Some(start_qdrant_worker());
         }
         let completion = timeout(Duration::from_secs(110),
@@ -2153,7 +2172,8 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             ).bind(q_admission)
                 .bind(&run.owner_commands[&"qdrant_external_upsert".into()].command_bytes)
                 .bind(dispatch_key).fetch_one(&worker_pool).await.unwrap();
-            assert_eq!(retry, "confirmed", "retry must reuse the immutable receipt");
+            assert_eq!(retry, "confirmed",
+                "revocation after provider start cannot discard the immutable receipt");
             let history = parent.fetch_history(
                 WorkflowFetchHistoryOptions::builder().build()
             ).into_events().await.unwrap();
@@ -2162,7 +2182,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
                 Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
                     if a.workflow_id == q_child_id
             )).count(), 1, "worker replay must not start a second Qdrant Child");
-            eprintln!("CI_MIXED_V2_NATIVE_UNKNOWN_OUTCOME_WORKER_REPLAY=PASS");
+            eprintln!("CI_MIXED_V2_NATIVE_UNKNOWN_OUTCOME_REVOKED_WORKER_REPLAY=PASS");
         }
         eprintln!("CI_MIXED_V2_NATIVE_REAL_{case}_PG_TEMPORAL_QDRANT=PASS");
         let _ = routes;
