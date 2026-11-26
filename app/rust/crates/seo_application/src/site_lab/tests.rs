@@ -3,6 +3,7 @@ use crate::operation_adapter::semantic_extraction_registry;
 use operation_protocol::{
     ArtifactTypeId, OperationContract, OperationId, OperationOwnerId, PortId,
 };
+use serde_json::json;
 
 fn op(id: &str) -> OperationRef {
     OperationRef {
