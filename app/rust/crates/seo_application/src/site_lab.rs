@@ -80,15 +80,40 @@ pub struct SiteRecipe {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RecipeChange {
-    AddStep { step: RecipeStep },
-    RemoveStep { step: OperationInstanceId },
-    SetOperation { step: OperationInstanceId, operation: OperationRef },
-    SetParameters { step: OperationInstanceId, parameters: RecipeParameters },
-    SetInput { step: OperationInstanceId, port: PortId, input: RecipeInput },
-    RemoveInput { step: OperationInstanceId, port: PortId },
-    SetAfter { step: OperationInstanceId, after: BTreeSet<OperationInstanceId> },
-    UpsertSource { artifact: ArtifactId, source: RecipeSource },
-    RemoveSource { artifact: ArtifactId },
+    AddStep {
+        step: RecipeStep,
+    },
+    RemoveStep {
+        step: OperationInstanceId,
+    },
+    SetOperation {
+        step: OperationInstanceId,
+        operation: OperationRef,
+    },
+    SetParameters {
+        step: OperationInstanceId,
+        parameters: RecipeParameters,
+    },
+    SetInput {
+        step: OperationInstanceId,
+        port: PortId,
+        input: RecipeInput,
+    },
+    RemoveInput {
+        step: OperationInstanceId,
+        port: PortId,
+    },
+    SetAfter {
+        step: OperationInstanceId,
+        after: BTreeSet<OperationInstanceId>,
+    },
+    UpsertSource {
+        artifact: ArtifactId,
+        source: RecipeSource,
+    },
+    RemoveSource {
+        artifact: ArtifactId,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -106,7 +131,10 @@ pub enum RecipeEditError {
 /// Apply a batch to a clone, so a rejected change never partially mutates a
 /// caller's recipe. Removing a referenced step does not silently rewire its
 /// dependents; a subsequent `preview_recipe` reports the broken binding.
-pub fn revise_recipe(recipe: &SiteRecipe, changes: &[RecipeChange]) -> Result<SiteRecipe, RecipeEditError> {
+pub fn revise_recipe(
+    recipe: &SiteRecipe,
+    changes: &[RecipeChange],
+) -> Result<SiteRecipe, RecipeEditError> {
     if changes.is_empty() || changes.len() > 128 {
         return Err(RecipeEditError::InvalidBatchSize);
     }
@@ -129,7 +157,10 @@ pub fn revise_recipe(recipe: &SiteRecipe, changes: &[RecipeChange]) -> Result<Si
                 draft.sources.remove(artifact);
             }
             RecipeChange::RemoveStep { step } => {
-                let position = draft.steps.iter().position(|existing| &existing.id == step)
+                let position = draft
+                    .steps
+                    .iter()
+                    .position(|existing| &existing.id == step)
                     .ok_or_else(|| RecipeEditError::UnknownStep(step.clone()))?;
                 draft.steps.remove(position);
             }
@@ -140,7 +171,9 @@ pub fn revise_recipe(recipe: &SiteRecipe, changes: &[RecipeChange]) -> Result<Si
                 find_step(&mut draft, step)?.parameters = parameters.clone();
             }
             RecipeChange::SetInput { step, port, input } => {
-                find_step(&mut draft, step)?.inputs.insert(port.clone(), input.clone());
+                find_step(&mut draft, step)?
+                    .inputs
+                    .insert(port.clone(), input.clone());
             }
             RecipeChange::RemoveInput { step, port } => {
                 find_step(&mut draft, step)?.inputs.remove(port);
@@ -157,7 +190,10 @@ fn find_step<'a>(
     draft: &'a mut SiteRecipe,
     step: &OperationInstanceId,
 ) -> Result<&'a mut RecipeStep, RecipeEditError> {
-    draft.steps.iter_mut().find(|existing| &existing.id == step)
+    draft
+        .steps
+        .iter_mut()
+        .find(|existing| &existing.id == step)
         .ok_or_else(|| RecipeEditError::UnknownStep(step.clone()))
 }
 
