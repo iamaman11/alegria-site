@@ -10,8 +10,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{
-    OperationContract, OperationRef, PinnedOwnerRouteV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
-    OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
+    OperationContract, OperationRef, PinnedOwnerRouteV1, TrustedRouteCatalog,
+    OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -162,17 +162,29 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
     for entry in config.entries {
         let operation = entry.contract.reference.clone();
         if config.schema_revision == 1 {
-            anyhow::ensure!(entry.parameter_schema.is_none(), "v1 owner routes cannot declare parameter schemas");
+            anyhow::ensure!(
+                entry.parameter_schema.is_none(),
+                "v1 owner routes cannot declare parameter schemas"
+            );
         } else {
-            let schema = entry.parameter_schema.as_ref().context("v2 owner must declare its own parameter schema")?;
-            anyhow::ensure!(schema.get("type").and_then(Value::as_str) == Some("object"), "owner parameter schema must describe an object");
+            let schema = entry
+                .parameter_schema
+                .as_ref()
+                .context("v2 owner must declare its own parameter schema")?;
+            anyhow::ensure!(
+                schema.get("type").and_then(Value::as_str) == Some("object"),
+                "owner parameter schema must describe an object"
+            );
         }
         if let Some(schema) = &entry.parameter_schema {
             parameter_schemas.insert(operation, schema.clone());
         }
         register_trusted_entry(&mut catalog, entry)?;
     }
-    Ok(TrustedOwnerCatalog { routes: catalog, parameter_schemas })
+    Ok(TrustedOwnerCatalog {
+        routes: catalog,
+        parameter_schemas,
+    })
 }
 
 #[cfg(test)]
@@ -203,7 +215,11 @@ mod tests {
             task_queue: "alegria-test-owner-v1".to_string(),
             build_id: "0123456789abcdef0123456789abcdef01234567".to_string(),
         };
-        TrustedRegistrationV1 { contract, route, parameter_schema: None }
+        TrustedRegistrationV1 {
+            contract,
+            route,
+            parameter_schema: None,
+        }
     }
 
     fn manifest(revision: u16, schema: Option<Value>) -> Vec<u8> {
@@ -239,7 +255,10 @@ mod tests {
     fn duplicate_or_forged_owner_registration_cannot_appear_in_catalog() {
         let entry = registered_test_owner();
         let payload = json!({"contract":entry.contract,"route":entry.route,"parameter_schema":{"type":"object"}});
-        let duplicates = serde_json::to_vec(&json!({"schema_revision":2,"entries":[payload.clone(),payload.clone()]})).unwrap();
+        let duplicates = serde_json::to_vec(
+            &json!({"schema_revision":2,"entries":[payload.clone(),payload.clone()]}),
+        )
+        .unwrap();
         assert!(decode_trusted_catalog(&duplicates).is_err());
         let mut forged = payload;
         forged["route"]["contract_hash"] = json!("false-fingerprint");
