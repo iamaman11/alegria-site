@@ -846,10 +846,7 @@ mod tests {
         assert_eq!(producer.owner_validate_only, "required_not_observed");
         assert_eq!(producer.effect_dispatch, "not_started");
         assert!(producer.permitted_effects.is_empty());
-        assert_eq!(
-            producer.outputs[&PortId::from("document")].schema,
-            schema()
-        );
+        assert_eq!(producer.outputs[&PortId::from("document")].schema, schema());
 
         let consumer = &preview.steps[1];
         assert!(matches!(
@@ -947,11 +944,7 @@ mod tests {
         assert!(!rendered.contains("private-source-reference"));
 
         let mut replaced_bytes = run.clone();
-        replaced_bytes
-            .admitted
-            .get_mut(&source_id)
-            .unwrap()
-            .payload = b"attacker-source".to_vec();
+        replaced_bytes.admitted.get_mut(&source_id).unwrap().payload = b"attacker-source".to_vec();
         assert!(matches!(
             crate::preview_unadmitted_site_lab_v2_start(&replaced_bytes, &routes, &expected),
             Err(crate::SiteLabStartPreflightError::SourceDigestMismatch(id)) if id == source_id
@@ -1015,7 +1008,10 @@ mod tests {
             .expect("preview may describe an effect without authorizing it");
         assert_eq!(preview.steps[1].idempotency, IdempotencyPolicy::Idempotent);
         assert!(preview.steps[1].permitted_effects.contains(&effect));
-        assert_eq!(preview.steps[1].owner_validate_only, "required_not_observed");
+        assert_eq!(
+            preview.steps[1].owner_validate_only,
+            "required_not_observed"
+        );
         assert_eq!(preview.steps[1].effect_dispatch, "not_started");
         assert_eq!(preview.preflight.owner_admission, "not_issued");
         assert_eq!(preview.preflight.execution, "not_started");

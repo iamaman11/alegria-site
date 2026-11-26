@@ -433,14 +433,15 @@ fn depends_on_step(
     let Some(step) = recipe.steps.iter().find(|step| &step.id == dependent) else {
         return false;
     };
-    step.after.iter().any(|prerequisite| {
-        depends_on_step(recipe, prerequisite, ancestor, visited)
-    }) || step.inputs.values().any(|input| match input {
-        RecipeInput::Produced { step: prerequisite, .. } => {
-            depends_on_step(recipe, prerequisite, ancestor, visited)
-        }
-        RecipeInput::External { .. } => false,
-    })
+    step.after
+        .iter()
+        .any(|prerequisite| depends_on_step(recipe, prerequisite, ancestor, visited))
+        || step.inputs.values().any(|input| match input {
+            RecipeInput::Produced {
+                step: prerequisite, ..
+            } => depends_on_step(recipe, prerequisite, ancestor, visited),
+            RecipeInput::External { .. } => false,
+        })
 }
 
 /// Suggest candidate bindings even for an incomplete recipe, so ChatGPT can
@@ -474,9 +475,10 @@ pub fn suggest_compatible_inputs(
                 }
             }
             for producer in &steps {
-                let producer_contract = contracts
-                    .contract(&producer.operation)
-                    .ok_or_else(|| SiteLabError::UnavailableOperation(producer.operation.clone()))?;
+                let producer_contract =
+                    contracts.contract(&producer.operation).ok_or_else(|| {
+                        SiteLabError::UnavailableOperation(producer.operation.clone())
+                    })?;
                 if depends_on_step(recipe, &producer.id, &step.id, &mut BTreeSet::new()) {
                     continue;
                 }

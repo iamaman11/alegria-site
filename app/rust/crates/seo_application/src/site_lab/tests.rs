@@ -141,32 +141,52 @@ fn chatgpt_gets_exact_typed_connection_candidates_without_running_providers() {
     let report = suggest_compatible_inputs(&original, &catalog()).unwrap();
     assert_eq!(report.status, "schema_candidates_only");
     assert_eq!(report.execution, "not_started");
-    let canonical = report.ports.iter().find(|port| {
-        port.step == OperationInstanceId::from("canonicalize")
-            && port.port == PortId::from("input")
-    }).unwrap();
-    assert_eq!(canonical.candidates, vec![RecipeInput::Produced {
-        step: OperationInstanceId::from("extract"),
-        port: PortId::from("output"),
-    }]);
-    let editorial = report.ports.iter().find(|port| {
-        port.step == OperationInstanceId::from("editorial")
-            && port.port == PortId::from("input")
-    }).unwrap();
-    assert_eq!(editorial.candidates, vec![RecipeInput::External {
-        artifact: ArtifactId::from("topics"),
-    }]);
+    let canonical = report
+        .ports
+        .iter()
+        .find(|port| {
+            port.step == OperationInstanceId::from("canonicalize")
+                && port.port == PortId::from("input")
+        })
+        .unwrap();
+    assert_eq!(
+        canonical.candidates,
+        vec![RecipeInput::Produced {
+            step: OperationInstanceId::from("extract"),
+            port: PortId::from("output"),
+        }]
+    );
+    let editorial = report
+        .ports
+        .iter()
+        .find(|port| {
+            port.step == OperationInstanceId::from("editorial")
+                && port.port == PortId::from("input")
+        })
+        .unwrap();
+    assert_eq!(
+        editorial.candidates,
+        vec![RecipeInput::External {
+            artifact: ArtifactId::from("topics"),
+        }]
+    );
 }
 
 #[test]
 fn suggestions_exclude_back_edges_that_would_make_a_cycle() {
     let mut draft = recipe();
-    draft.steps[0].after.insert(OperationInstanceId::from("canonicalize"));
+    draft.steps[0]
+        .after
+        .insert(OperationInstanceId::from("canonicalize"));
     let report = suggest_compatible_inputs(&draft, &catalog()).unwrap();
-    let canonical = report.ports.iter().find(|port| {
-        port.step == OperationInstanceId::from("canonicalize")
-            && port.port == PortId::from("input")
-    }).unwrap();
+    let canonical = report
+        .ports
+        .iter()
+        .find(|port| {
+            port.step == OperationInstanceId::from("canonicalize")
+                && port.port == PortId::from("input")
+        })
+        .unwrap();
     assert!(canonical.candidates.is_empty());
     // The user-authored old binding remains visible, never silently deleted.
     assert!(canonical.current.is_some());
