@@ -51,6 +51,7 @@ TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
 TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
 TEMPORAL_QDRANT_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_qdrant_effects" / "src"
+TEMPORAL_DATAFORSEO_SRC = RUST_ROOT / "services" / "temporal_dataforseo" / "src"
 OPERATION_PROTOCOL_MANIFEST = RUST_ROOT / "crates" / "operation_protocol" / "Cargo.toml"
 PG_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml"
 QDRANT_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
@@ -91,6 +92,17 @@ QDRANT_EFFECTS_SDK_SOURCE_FILES = frozenset({
     (QDRANT_EFFECTS_SRC / "owner_v2.rs").resolve(),
     (QDRANT_EFFECTS_SRC / "operator_v3.rs").resolve(),
     (QDRANT_EFFECTS_SRC / "owner_generic_v1.rs").resolve(),
+})
+# A new separately deployed *stub-only* paid-provider owner owns exactly one
+# reviewed transport/runtime entrypoint. Other DataForSEO/domain modules never
+# inherit native Temporal SDK or HTTP client authority from this exception.
+DATAFORSEO_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_dataforseo" / "Cargo.toml").resolve()
+DATAFORSEO_OWNER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "main.rs").resolve(),
+})
+DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS = frozenset({
+    "reqwest", "temporalio-sdk", "temporalio-client",
+    "temporalio-common", "temporalio-macros",
 })
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
 COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
@@ -142,6 +154,7 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-macros",
     },
     QDRANT_EFFECTS_MANIFEST.resolve(): QDRANT_EFFECTS_RUNTIME_SDKS,
+    DATAFORSEO_OWNER_MANIFEST: DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
         "qdrant-client",
@@ -448,6 +461,13 @@ def qdrant_runtime_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Patt
     )
 
 
+def dataforseo_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_OWNER_SOURCE_FILES,
+        sdk_set=DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
+    )
+
+
 def main() -> int:
     violations: list[str] = []
 
@@ -477,6 +497,8 @@ def main() -> int:
             if qdrant_e2e_direct_temporal_sdk_allowed(file_path, pat):
                 continue
             if qdrant_runtime_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if dataforseo_owner_direct_sdk_allowed(file_path, pat):
                 continue
             if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
                 f"{sdk.replace('-', '_')}::" in pat.pattern
@@ -581,9 +603,16 @@ def main() -> int:
         protocol_closure, _ = workspace_dependency_closure(OPERATION_PROTOCOL_MANIFEST)
         pg_owner_closure, _ = workspace_dependency_closure(PG_OWNER_MANIFEST)
         qdrant_owner_closure, _ = workspace_dependency_closure(QDRANT_OWNER_MANIFEST)
+        dataforseo_owner_closure, _ = workspace_dependency_closure(DATAFORSEO_OWNER_MANIFEST)
         violations.extend(native_dag_owner_closure_failures(
             protocol_closure, pg_owner_closure, qdrant_owner_closure,
         ))
+        for dependency in sorted(dataforseo_owner_closure & (
+            DAG_PROVIDER_CRATES | NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME
+        )):
+            violations.append(
+                f"native DataForSEO effect owner links unrelated `{dependency}`"
+            )
         mixed_e2e_closure, _ = workspace_dependency_closure(
             QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml"
         )
