@@ -927,6 +927,71 @@ mod tests {
     }
 
     #[test]
+    fn v2_owner_preflight_rejects_spoofed_produced_edges_in_parent_history() {
+        let (run, routes) = setup();
+        let id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        let machine = OperationDagMachine::new_v2(&id, run.clone(), routes).unwrap();
+        let mut actual_parent = parent();
+        actual_parent.workflow_id = id;
+        let consumer = machine
+            .v2_owner_validation_requests(actual_parent)
+            .unwrap()
+            .into_iter()
+            .find(|(_, request)| request.instance.as_str() == "consumer")
+            .unwrap()
+            .1;
+        consumer.verify_against_run(&run).unwrap();
+
+        // Recompute the plan hash after every forgery so this specifically
+        // tests independent owner-side Produced-edge admission, not the
+        // existing parent-plan hash check.
+        let reject = |mut forged: OperationDagRunV6| {
+            forged.plan.hash = forged.plan.canonical_hash().unwrap();
+            let mut request = consumer.clone();
+            request.plan_hash = forged.plan.hash.clone();
+            assert!(
+                request.verify_against_run(&forged).is_err(),
+                "owner must not trust an unbound Produced edge"
+            );
+        };
+
+        let mut missing_producer = run.clone();
+        missing_producer.plan.nodes.remove(0);
+        reject(missing_producer);
+
+        let mut missing_output = run.clone();
+        missing_output.plan.nodes[0].outputs.clear();
+        reject(missing_output);
+
+        let mut wrong_producer_port = run.clone();
+        wrong_producer_port.plan.nodes[1].inputs.insert(
+            "source".into(),
+            ArtifactBinding::Produced {
+                producer: "producer".into(),
+                port: "missing-port".into(),
+                artifact: "artifact-a".into(),
+            },
+        );
+        reject(wrong_producer_port);
+
+        let mut duplicate_producer = run.clone();
+        let duplicated_node = duplicate_producer.plan.nodes[0].clone();
+        duplicate_producer.plan.nodes.push(duplicated_node);
+        reject(duplicate_producer);
+
+        let mut external_alias = run;
+        external_alias.plan.external_artifacts.insert(
+            "artifact-a".into(),
+            crate::ExternalArtifact {
+                schema: schema(),
+                scope: scope(),
+                provenance: "forged-external-alias".into(),
+            },
+        );
+        reject(external_alias);
+    }
+
+    #[test]
     fn v2_validation_rejects_cross_tenant_or_changed_external_artifact() {
         let (mut run, routes) = setup();
         let ext: ArtifactId = "external-document".into();

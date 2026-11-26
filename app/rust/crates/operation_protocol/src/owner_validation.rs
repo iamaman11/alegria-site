@@ -194,9 +194,32 @@ impl OwnerValidationRequestV1 {
                             })
                             || self.produced_input_ports.contains(port)
                     }
-                    ArtifactBinding::Produced { .. } => {
+                    ArtifactBinding::Produced {
+                        producer,
+                        port: producer_port,
+                        artifact,
+                    } => {
+                        // A Produced port is not merely a promise that some
+                        // bytes will arrive later. Independently bind it to
+                        // exactly one producer's declared output in the
+                        // immutable parent History, before any owner effect.
+                        // The actual bytes/schema/receipt are still checked
+                        // by the receiving owner after that Child completes.
+                        let mut producers = run
+                            .plan
+                            .nodes
+                            .iter()
+                            .filter(|source| &source.instance == producer);
+                        let valid_producer = match (producers.next(), producers.next()) {
+                            (Some(source), None) => {
+                                source.outputs.get(producer_port) == Some(artifact)
+                            }
+                            _ => false,
+                        };
                         !self.produced_input_ports.contains(port)
                             || self.external_inputs.contains_key(port)
+                            || run.plan.external_artifacts.contains_key(artifact)
+                            || !valid_producer
                     }
                 }
             })
