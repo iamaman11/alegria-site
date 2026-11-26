@@ -25,18 +25,18 @@ PG_E2E_SRC = PG_E2E_DIR / "src"
 PG_APP_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_app_e2e"
 PG_APP_HTTP_FAULT_FILE = PG_APP_E2E_DIR / "src/tests/publication_delivery_tests.rs"
 PG_E2E_TEMPORAL_SDKS = frozenset({
-    "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+    "temporalio-client", "temporalio-common",
 })
 TEMPORAL_FIXTURE_DIR = RUST_ROOT / "crates" / "integration_temporal_fixtures"
 TEMPORAL_FIXTURE_SRC = TEMPORAL_FIXTURE_DIR / "src"
-TEMPORAL_FIXTURE_SDKS = frozenset({"temporalio-client", "temporalio-sdk-core"})
+TEMPORAL_FIXTURE_SDKS = frozenset({"temporalio-client"})
 TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_temporal_e2e"
 TEMPORAL_E2E_SRC = TEMPORAL_E2E_DIR / "src"
 TEMPORAL_E2E_SDKS = frozenset({"temporalio-client", "temporalio-common"})
 QDRANT_TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_qdrant_temporal_e2e"
 QDRANT_TEMPORAL_E2E_SRC = QDRANT_TEMPORAL_E2E_DIR / "src"
 QDRANT_TEMPORAL_E2E_SDKS = frozenset({
-    "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+    "temporalio-client", "temporalio-common",
 })
 # The test must exercise the native owner protocol without compiling the SEO
 # application or production Temporal gateway as an accidental dependency.
@@ -116,7 +116,7 @@ ALLOWED_DIRECT_SDK_MANIFESTS = {
 
 MANIFEST_DEP_EXCEPTIONS = {
     (RUST_ROOT / "crates" / "temporal_gateway" / "Cargo.toml").resolve(): {
-        "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+        "temporalio-client", "temporalio-common",
     },
     (ROOT / "app" / "rust" / "services" / "temporal" / "Cargo.toml").resolve(): {
         "temporalio-sdk",

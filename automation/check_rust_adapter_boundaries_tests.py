@@ -38,9 +38,9 @@ class PgE2eSdkBoundaryTests(unittest.TestCase):
     def setUp(self) -> None:
         self.test_source = PG_E2E_SRC / "tests" / "future_pg_effect_test.rs"
 
-    def test_only_three_native_temporal_sdks_are_allowed(self) -> None:
+    def test_only_two_native_temporal_client_libraries_are_allowed(self) -> None:
         self.assertEqual(PG_E2E_TEMPORAL_SDKS, {
-            "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+            "temporalio-client", "temporalio-common",
         })
         for sdk in PG_E2E_TEMPORAL_SDKS:
             module = sdk.replace("-", "_")
@@ -52,7 +52,7 @@ class PgE2eSdkBoundaryTests(unittest.TestCase):
 
     def test_pg_tests_still_reject_provider_and_unapproved_sdks(self) -> None:
         for module in (
-            "neo4rs", "qdrant_client", "reqwest", "temporalio_sdk",
+            "neo4rs", "qdrant_client", "reqwest", "temporalio_sdk", "temporalio_sdk_core",
             "temporalio_macros", "tonic", "hyper", "sqlx",
         ):
             with self.subTest(module=module):
@@ -143,7 +143,7 @@ class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
 
     def test_e2e_is_exact_optional_native_temporal_sdk_set(self) -> None:
         self.assertEqual(QDRANT_TEMPORAL_E2E_SDKS, {
-            "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+            "temporalio-client", "temporalio-common",
         })
         manifest = tomllib.loads((QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml").read_text())
         for sdk in QDRANT_TEMPORAL_E2E_SDKS:
@@ -153,7 +153,7 @@ class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
                 self.assertTrue(qdrant_e2e_direct_temporal_sdk_allowed(
                     QDRANT_TEMPORAL_E2E_SRC / "lib.rs",
                     re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
-        for forbidden in ("temporalio_sdk", "temporalio_macros", "neo4rs", "qdrant_client"):
+        for forbidden in ("temporalio_sdk", "temporalio_sdk_core", "temporalio_macros", "neo4rs", "qdrant_client"):
             self.assertFalse(qdrant_e2e_direct_temporal_sdk_allowed(
                 QDRANT_TEMPORAL_E2E_SRC / "tests" / "unexpected.rs",
                 re.compile(rf"\buse\s+{forbidden}::")))

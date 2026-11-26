@@ -133,6 +133,29 @@ class NativeDagIsolationTests(unittest.TestCase):
         closure, _ = workspace_dependency_closure(QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml")
         self.assertFalse(MIXED_E2E_FORBIDDEN_LOCAL_OWNERS & closure)
 
+    def test_temporal_client_only_packages_do_not_compile_worker_sdk(self) -> None:
+        """Client transport needs `url`, not the heavyweight SDK Worker core.
+
+        Guard both Cargo's manifest and the exact `--locked` dependency map;
+        real Temporal Workers deliberately keep their SDK dependency.
+        """
+        from check_rust_adapter_boundaries import RUST_ROOT
+
+        lock = tomllib.loads((RUST_ROOT / "Cargo.lock").read_text())
+        locked = {entry["name"]: set(entry.get("dependencies", []))
+                  for entry in lock["package"] if entry.get("version") == "0.1.0"}
+        for name in (
+            "integration_pg_v3_e2e", "integration_qdrant_temporal_e2e",
+            "integration_temporal_fixtures", "temporal_gateway",
+        ):
+            with self.subTest(client_package=name):
+                directory = (RUST_ROOT / "crates" / name)
+                manifest = tomllib.loads((directory / "Cargo.toml").read_text())
+                self.assertIn("url", manifest["dependencies"])
+                self.assertNotIn("temporalio-sdk-core", manifest["dependencies"])
+                self.assertIn("url", locked[name])
+                self.assertNotIn("temporalio-sdk-core", locked[name])
+
     def test_future_direct_or_transitive_owner_dependencies_fail_closed(self) -> None:
         cases = (
             ({"operation_protocol", "qdrant_contracts"}, {"temporal_pg_effects"},

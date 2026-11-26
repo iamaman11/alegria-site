@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
-use temporalio_sdk_core::Url;
+use url::Url;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,

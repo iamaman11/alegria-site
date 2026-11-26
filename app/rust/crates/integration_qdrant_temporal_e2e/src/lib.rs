@@ -30,7 +30,7 @@ mod tests {
         data_converters::{PayloadConverter, RawValue},
         protos::temporal::api::history::v1::history_event::Attributes,
     };
-    use temporalio_sdk_core::Url;
+    use url::Url;
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 

@@ -15,7 +15,7 @@ use temporalio_client::{
     WorkflowListOptions, WorkflowSignalOptions,
 };
 use temporalio_common::data_converters::RawValue;
-use temporalio_sdk_core::Url;
+use url::Url;
 
 /// Provider-free pure-operation Workflow consumer. Never share the existing
 /// `alegria-pipeline` queue with partial Activity sets or legacy V1/V2 workers.

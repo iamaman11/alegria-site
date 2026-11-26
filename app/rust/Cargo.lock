@@ -2302,10 +2302,10 @@ dependencies = [
  "sqlx",
  "temporalio-client",
  "temporalio-common",
- "temporalio-sdk-core",
  "testcontainers",
  "tokio",
  "truth_domain",
+ "url",
  "uuid",
  "vector_qdrant",
 ]
@@ -2322,10 +2322,10 @@ dependencies = [
  "sqlx",
  "temporalio-client",
  "temporalio-common",
- "temporalio-sdk-core",
  "testcontainers",
  "tokio",
  "truth_domain",
+ "url",
  "uuid",
 ]
 
@@ -2368,9 +2368,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "temporalio-client",
- "temporalio-sdk-core",
  "testcontainers",
  "tokio",
+ "url",
  "uuid",
 ]
 
@@ -5378,7 +5378,7 @@ dependencies = [
  "seo_ports",
  "temporalio-client",
  "temporalio-common",
- "temporalio-sdk-core",
+ "url",
 ]
 
 [[package]]

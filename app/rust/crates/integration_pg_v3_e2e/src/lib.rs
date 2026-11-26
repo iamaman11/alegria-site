@@ -26,7 +26,7 @@ mod tests {
         enums::v1::EventType,
         history::v1::{history_event::Attributes, History},
     };
-    use temporalio_sdk_core::Url;
+    use url::Url;
     use tokio::time::timeout;
     use uuid::Uuid;
 

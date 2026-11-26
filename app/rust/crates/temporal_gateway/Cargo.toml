@@ -11,4 +11,4 @@ primitives = { path = "../primitives" }
 seo_ports = { path = "../seo_ports" }
 temporalio-client = { workspace = true }
 temporalio-common = { workspace = true }
-temporalio-sdk-core = { workspace = true }
+url = { workspace = true }
