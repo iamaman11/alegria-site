@@ -1683,10 +1683,12 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let tenant = "ci-generic-v2-mixed-tenant";
     let produced_id = Uuid::new_v4();
     let parallel_id = Uuid::new_v4();
+    let revoked_id = Uuid::new_v4();
     let invalid_id = Uuid::new_v4();
     let foreign_id = Uuid::new_v4();
     let contexts = [format!("native-v2-produced-{produced_id}"),
         format!("native-v2-parallel-{parallel_id}"),
+        format!("native-v2-revoked-before-start-{revoked_id}"),
         format!("native-v2-invalid-{invalid_id}"),
         format!("native-v2-foreign-{foreign_id}")];
     for context in &contexts {
@@ -1701,12 +1703,15 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let produced_q_admission = Uuid::new_v4();
     let parallel_pg_admission = Uuid::new_v4();
     let parallel_q_admission = Uuid::new_v4();
+    let revoked_pg_admission = Uuid::new_v4();
+    let revoked_q_admission = Uuid::new_v4();
     let invalid_pg_admission = Uuid::new_v4();
     let invalid_q_admission = Uuid::new_v4();
     let foreign_pg_admission = Uuid::new_v4();
     let foreign_q_admission = Uuid::new_v4();
     let produced_keyword = format!("v2-pg-produced-{produced_q_admission}");
     let parallel_keyword = format!("v2-pg-parallel-{parallel_q_admission}");
+    let revoked_keyword = format!("v2-pg-revoked-{revoked_q_admission}");
     let invalid_keyword = format!("v2-invalid-{invalid_q_admission}");
     let foreign_keyword = format!("v2-foreign-{foreign_q_admission}");
     let produced_vector = (0..1024).map(|i| 0.125 + i as f32 / 16384.0)
@@ -1720,8 +1725,14 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         parallel_id, tenant, contexts[1].clone(), parallel_pg_admission,
         parallel_q_admission, parallel_keyword.clone(), &build_id,
     );
+    // A second instance of the SAME independent plan shape, not a third
+    // business DAG. It exercises a genuinely concurrent first-start denial.
+    let (revoked_run, revoked_routes) = mixed_v2_independent_fixture_for(
+        revoked_id, tenant, contexts[2].clone(), revoked_pg_admission,
+        revoked_q_admission, revoked_keyword.clone(), &build_id,
+    );
     let (mut invalid_run, invalid_routes) = mixed_v2_independent_fixture_for(
-        invalid_id, tenant, contexts[2].clone(), invalid_pg_admission,
+        invalid_id, tenant, contexts[3].clone(), invalid_pg_admission,
         invalid_q_admission, invalid_keyword.clone(), &build_id,
     );
     // A structurally valid plan with a *semantic* bad owner DTO: only the
@@ -1739,7 +1750,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     // This must also fail in the owner's pure ValidateChild, without starting
     // the otherwise valid independent PostgreSQL operation.
     let (mut foreign_run, foreign_routes) = mixed_v2_independent_fixture_for(
-        foreign_id, tenant, contexts[3].clone(), foreign_pg_admission,
+        foreign_id, tenant, contexts[4].clone(), foreign_pg_admission,
         foreign_q_admission, foreign_keyword.clone(), &build_id,
     );
     let foreign_wire = foreign_run.owner_commands
@@ -1758,11 +1769,15 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         &pg.pool, parallel_id, tenant, &contexts[1],
         &format!("pg-source-{parallel_keyword}"), &parallel_vector,
     ).await;
+    mixed_v7_seed_pg_vector_projection_source(
+        &pg.pool, revoked_id, tenant, &contexts[2],
+        &format!("pg-source-{revoked_keyword}"), &parallel_vector,
+    ).await;
     // Both rejected plans have a real, readable PG-owned source. An absence
     // of effects therefore cannot be explained by a missing source row.
     for (run_id, context, keyword) in [
-        (invalid_id, &contexts[2], &invalid_keyword),
-        (foreign_id, &contexts[3], &foreign_keyword),
+        (invalid_id, &contexts[3], &invalid_keyword),
+        (foreign_id, &contexts[4], &foreign_keyword),
     ] {
         mixed_v7_seed_pg_vector_projection_source(
             &pg.pool, run_id, tenant, context,
@@ -1770,16 +1785,19 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         ).await;
     }
     for (run, routes) in [(&produced_run, &produced_routes),
-        (&parallel_run, &parallel_routes), (&invalid_run, &invalid_routes),
+        (&parallel_run, &parallel_routes), (&revoked_run, &revoked_routes),
+        (&invalid_run, &invalid_routes),
         (&foreign_run, &foreign_routes)] {
         routes.validate_run_routes(run).expect("V2 trusted per-owner routes");
     }
     let catalog = mixed_v2_install_ci_trusted_catalog(&[
         (&produced_run, &produced_routes), (&parallel_run, &parallel_routes),
+        (&revoked_run, &revoked_routes),
         (&invalid_run, &invalid_routes), (&foreign_run, &foreign_routes),
     ]);
     let produced_issuer_catalog = mixed_v6_governance_issuer_catalog(&produced_run, &produced_routes);
     let parallel_issuer_catalog = mixed_v6_governance_issuer_catalog(&parallel_run, &parallel_routes);
+    let revoked_issuer_catalog = mixed_v6_governance_issuer_catalog(&revoked_run, &revoked_routes);
     let private_locators = MixedV2PrivateLocatorFiles::new();
     let base_roles = mixed_v6_native_owner_roles(&pg, tenant).await;
     let roles = mixed_v2_native_roles(&pg, tenant, &base_roles).await;
@@ -1829,6 +1847,10 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             parallel_pg_admission, parallel_q_admission, &parallel_issuer_catalog,
             format!("external-{parallel_keyword}"), vec![0.2375_f32; 1024],
             format!("pg-source-{parallel_keyword}"), parallel_vector.clone(), true),
+        ("revoked-before-start", &revoked_run, &revoked_routes, revoked_id, &contexts[2],
+            revoked_pg_admission, revoked_q_admission, &revoked_issuer_catalog,
+            format!("external-{revoked_keyword}"), vec![0.2375_f32; 1024],
+            format!("pg-source-{revoked_keyword}"), parallel_vector.clone(), true),
     ] {
         let parent_id = operation_dag_parent_workflow_id_v2(&run_id.to_string());
         assert_ne!(parent_id,
@@ -2056,6 +2078,117 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         assert!(q_success.status.success(), "{case}: real Qdrant V4 issuer: stdout={} stderr={}",
             String::from_utf8_lossy(&q_success.stdout),
             String::from_utf8_lossy(&q_success.stderr));
+        if case == "revoked-before-start" {
+            // This is the same PG || Qdrant DAG as `parallel`, with a new
+            // actual Temporal Child Run. Its Qdrant Worker is stopped and its
+            // real operator admission has been signalled, but no first attempt
+            // can have started. Force issuer revocation to WIN the row-lock
+            // race, proving the worker cannot create a provider attempt later.
+            let issuer_dsn = fs::read_to_string(&roles.qdrant_operator_secret).unwrap();
+            let worker_dsn = fs::read_to_string(&roles.qdrant_worker_secret).unwrap();
+            let issuer_pool = sqlx::PgPool::connect(&issuer_dsn).await.unwrap();
+            let worker_pool = sqlx::PgPool::connect(&worker_dsn).await.unwrap();
+            let mut issuer_tx = issuer_pool.begin().await.unwrap();
+            let issuer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *issuer_tx).await.unwrap();
+            sqlx::query(
+                "UPDATE pipeline.qdrant_projection_v4_admissions
+                    SET revoked_at=clock_timestamp() WHERE admission_id=$1"
+            ).bind(q_admission).execute(&mut *issuer_tx).await
+                .expect("only original issuer locks and revokes the V4 admission");
+            let mut worker_conn = worker_pool.acquire().await.unwrap();
+            let worker_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut *worker_conn).await.unwrap();
+            let (_, _, _, _, dispatch_key) = classified.iter()
+                .find(|(_,_,_,operation,_)| operation == "qdrant.keyword_projection.upsert")
+                .expect("real Qdrant ChildInitiated must carry checked dispatch");
+            let command_bytes = run.owner_commands[&"qdrant_external_upsert".into()]
+                .command_bytes.clone();
+            let dispatch_key = dispatch_key.clone();
+            let begin = tokio::spawn(async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT pipeline.begin_qdrant_projection_v4($1,$2,$3)"
+                ).bind(q_admission).bind(command_bytes).bind(dispatch_key)
+                    .fetch_one(&mut *worker_conn).await
+            });
+            timeout(Duration::from_secs(20), async {
+                loop {
+                    let blocked_by_issuer: bool = sqlx::query_scalar(
+                        "SELECT $1::integer = ANY(pg_blocking_pids($2::integer))"
+                    ).bind(issuer_pid).bind(worker_pid).fetch_one(&pg.pool).await.unwrap();
+                    if blocked_by_issuer { break; }
+                    sleep(Duration::from_millis(20)).await;
+                }
+            }).await.expect("actual worker first-start never waited on issuer revocation lock");
+            let before_commit: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            assert_eq!(before_commit, 0, "blocked first-start cannot cross the revocation fence");
+            issuer_tx.commit().await.expect("commit issuer-first revocation");
+            let denied = timeout(Duration::from_secs(10), begin).await
+                .expect("revoked worker request never unblocked").unwrap()
+                .expect_err("worker must reject a revoked pre-attempt admission");
+            assert!(matches!(&denied, sqlx::Error::Database(db)
+                if db.code().as_deref() == Some("AV001")),
+                "revoked first-start must be a typed SQL AV001 denial: {denied}");
+            assert!(!q_issuer(&q_request, tenant).status.success(),
+                "operator cannot re-signal a revoked, never-started Child");
+            let (attempts, receipts): (i64, i64) = sqlx::query_as(
+                "SELECT (SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts
+                         WHERE admission_id=$1),
+                        (SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts
+                         WHERE admission_id=$1)"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            assert_eq!((attempts, receipts), (0, 0),
+                "revoked first-start must create neither attempt nor receipt");
+            let command: qdrant_contracts::QdrantKeywordProjectionCommandV1 =
+                serde_json::from_slice(&run.owner_commands[&"qdrant_external_upsert".into()]
+                    .command_bytes).unwrap();
+            let approved_sha: String = sqlx::query_scalar(
+                "SELECT command_sha256 FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            let expected_payload = serde_json::json!({
+                "tenant_id": tenant, "context_key": context, "keyword_key": q_keyword,
+                "operator_admission_id": q_admission.to_string(),
+                "approved_command_sha256": approved_sha,
+            });
+            assert!(!vector_qdrant::projection_commands::projection_readback_exact(
+                "seo_keyword_clusters_4", &q_admission.to_string(), "keyword_cluster",
+                &format!("tenant/{tenant}/context/{context}/keyword/{q_keyword}"),
+                &command.vector, &expected_payload,
+            ).await.expect("negative Qdrant provider readback"),
+                "revoked first-start must not write a Qdrant point");
+            // The real persisted Temporal Signal must also fail after Worker
+            // restart, rather than bypassing the same SQL boundary on replay.
+            qdrant_guard.0 = Some(start_qdrant_worker());
+            let result = timeout(Duration::from_secs(60),
+                parent.get_result(WorkflowGetResultOptions::default()))
+                .await.expect("revoked V2 Child must terminate rather than retry forever");
+            assert!(result.is_err(), "revoked Child cannot complete its V2 parent");
+            let history = parent.fetch_history(
+                WorkflowFetchHistoryOptions::builder().build()
+            ).into_events().await.expect("failed V2 parent server History");
+            assert!(history.iter().any(|event| matches!(
+                &event.attributes,
+                Some(Attributes::ChildWorkflowExecutionFailedEventAttributes(_))
+            )), "real Qdrant owner Child failure must reach parent Temporal History");
+            let after_replay: (i64, i64) = sqlx::query_as(
+                "SELECT (SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts
+                         WHERE admission_id=$1),
+                        (SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts
+                         WHERE admission_id=$1)"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            assert_eq!(after_replay, (0, 0),
+                "Worker replay cannot revive a revoked first-start or create a receipt");
+            assert!(!vector_qdrant::projection_commands::projection_readback_exact(
+                "seo_keyword_clusters_4", &q_admission.to_string(), "keyword_cluster",
+                &format!("tenant/{tenant}/context/{context}/keyword/{q_keyword}"),
+                &command.vector, &expected_payload,
+            ).await.expect("provider readback after denied Temporal replay"),
+                "denied Temporal replay must not create a provider point");
+            eprintln!("CI_MIXED_V2_NATIVE_REVOKE_FIRST_SQL_LOCK_RACE_NO_EFFECT=PASS");
+            continue;
+        }
         if independent {
             // Simulate the precise unknown-outcome window: the SQL attempt
             // committed, Qdrant accepted the effect, and the Worker died
