@@ -81,6 +81,24 @@ enum SiteLabCommand {
         #[arg(long)]
         second_file: String,
     },
+    /// Inspect an already completed V2 DAG receipt, without live attestation.
+    Inspect {
+        #[arg(long)]
+        plan_file: String,
+        #[arg(long)]
+        receipt_file: String,
+    },
+    /// Compare stored outputs only if both runs share exact external bytes.
+    CompareResults {
+        #[arg(long)]
+        first_plan_file: String,
+        #[arg(long)]
+        first_receipt_file: String,
+        #[arg(long)]
+        second_plan_file: String,
+        #[arg(long)]
+        second_receipt_file: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

@@ -8,10 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId, ExecutionPlan,
+    ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId,
     ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef,
     PlanError, PlanHash, PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
+pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -347,3 +348,12 @@ pub fn diff_recipes(
 
 #[cfg(test)]
 mod tests;
+
+mod receipts;
+pub use receipts::{
+    compare_executions, inspect_execution, ExecutionComparison, ExecutionInspection,
+    InspectionError,
+};
+
+#[cfg(test)]
+mod receipts_tests;

@@ -1,4 +1,4 @@
-# Лаборатория сайта: операции и сценарии (v1, read-only)
+# Лаборатория сайта: рецепты и проверка результатов (v1, read-only)
 
 ## Зачем
 
@@ -14,6 +14,8 @@
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab tools
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file docs/site_lab_recipe_v1.json
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --first-file docs/site_lab_recipe_v1.json --second-file docs/site_lab_recipe_v1_alternative.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab inspect --plan-file saved-plan.json --receipt-file saved-v2-receipt.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
 ```
 
 Оба примера используют одни и те же задекларированные источники. Во втором `editorial` ждёт `canonicalize`; можно проверить, как это меняет зависимости. Это **не A/B-тест с трафиком**.
@@ -25,6 +27,13 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --fi
 - `source_authentication: not_verified`, `execution: not_started`: данные не загружались, Temporal не запускался, внешние эффекты не выполнялись.
 - `invalid`: код проблемы, текст и `next_action`; завершение команды с кодом 2. Размер JSON ограничен 256 KiB, неизвестные поля запрещены.
 - `structural_comparison_only`: проверены две структуры с объявленными источниками; результатов ранжирования, конверсии и поведения пользователей пока нет.
+- `self_consistent_not_attested`: `inspect` проверил исходный **сохранённый** `ExecutionPlan` и конечный `OperationDagReceiptV1` V2 по доверенному каталогу: хеш плана, детерминированный порядок, полный набор external/produced артефактов, схемы, scope, каждый owner result, payload/result/receipt hashes и V2 Child Workflow ID. Это **локальная проверка согласованности**, а не серверное подтверждение Temporal History или долговечной записи owner.
+- `same_source_bytes_structural_result_comparison`: `compare-results` сравнивает выходные артефакты двух **разных** run_id только при идентичных реальных байтах исходных артефактов, tenant, source schema и provenance. Показывает изменившиеся хеши (`added/removed/modified/schema_changed`) и количество неизменённых выходов, но **не делает** выводов об эффективности SEO/сайта.
+- `different_source_snapshot`: сравнение запрещено, пока фактические исходные байты или происхождение различаются. Два одинаковых текстовых описания источников не считаются доказательством идентичности данных.
+
+Команды `inspect`/`compare-results` работают с типизированными сохранёнными JSON-планами и V2-квитанциями, **не** с пользовательским recipe JSON. Файлы должны поступать из отдельного доверенного экспортёра завершённых Temporal-run; такой экспортёр через MCP пока не готов. Утилиты принимают файлы как *недоверенные* и сверяют операции с установленным `semantic_extraction_registry` (сейчас 5 pure-операций). Квитанции ещё не подключённых PG/Qdrant/Neo4j owner-контрактов честно отклоняются — подгружать контракт из того же файла нельзя. Максимум каждого входа — 512 KiB, данные источников, содержимое страниц, байты owner receipt и credentials в выдачу не копируются.
+
+`inspect` не обращается к Temporal API, PostgreSQL или другим поставщикам. В отчёте явно указаны `temporal_history_attestation: not_checked`, `owner_receipt_attestation: not_checked`, `source_authentication: not_checked`. Самосогласованную подделку файлов он **не может** отличить от настоящего завершённого выполнения: для P0 нужны серверные History и отдельно подтверждённые владельцами записи эффектов.
 
 ## Расширение возможностей
 
@@ -33,7 +42,7 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --fi
 1. Владелец провайдера оформляет типизированные операции и версии схем (`OperationContract`), маркирует побочные эффекты, инвалидации и правила идемпотентности. Контракты поступают **в доверенный каталог** через адаптер владельца, не из пользовательского JSON.
 2. Лаборатория автоматически отображает новые операции. Существующие рецепты продолжают привязываться к своим версиям; пользователь может редактировать связи и проверять гипотезы.
 3. Для *реального* запуска требуется независимый operator admission, проверенная provenance и эффект-владелец со своим маршрутом/секретами, idempotency/receipt fence. Единственный исполнитель production-графов остаётся за Temporal, без второй очереди или нового самодельного DAG-движка.
-4. Затем появляются сравнение фактических run_id, диагностика по шагам, просмотр результатов и SEO-метрики. Они **ещё не реализованы** данной read-only командой.
+4. Локальная диагностика уже умеет проверять сохранённые typed receipts и сравнивать два snapshot-compatible результата. Реальное подключение run_id → Temporal History → provider receipts, содержательное сравнение SEO-метрик и превью ещё не реализованы.
 
 Нельзя создавать «готовые» операции в интерфейсе только потому, что библиотека провайдера существует в репозитории: прежде нужен честный контракт владельца и его допуск. Не нужно создавать ещё один Temporal DAG, служебный процесс или дублирующую базу сценариев ради этой лаборатории.
 
