@@ -1,5 +1,5 @@
-//! Real PostgreSQL authority tests for the opt-in DataForSEO Temporal V2
-//! owner. No provider traffic, paid task, or simulated operator attestation.
+// Real PostgreSQL authority tests for the opt-in DataForSEO Temporal V2
+// owner. No provider traffic, paid task, or simulated operator attestation.
 
 #[tokio::test]
 #[serial]

@@ -12,7 +12,9 @@ temporalio-sdk = { workspace = true }
 temporalio-client = { workspace = true }
 temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
 anyhow = { workspace = true }
+futures = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }
