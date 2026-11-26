@@ -76,6 +76,49 @@ fn recipe() -> SiteRecipe {
     }
 }
 
+#[test]
+fn atomic_recipe_changes_are_typed_and_preserve_existing_steps() {
+    let original = recipe();
+    let revised = revise_recipe(&original, &[
+        RecipeChange::SetAfter {
+            step: OperationInstanceId::from("editorial"),
+            after: BTreeSet::from([OperationInstanceId::from("canonicalize")]),
+        },
+        RecipeChange::SetInput {
+            step: OperationInstanceId::from("canonicalize"),
+            port: PortId::from("input"),
+            input: RecipeInput::Produced {
+                step: OperationInstanceId::from("extract"),
+                port: PortId::from("output"),
+            },
+        },
+    ]).unwrap();
+    assert_ne!(revised, original);
+    assert_eq!(original.steps[2].after.len(), 0);
+    assert_eq!(preview_recipe(&revised, &catalog()).unwrap().execution, "not_started");
+
+    let rejected = revise_recipe(&original, &[
+        RecipeChange::RemoveStep { step: OperationInstanceId::from("extract") },
+        RecipeChange::SetParameters {
+            step: OperationInstanceId::from("missing"),
+            parameters: RecipeParameters::default(),
+        },
+    ]);
+    assert!(matches!(rejected, Err(RecipeEditError::UnknownStep(_))));
+    assert_eq!(original.steps.len(), 3);
+}
+
+#[test]
+fn removing_a_producer_does_not_rewire_or_fake_a_valid_graph() {
+    let draft = revise_recipe(&recipe(), &[
+        RecipeChange::RemoveStep { step: OperationInstanceId::from("extract") },
+    ]).unwrap();
+    assert!(matches!(
+        preview_recipe(&draft, &catalog()),
+        Err(SiteLabError::InvalidPlan(_))
+    ));
+}
+
 fn catalog() -> SiteLabCatalog {
     installed_semantic_lab_catalog(
         semantic_extraction_registry()

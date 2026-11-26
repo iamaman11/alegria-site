@@ -10,9 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use operation_protocol::{
     owner_content_hash, ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId,
     ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef,
-    PlanError, PlanHash, PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
+    PlanError, PlanHash, PortId, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
-pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1};
+pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1, RunScope};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -73,6 +73,92 @@ pub struct SiteRecipe {
     #[serde(default)]
     pub sources: BTreeMap<ArtifactId, RecipeSource>,
     pub steps: Vec<RecipeStep>,
+}
+
+/// Small, stateless edits of a recipe. No step or provider is executable by
+/// editing it; the returned draft must still pass the existing DAG validator.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecipeChange {
+    AddStep { step: RecipeStep },
+    RemoveStep { step: OperationInstanceId },
+    SetOperation { step: OperationInstanceId, operation: OperationRef },
+    SetParameters { step: OperationInstanceId, parameters: RecipeParameters },
+    SetInput { step: OperationInstanceId, port: PortId, input: RecipeInput },
+    RemoveInput { step: OperationInstanceId, port: PortId },
+    SetAfter { step: OperationInstanceId, after: BTreeSet<OperationInstanceId> },
+    UpsertSource { artifact: ArtifactId, source: RecipeSource },
+    RemoveSource { artifact: ArtifactId },
+}
+
+#[derive(Debug, Error)]
+pub enum RecipeEditError {
+    #[error("recipe edit batch is empty or exceeds 128 changes")]
+    InvalidBatchSize,
+    #[error("step {0:?} already exists")]
+    DuplicateStep(OperationInstanceId),
+    #[error("step {0:?} does not exist")]
+    UnknownStep(OperationInstanceId),
+    #[error("cannot add more than {DAG_MAX_NODES} steps")]
+    TooManySteps,
+}
+
+/// Apply a batch to a clone, so a rejected change never partially mutates a
+/// caller's recipe. Removing a referenced step does not silently rewire its
+/// dependents; a subsequent `preview_recipe` reports the broken binding.
+pub fn revise_recipe(recipe: &SiteRecipe, changes: &[RecipeChange]) -> Result<SiteRecipe, RecipeEditError> {
+    if changes.is_empty() || changes.len() > 128 {
+        return Err(RecipeEditError::InvalidBatchSize);
+    }
+    let mut draft = recipe.clone();
+    for change in changes {
+        match change {
+            RecipeChange::AddStep { step } => {
+                if draft.steps.iter().any(|existing| existing.id == step.id) {
+                    return Err(RecipeEditError::DuplicateStep(step.id.clone()));
+                }
+                if draft.steps.len() >= DAG_MAX_NODES {
+                    return Err(RecipeEditError::TooManySteps);
+                }
+                draft.steps.push(step.clone());
+            }
+            RecipeChange::UpsertSource { artifact, source } => {
+                draft.sources.insert(artifact.clone(), source.clone());
+            }
+            RecipeChange::RemoveSource { artifact } => {
+                draft.sources.remove(artifact);
+            }
+            RecipeChange::RemoveStep { step } => {
+                let position = draft.steps.iter().position(|existing| &existing.id == step)
+                    .ok_or_else(|| RecipeEditError::UnknownStep(step.clone()))?;
+                draft.steps.remove(position);
+            }
+            RecipeChange::SetOperation { step, operation } => {
+                find_step(&mut draft, step)?.operation = operation.clone();
+            }
+            RecipeChange::SetParameters { step, parameters } => {
+                find_step(&mut draft, step)?.parameters = parameters.clone();
+            }
+            RecipeChange::SetInput { step, port, input } => {
+                find_step(&mut draft, step)?.inputs.insert(port.clone(), input.clone());
+            }
+            RecipeChange::RemoveInput { step, port } => {
+                find_step(&mut draft, step)?.inputs.remove(port);
+            }
+            RecipeChange::SetAfter { step, after } => {
+                find_step(&mut draft, step)?.after = after.clone();
+            }
+        }
+    }
+    Ok(draft)
+}
+
+fn find_step<'a>(
+    draft: &'a mut SiteRecipe,
+    step: &OperationInstanceId,
+) -> Result<&'a mut RecipeStep, RecipeEditError> {
+    draft.steps.iter_mut().find(|existing| &existing.id == step)
+        .ok_or_else(|| RecipeEditError::UnknownStep(step.clone()))
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -108,6 +108,8 @@ enum SiteLabCommand {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Serve model-controlled Site Lab authoring tools over local MCP stdio.
+    McpSiteLab,
     /// Compose and inspect site hypotheses without rebuilding the application.
     SiteLab {
         #[command(subcommand)]
