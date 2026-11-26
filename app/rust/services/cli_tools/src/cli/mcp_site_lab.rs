@@ -1,9 +1,12 @@
-// Native stdio MCP adapter for *authoring only*. The catalog and validation
-// are exactly those used by `site-lab`; no provider calls, Temporal Start,
-// arbitrary file reads, dynamic manifest loading, or independent DAG runner.
+// Native stdio MCP adapter for stateless authoring and offline receipt
+// inspection. It uses the same trusted catalog and checks as `site-lab`;
+// no provider calls, Temporal Start, arbitrary file reads, dynamic manifest
+// loading, or independent DAG runner.
 
 const SITE_LAB_MCP_PROTOCOL: &str = "2025-11-25";
-const SITE_LAB_MCP_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+// Two sealed plans and two V2 receipts may each reach the existing 512 KiB
+// DAG boundary; allow envelope overhead, without accepting unbounded input.
+const SITE_LAB_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,6 +43,20 @@ struct McpEditRecipe {
 struct McpTwoRecipes {
     first: seo_application::site_lab::SiteRecipe,
     second: seo_application::site_lab::SiteRecipe,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpSavedExecution {
+    plan: seo_application::site_lab::ExecutionPlan,
+    receipt: seo_application::site_lab::OperationDagReceiptV1,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpCompareExecutions {
+    first: McpSavedExecution,
+    second: McpSavedExecution,
 }
 
 fn mcp_object_schema(fields: Value, required: &[&str]) -> Value {
@@ -108,6 +125,30 @@ fn mcp_edit_schema() -> Value {
     ]})
 }
 
+fn mcp_saved_execution_schema() -> Value {
+    // Short introspection schema, with the exact deeply nested Rust DTO
+    // enforced after deserialization. Only complete typed JSON values work;
+    // there is deliberately no path, URL, provider ID or receipt loader.
+    mcp_object_schema(json!({
+        "plan":mcp_object_schema(json!({
+            "schema_revision":{"type":"integer"},
+            "scope":{"type":"object"},
+            "allowed_effects":{"type":"array"},
+            "external_artifacts":{"type":"object"},
+            "pinned_contracts":{"type":"array"},
+            "nodes":{"type":"array"},
+            "hash":{"type":"string"}
+        }), &["schema_revision","scope","allowed_effects","external_artifacts","pinned_contracts","nodes","hash"]),
+        "receipt":mcp_object_schema(json!({
+            "plan_hash":{"type":"string"},
+            "order":{"type":"array"},
+            "artifacts":{"type":"object"},
+            "produced_evidence":{"type":"object"},
+            "owner_results":{"type":"object"}
+        }), &["plan_hash","order","artifacts","produced_evidence","owner_results"])
+    }), &["plan","receipt"])
+}
+
 fn mcp_site_lab_tools() -> Value {
     json!({"tools":[
         {
@@ -142,6 +183,24 @@ fn mcp_site_lab_tools() -> Value {
             "description":"Compare two validated recipes by pinned graph and typed parameter hashes; no live provider data or measured SEO outcomes.",
             "inputSchema":mcp_object_schema(json!({"first":mcp_recipe_schema(),"second":mcp_recipe_schema()}), &["first","second"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_connections", "title":"Find compatible typed step connections",
+            "description":"Suggest candidate source and upstream output bindings for every step input port by exact schema, excluding immediate dependency cycles. Suggestions are not a validated recipe or an execution grant.",
+            "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_inspect", "title":"Inspect a saved typed execution receipt",
+            "description":"Locally check a complete sealed V2 plan and receipt against trusted contracts. Input typed JSON objects directly, never filesystem paths. Returns hashes, step diagnostics and explicit unverified Temporal/provider/source attestation; no payloads.",
+            "inputSchema":mcp_saved_execution_schema(),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_compare_results", "title":"Compare two saved execution receipts",
+            "description":"Locally inspect and compare two distinct typed V2 plan/receipt pairs, only with equal tenant and exact original source bytes. Hash-only structural differences, not measured SEO or Temporal History attestation. No file paths.",
+            "inputSchema":mcp_object_schema(json!({"first":mcp_saved_execution_schema(),"second":mcp_saved_execution_schema()}), &["first","second"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
         }
     ]})
 }
@@ -154,8 +213,20 @@ fn mcp_bad_arguments(_error: impl std::fmt::Display) -> Value {
     })
 }
 
+fn mcp_edit_preview_status(preview_status: &str) -> &'static str {
+    match preview_status {
+        "valid_preview_only" => "draft_validated",
+        "pending_owner_parameter_validation" => "draft_pending_owner_parameter_validation",
+        // An unknown future preview state must not be upgraded to validated.
+        _ => "draft_unverified",
+    }
+}
+
 fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_lab::SiteLabCatalog) -> (Value, bool) {
-    use seo_application::site_lab::{describe_tools, diff_recipes, preview_recipe, revise_recipe, SiteRecipe};
+    use seo_application::site_lab::{
+        compare_executions, describe_tools, diff_recipes, inspect_execution, preview_recipe,
+        revise_recipe, suggest_compatible_inputs, SiteRecipe,
+    };
 
     match name {
         "site_lab_tools" => {
@@ -184,7 +255,7 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
         "site_lab_edit" => match serde_json::from_value::<McpEditRecipe>(args) {
             Ok(input) => match revise_recipe(&input.recipe, &input.changes) {
                 Ok(recipe) => match preview_recipe(&recipe, catalog) {
-                    Ok(preview) => (json!({"status":"draft_validated","recipe":recipe,"preview":preview}), false),
+                    Ok(preview) => (json!({"status":mcp_edit_preview_status(preview.status),"recipe":recipe,"preview":preview}), false),
                     Err(error) => (json!({"status":"draft_needs_changes","recipe":recipe,"problem":error.problem(),"execution":"not_started"}), false),
                 },
                 Err(error) => (json!({"status":"invalid","code":"recipe_edit_rejected","message":error.to_string(),"next_action":"Fix the referenced step or batch; no partial edits were applied."}), true),
@@ -205,7 +276,31 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
-        _ => (json!({"status":"invalid","code":"tool_unavailable","message":"Unknown Site Lab MCP tool","next_action":"Call tools/list to discover installed authoring tools."}), true),
+        "site_lab_connections" => match serde_json::from_value::<McpOneRecipe>(args) {
+            Ok(input) => match suggest_compatible_inputs(&input.recipe, catalog) {
+                Ok(preview) => (json!(preview), false),
+                Err(error) => (json!(error.problem()), true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        "site_lab_inspect" => match serde_json::from_value::<McpSavedExecution>(args) {
+            Ok(input) => match inspect_execution(&input.plan, &input.receipt, catalog.catalog()) {
+                Ok(inspection) => (json!(inspection), false),
+                Err(error) => (json!(error.problem()), true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        "site_lab_compare_results" => match serde_json::from_value::<McpCompareExecutions>(args) {
+            Ok(input) => match compare_executions(
+                &input.first.plan, &input.first.receipt,
+                &input.second.plan, &input.second.receipt, catalog.catalog(),
+            ) {
+                Ok(comparison) => (json!(comparison), false),
+                Err(error) => (json!(error.problem()), true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        _ => (json!({"status":"invalid","code":"tool_unavailable","message":"Unknown Site Lab MCP tool","next_action":"Call tools/list to discover available tools."}), true),
     }
 }
 
@@ -241,7 +336,7 @@ fn mcp_site_lab_message(request: Value, catalog: &seo_application::site_lab::Sit
             json!({"protocolVersion":SITE_LAB_MCP_PROTOCOL,
                 "capabilities":{"tools":{"listChanged":false}},
                 "serverInfo":{"name":"alegria-site-lab","version":env!("CARGO_PKG_VERSION")},
-                "instructions":"Stateless authoring only: discover, edit, validate and compare recipes. No Temporal Start or provider admission is exposed."})
+                "instructions":"Stateless recipe authoring and offline inspection of typed saved V2 receipts only. No Temporal Start, History attestation, provider effects or admission is exposed."})
         }
         "ping" => json!({}),
         "tools/list" => mcp_site_lab_tools(),
@@ -270,7 +365,7 @@ fn mcp_bounded_line<R: std::io::BufRead>(input: &mut R) -> std::io::Result<Optio
         let end = available.iter().position(|byte| *byte == b'\n');
         let take = end.map_or(available.len(), |position| position + 1);
         if line.len().saturating_add(take) > SITE_LAB_MCP_MAX_MESSAGE_BYTES {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "MCP message exceeds 1 MiB boundary"));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "MCP message exceeds 3 MiB boundary"));
         }
         line.extend_from_slice(&available[..take]);
         input.consume(take);
@@ -317,6 +412,34 @@ mod site_lab_mcp_tests {
         seo_application::site_lab::installed_semantic_lab_catalog(registry.catalog().clone()).unwrap()
     }
 
+    fn tool_call(name: &str, arguments: Value) -> Value {
+        mcp_site_lab_message(json!({
+            "jsonrpc":"2.0", "id":9, "method":"tools/call",
+            "params":{"name":name,"arguments":arguments}
+        }), &catalog()).unwrap()
+    }
+
+    fn forged_saved_execution() -> Value {
+        json!({
+            "plan":{
+                "schema_revision":2,
+                "scope":{"tenant_id":"tenant","run_id":"forged-run"},
+                "allowed_effects":[],
+                "external_artifacts":{},
+                "pinned_contracts":[],
+                "nodes":[],
+                "hash":"forged-hash"
+            },
+            "receipt":{
+                "plan_hash":"forged-hash",
+                "order":[],
+                "artifacts":{},
+                "produced_evidence":{},
+                "owner_results":{}
+            }
+        })
+    }
+
     #[test]
     fn mcp_initialization_and_catalog_are_protocol_clean() {
         let lines = concat!(
@@ -331,9 +454,67 @@ mod site_lab_mcp_tests {
             .map(|line| serde_json::from_slice(line).unwrap()).collect();
         assert_eq!(replies.len(), 3);
         assert_eq!(replies[0]["result"]["capabilities"]["tools"]["listChanged"], false);
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 5);
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 8);
+        assert!(replies[1]["result"].to_string().len() < 24_576, "tools/list should fit a compact model context");
+        for name in ["site_lab_connections", "site_lab_inspect", "site_lab_compare_results"] {
+            assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().any(|tool| tool["name"] == name));
+        }
         assert_eq!(replies[2]["result"]["structuredContent"]["operations"].as_array().unwrap().len(), 5);
         assert_eq!(replies[2]["result"]["isError"], false);
+    }
+
+    #[test]
+    fn mcp_connections_stays_a_non_executable_hint() {
+        let draft = tool_call("site_lab_new", json!({"tenant_id":"tenant","run_id":"draft"}));
+        let recipe = draft["result"]["structuredContent"]["recipe"].clone();
+        let hint = tool_call("site_lab_connections", json!({"recipe":recipe}));
+        assert_eq!(hint["result"]["isError"], false);
+        assert_eq!(hint["result"]["structuredContent"]["status"], "schema_candidates_only");
+        assert_eq!(hint["result"]["structuredContent"]["execution"], "not_started");
+        assert!(hint["result"]["structuredContent"]["ports"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mcp_edit_never_marks_pending_remote_owner_validation_as_validated() {
+        assert_eq!(mcp_edit_preview_status("valid_preview_only"), "draft_validated");
+        assert_eq!(
+            mcp_edit_preview_status("pending_owner_parameter_validation"),
+            "draft_pending_owner_parameter_validation"
+        );
+        assert_eq!(mcp_edit_preview_status("unknown_future_owner_state"), "draft_unverified");
+    }
+
+    #[test]
+    fn mcp_receipt_rejects_forgery_without_claiming_temporal_attestation() {
+        let saved = forged_saved_execution();
+        let inspected = tool_call("site_lab_inspect", saved.clone());
+        assert_eq!(inspected["result"]["isError"], true);
+        assert_eq!(inspected["result"]["structuredContent"]["code"], "saved_plan_invalid");
+
+        let compared = tool_call("site_lab_compare_results", json!({"first":saved,"second":forged_saved_execution()}));
+        assert_eq!(compared["result"]["isError"], true);
+        assert_eq!(compared["result"]["structuredContent"]["code"], "saved_plan_invalid");
+        assert!(!compared.to_string().contains("same_source_bytes_structural_result_comparison"));
+    }
+
+    #[test]
+    fn mcp_receipt_arguments_reject_paths_unknown_fields_and_secret_reflection() {
+        for name in ["site_lab_inspect", "site_lab_compare_results"] {
+            let path = tool_call(name, json!({"plan_file":"/etc/shadow","receipt_file":"/private/input"}));
+            assert_eq!(path["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+            assert!(!path.to_string().contains("/etc/shadow"));
+
+            let mut forged = forged_saved_execution();
+            forged["secret_from_untrusted_client"] = json!("SENTINEL-CREDENTIAL-DO-NOT-LOG");
+            let invalid = if name == "site_lab_inspect" {
+                tool_call(name, forged)
+            } else {
+                tool_call(name, json!({"first":forged,"second":forged_saved_execution()}))
+            };
+            assert_eq!(invalid["result"]["isError"], true);
+            assert_eq!(invalid["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+            assert!(!invalid.to_string().contains("SENTINEL-CREDENTIAL-DO-NOT-LOG"));
+        }
     }
 
     #[test]

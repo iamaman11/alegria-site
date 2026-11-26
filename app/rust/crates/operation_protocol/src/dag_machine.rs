@@ -813,6 +813,220 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn site_lab_start_preview_shows_typed_owner_steps_without_command_or_source_bytes() {
+        let (run, routes) = setup();
+        let expected = site_lab_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+            .expect("trusted unchanged V2 DAG must have a safe read-only preview");
+        assert_eq!(
+            preview.schema_revision,
+            crate::SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1
+        );
+        assert_eq!(preview.preflight.execution, "not_started");
+        assert_eq!(preview.preflight.owner_admission, "not_issued");
+        assert_eq!(preview.preflight.source_authentication, "not_checked");
+        assert_eq!(
+            preview.execution_order,
+            vec![
+                OperationInstanceId::from("producer"),
+                OperationInstanceId::from("consumer")
+            ]
+        );
+        assert_eq!(preview.steps.len(), 2);
+        let producer = &preview.steps[0];
+        assert_eq!(producer.owner.as_str(), "producer.owner");
+        assert_eq!(producer.owner_route.owner, producer.owner);
+        assert_eq!(producer.owner_route.operation, producer.operation);
+        assert_eq!(producer.owner_route.contract_hash, producer.contract_hash);
+        assert_eq!(
+            producer.command_payload_hash,
+            expected.command_hashes[&producer.instance]
+        );
+        assert_eq!(producer.owner_validate_only, "required_not_observed");
+        assert_eq!(producer.effect_dispatch, "not_started");
+        assert!(producer.permitted_effects.is_empty());
+        assert_eq!(
+            producer.outputs[&PortId::from("document")].schema,
+            schema()
+        );
+
+        let consumer = &preview.steps[1];
+        assert!(matches!(
+            consumer.inputs.get(&PortId::from("source")),
+            Some(crate::SiteLabPreviewInputV1::Produced {
+                producer,
+                producer_port,
+                artifact,
+                schema: consumer_schema,
+            }) if producer.as_str() == "producer"
+                && producer_port.as_str() == "document"
+                && artifact.as_str() == "artifact-a"
+                && consumer_schema == &schema()
+        ));
+        let rendered = serde_json::to_string(&preview).unwrap();
+        assert!(!rendered.contains("producer-typed-command"));
+        assert!(!rendered.contains("consumer-typed-command"));
+        assert!(!rendered.contains("command_bytes"));
+        assert!(!rendered.contains("payload_bytes"));
+        assert!(!rendered.contains("receipt_bytes"));
+    }
+
+    #[test]
+    fn site_lab_start_preview_rejects_untrusted_owner_and_route_mutations() {
+        let (run, routes) = setup();
+        let expected = site_lab_expected_start(&run);
+        let mut changed_owner = run.clone();
+        changed_owner
+            .owner_commands
+            .get_mut(&OperationInstanceId::from("producer"))
+            .unwrap()
+            .owner = OperationOwnerId::from("other-owner");
+        assert!(matches!(
+            crate::preview_unadmitted_site_lab_v2_start(&changed_owner, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+        let mut changed_route = run.clone();
+        changed_route.pinned_routes[0].owner = OperationOwnerId::from("other-owner");
+        assert!(matches!(
+            crate::preview_unadmitted_site_lab_v2_start(&changed_route, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+        let mut changed_deployment = run.clone();
+        changed_deployment.pinned_routes[0].build_id = "untrusted-build".into();
+        assert!(matches!(
+            crate::preview_unadmitted_site_lab_v2_start(&changed_deployment, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+    }
+
+    #[test]
+    fn site_lab_start_preview_binds_external_byte_hash_but_never_asserts_source_truth() {
+        let (mut run, routes) = setup();
+        let source_id = ArtifactId::from("external-document");
+        run.plan.external_artifacts.insert(
+            source_id.clone(),
+            crate::ExternalArtifact {
+                schema: schema(),
+                scope: scope(),
+                provenance: "private-source-reference".into(),
+            },
+        );
+        run.plan.nodes[1].inputs.insert(
+            PortId::from("source"),
+            ArtifactBinding::External {
+                artifact: source_id.clone(),
+            },
+        );
+        run.plan = run.plan.seal(routes.catalog()).unwrap();
+        run.admitted.insert(
+            source_id.clone(),
+            AdmittedArtifactV1 {
+                schema: schema(),
+                scope: scope(),
+                provenance: "private-source-reference".into(),
+                payload: b"secret-source-payload".to_vec(),
+            },
+        );
+        let expected = site_lab_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+            .expect("bound source is structurally valid, not independently admitted");
+        assert_eq!(preview.preflight.source_authentication, "not_checked");
+        assert!(matches!(
+            preview.steps[1].inputs.get(&PortId::from("source")),
+            Some(crate::SiteLabPreviewInputV1::External {
+                artifact,
+                schema: source_schema,
+                payload_hash,
+            })
+                if artifact == &source_id && source_schema == &schema()
+                && payload_hash == &expected.source_payload_hashes[&source_id]
+        ));
+        let rendered = serde_json::to_string(&preview).unwrap();
+        assert!(!rendered.contains("secret-source-payload"));
+        assert!(!rendered.contains("private-source-reference"));
+
+        let mut replaced_bytes = run.clone();
+        replaced_bytes
+            .admitted
+            .get_mut(&source_id)
+            .unwrap()
+            .payload = b"attacker-source".to_vec();
+        assert!(matches!(
+            crate::preview_unadmitted_site_lab_v2_start(&replaced_bytes, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::SourceDigestMismatch(id)) if id == source_id
+        ));
+
+        let mut different_origin = run;
+        different_origin
+            .admitted
+            .get_mut(&source_id)
+            .unwrap()
+            .provenance = "claim-another-source".into();
+        assert!(matches!(
+            crate::preview_unadmitted_site_lab_v2_start(&different_origin, &routes, &expected),
+            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+        ));
+    }
+
+    #[test]
+    fn site_lab_preview_of_effectful_contract_is_never_effect_admission() {
+        let (mut run, _) = setup();
+        let mut routes = TrustedRouteCatalog::default();
+        let effect = EffectId::from("provider.read.external");
+        for name in ["producer", "consumer"] {
+            let mut owner_contract = contract(name, name == "consumer");
+            if name == "consumer" {
+                owner_contract.effects.insert(effect.clone());
+                owner_contract.idempotency = IdempotencyPolicy::Idempotent;
+            }
+            let hash = owner_contract.fingerprint().unwrap();
+            let command = run
+                .owner_commands
+                .get_mut(&OperationInstanceId::from(name))
+                .unwrap();
+            command.contract_hash = hash.clone();
+            routes
+                .register(
+                    owner_contract.clone(),
+                    PinnedOwnerRouteV1 {
+                        operation: owner_contract.reference,
+                        owner: owner_contract.owner,
+                        contract_hash: hash,
+                        workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+                        task_queue: format!("{name}-independent-owner-queue"),
+                        build_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    },
+                )
+                .unwrap();
+        }
+        run.plan.allowed_effects.insert(effect.clone());
+        run.plan.nodes[1].permitted_effects.insert(effect.clone());
+        run.plan = run.plan.seal(routes.catalog()).unwrap();
+        run.pinned_routes = routes
+            .trusted_snapshot_for(
+                run.owner_commands
+                    .values()
+                    .map(|command| &command.operation),
+            )
+            .unwrap();
+        let expected = site_lab_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+            .expect("preview may describe an effect without authorizing it");
+        assert_eq!(preview.steps[1].idempotency, IdempotencyPolicy::Idempotent);
+        assert!(preview.steps[1].permitted_effects.contains(&effect));
+        assert_eq!(preview.steps[1].owner_validate_only, "required_not_observed");
+        assert_eq!(preview.steps[1].effect_dispatch, "not_started");
+        assert_eq!(preview.preflight.owner_admission, "not_issued");
+        assert_eq!(preview.preflight.execution, "not_started");
+        let workflow_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        assert!(matches!(
+            OperationDagMachine::new_v2(&workflow_id, run, routes),
+            Err(GenericDagError::UnadmittedV2Effect(instance))
+                if instance.as_str() == "consumer"
+        ));
+    }
+
     const PARENT_WORKFLOW_ID: &str = "alegria-operation-dag-v1-run-a";
 
     fn scope() -> RunScope {

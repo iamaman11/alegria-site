@@ -2306,6 +2306,7 @@ dependencies = [
  "temporalio-common",
  "testcontainers",
  "tokio",
+ "trusted_owner_catalog",
  "truth_domain",
  "url",
  "uuid",

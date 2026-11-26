@@ -170,6 +170,13 @@ SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/seo_application/src/site_lab/tests.rs",
 })
 
+# A single opt-in cross-owner integration fixture constructs protected catalog
+# JSON and typed Temporal plan wire values for a real PG/Qdrant contract test.
+# No production owner, DAG runner, or sibling E2E file inherits this exception.
+SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_lab_owner_catalog_tests.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -185,7 +192,8 @@ def is_allowed_json_boundary(path: Path) -> bool:
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
                | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES
-               | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES):
+               | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES
+               | SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

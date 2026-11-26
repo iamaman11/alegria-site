@@ -13,11 +13,14 @@ use thiserror::Error;
 
 use crate::owner_dispatch::is_canonical_blake3_hash;
 use crate::{
-    operation_dag_parent_workflow_id_v2, owner_content_hash, ArtifactId, GenericDagError,
-    OperationDagMachine, OperationDagRunV6, OperationInstanceId, PlanHash, TrustedRouteCatalog,
+    operation_dag_parent_workflow_id_v2, owner_content_hash, ArtifactBinding, ArtifactId,
+    ArtifactSchema, ContractHash, EffectId, GenericDagError, IdempotencyPolicy,
+    OperationDagMachine, OperationDagRunV6, OperationInstanceId, OperationOwnerId, OperationRef,
+    PinnedOwnerRouteV1, PlanHash, PortId, TrustedRouteCatalog,
 };
 
 pub const SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1: u16 = 1;
+pub const SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1: u16 = 1;
 
 /// Digests captured *before* composing a Temporal Start, by the trusted
 /// operation owner's command codec. The user cannot forge owner validation
@@ -45,6 +48,59 @@ pub struct SiteLabUnadmittedPreflightV1 {
     pub source_authentication: &'static str,
     pub owner_admission: &'static str,
     pub execution: &'static str,
+}
+
+/// A display-only view of the *same* immutable run accepted by native V2
+/// preflight. It never carries owner command bytes, source payload bytes,
+/// credentials, source provenance text, or an executable permission token.
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteLabUnadmittedStartPreviewV1 {
+    pub schema_revision: u16,
+    pub preflight: SiteLabUnadmittedPreflightV1,
+    pub execution_order: Vec<OperationInstanceId>,
+    pub steps: Vec<SiteLabPreviewStepV1>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteLabPreviewStepV1 {
+    pub instance: OperationInstanceId,
+    pub operation: OperationRef,
+    pub owner: OperationOwnerId,
+    pub contract_hash: ContractHash,
+    /// Exact trusted owner deployment route pinned in the Temporal Start
+    /// snapshot, not a user-selected arbitrary workflow or task queue.
+    pub owner_route: PinnedOwnerRouteV1,
+    pub command_payload_hash: String,
+    pub inputs: BTreeMap<PortId, SiteLabPreviewInputV1>,
+    pub outputs: BTreeMap<PortId, SiteLabPreviewOutputV1>,
+    pub after: BTreeSet<OperationInstanceId>,
+    pub permitted_effects: BTreeSet<EffectId>,
+    pub idempotency: IdempotencyPolicy,
+    pub owner_validate_only: &'static str,
+    pub effect_dispatch: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum SiteLabPreviewInputV1 {
+    External {
+        artifact: ArtifactId,
+        schema: ArtifactSchema,
+        /// A digest check does not authenticate the source or its tenant.
+        payload_hash: String,
+    },
+    Produced {
+        producer: OperationInstanceId,
+        producer_port: PortId,
+        artifact: ArtifactId,
+        schema: ArtifactSchema,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SiteLabPreviewOutputV1 {
+    pub artifact: ArtifactId,
+    pub schema: ArtifactSchema,
 }
 
 #[derive(Debug, Error)]
@@ -139,5 +195,124 @@ pub fn preflight_unadmitted_site_lab_v2_start(
         source_authentication: "not_checked",
         owner_admission: "not_issued",
         execution: "not_started",
+    })
+}
+
+/// Show the operator the exact typed steps, bindings, owner deployment routes,
+/// and effect declarations of a verified proposed V2 Start. This report is
+/// explicitly NOT an owner ValidateOnly result, source attestation, business
+/// approval, Temporal Start request, or effect-admission credential.
+///
+/// The only validator is the existing V2 machine above. The extra plan
+/// validation obtains its native deterministic execution order; it does not
+/// attempt to reinterpret contracts, bindings, or provider-specific bytes.
+pub fn preview_unadmitted_site_lab_v2_start(
+    run: &OperationDagRunV6,
+    installed_routes: &TrustedRouteCatalog,
+    expected: &SiteLabExpectedStartV1,
+) -> Result<SiteLabUnadmittedStartPreviewV1, SiteLabStartPreflightError> {
+    let preflight = preflight_unadmitted_site_lab_v2_start(run, installed_routes, expected)?;
+    let validated = run
+        .plan
+        .validate(installed_routes.catalog())
+        .map_err(GenericDagError::from)?;
+    let execution_order = validated.execution_order().to_vec();
+    let mut steps = Vec::with_capacity(execution_order.len());
+
+    // All lookups below are total because the native V2 machine validated
+    // the immutable exact run, trusted route catalog, and complete pins.
+    for instance in &execution_order {
+        let node = run
+            .plan
+            .nodes
+            .iter()
+            .find(|node| &node.instance == instance)
+            .expect("native V2 preflight checked every plan node");
+        let contract = installed_routes
+            .catalog()
+            .contract(&node.operation)
+            .expect("native V2 preflight checked trusted contracts");
+        let route = run
+            .pinned_routes
+            .iter()
+            .find(|route| route.operation == node.operation)
+            .expect("native V2 preflight checked exact owner routes");
+        let inputs = node
+            .inputs
+            .iter()
+            .map(|(port, binding)| {
+                let schema = contract
+                    .inputs
+                    .get(port)
+                    .expect("native V2 preflight checked input port schemas")
+                    .clone();
+                let view = match binding {
+                    ArtifactBinding::External { artifact } => SiteLabPreviewInputV1::External {
+                        artifact: artifact.clone(),
+                        schema,
+                        payload_hash: expected
+                            .source_payload_hashes
+                            .get(artifact)
+                            .expect("exact checked External source set")
+                            .clone(),
+                    },
+                    ArtifactBinding::Produced {
+                        producer,
+                        port: producer_port,
+                        artifact,
+                    } => SiteLabPreviewInputV1::Produced {
+                        producer: producer.clone(),
+                        producer_port: producer_port.clone(),
+                        artifact: artifact.clone(),
+                        schema,
+                    },
+                };
+                (port.clone(), view)
+            })
+            .collect();
+        let outputs = node
+            .outputs
+            .iter()
+            .map(|(port, artifact)| {
+                (
+                    port.clone(),
+                    SiteLabPreviewOutputV1 {
+                        artifact: artifact.clone(),
+                        schema: contract
+                            .outputs
+                            .get(port)
+                            .expect("native V2 preflight checked output port schemas")
+                            .clone(),
+                    },
+                )
+            })
+            .collect();
+        steps.push(SiteLabPreviewStepV1 {
+            instance: instance.clone(),
+            operation: node.operation.clone(),
+            owner: contract.owner.clone(),
+            contract_hash: contract
+                .fingerprint()
+                .expect("native V2 preflight checked contract fingerprint"),
+            owner_route: route.clone(),
+            command_payload_hash: expected
+                .command_hashes
+                .get(instance)
+                .expect("exact checked owner command set")
+                .clone(),
+            inputs,
+            outputs,
+            after: node.after.clone(),
+            permitted_effects: node.permitted_effects.clone(),
+            idempotency: contract.idempotency,
+            owner_validate_only: "required_not_observed",
+            effect_dispatch: "not_started",
+        });
+    }
+    Ok(SiteLabUnadmittedStartPreviewV1 {
+        schema_revision: SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1,
+        preflight,
+        execution_order,
+        steps,
     })
 }

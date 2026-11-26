@@ -396,6 +396,116 @@ pub struct RecipeDifference {
     pub note: &'static str,
 }
 
+/// A model-friendly connection preview from the *real installed* contracts.
+/// Schema-compatible options are suggestions, not authorization or a sealed
+/// DAG. The normal validator still checks effects, invalidations and scopes.
+#[derive(Debug, Serialize)]
+pub struct RecipeConnectionPreview {
+    pub status: &'static str,
+    pub ports: Vec<RecipePortConnections>,
+    pub execution: &'static str,
+    pub note: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecipePortConnections {
+    pub step: OperationInstanceId,
+    pub port: PortId,
+    pub required_schema: ArtifactSchema,
+    pub current: Option<RecipeInput>,
+    pub candidates: Vec<RecipeInput>,
+}
+
+/// Is `dependent` already causally downstream from `ancestor`? The new
+/// Produced edge ancestor <- dependent would then introduce a cycle.
+fn depends_on_step(
+    recipe: &SiteRecipe,
+    dependent: &OperationInstanceId,
+    ancestor: &OperationInstanceId,
+    visited: &mut BTreeSet<OperationInstanceId>,
+) -> bool {
+    if dependent == ancestor {
+        return true;
+    }
+    if !visited.insert(dependent.clone()) {
+        return false;
+    }
+    let Some(step) = recipe.steps.iter().find(|step| &step.id == dependent) else {
+        return false;
+    };
+    step.after.iter().any(|prerequisite| {
+        depends_on_step(recipe, prerequisite, ancestor, visited)
+    }) || step.inputs.values().any(|input| match input {
+        RecipeInput::Produced { step: prerequisite, .. } => {
+            depends_on_step(recipe, prerequisite, ancestor, visited)
+        }
+        RecipeInput::External { .. } => false,
+    })
+}
+
+/// Suggest candidate bindings even for an incomplete recipe, so ChatGPT can
+/// construct the graph incrementally without inventing ports or DTO types.
+/// The existing `preview_recipe` remains the single authoritative check.
+pub fn suggest_compatible_inputs(
+    recipe: &SiteRecipe,
+    catalog: &SiteLabCatalog,
+) -> Result<RecipeConnectionPreview, SiteLabError> {
+    if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION {
+        return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
+    }
+    if recipe.steps.len() > DAG_MAX_NODES {
+        return Err(SiteLabError::TooManySteps(recipe.steps.len()));
+    }
+    let contracts = catalog.catalog();
+    let mut steps: Vec<_> = recipe.steps.iter().collect();
+    steps.sort_by(|first, second| first.id.cmp(&second.id));
+    let mut ports = Vec::new();
+    for step in &steps {
+        let contract = contracts
+            .contract(&step.operation)
+            .ok_or_else(|| SiteLabError::UnavailableOperation(step.operation.clone()))?;
+        for (port, schema) in &contract.inputs {
+            let mut candidates = Vec::new();
+            for (artifact, source) in &recipe.sources {
+                if &source.schema == schema {
+                    candidates.push(RecipeInput::External {
+                        artifact: artifact.clone(),
+                    });
+                }
+            }
+            for producer in &steps {
+                let producer_contract = contracts
+                    .contract(&producer.operation)
+                    .ok_or_else(|| SiteLabError::UnavailableOperation(producer.operation.clone()))?;
+                if depends_on_step(recipe, &producer.id, &step.id, &mut BTreeSet::new()) {
+                    continue;
+                }
+                for (output_port, output_schema) in &producer_contract.outputs {
+                    if output_schema == schema {
+                        candidates.push(RecipeInput::Produced {
+                            step: producer.id.clone(),
+                            port: output_port.clone(),
+                        });
+                    }
+                }
+            }
+            ports.push(RecipePortConnections {
+                step: step.id.clone(),
+                port: port.clone(),
+                required_schema: schema.clone(),
+                current: step.inputs.get(port).cloned(),
+                candidates,
+            });
+        }
+    }
+    Ok(RecipeConnectionPreview {
+        status: "schema_candidates_only",
+        ports,
+        execution: "not_started",
+        note: "Exact versioned port schemas match and immediate dependency cycles are excluded; owner admission, provenance and full V2 DAG validation remain independent.",
+    })
+}
+
 fn output_artifact_id(step: &OperationInstanceId, port: &PortId) -> ArtifactId {
     ArtifactId(format!("generated/{}/{}", step.as_str(), port.as_str()))
 }
