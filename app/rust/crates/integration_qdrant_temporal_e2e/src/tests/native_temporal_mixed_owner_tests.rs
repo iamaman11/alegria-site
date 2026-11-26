@@ -1801,7 +1801,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         .env("TEMPORAL_NAMESPACE", &temporal.namespace)
         .env_remove("DATABASE_URL")
         .spawn().expect("PG typed ValidateChild and effect Child worker")));
-    let _qdrant_guard = ChildGuard(Some(Command::new(&qdrant_bin)
+    let start_qdrant_worker = || Command::new(&qdrant_bin)
         .env("ALEGRIA_ENABLE_QDRANT_GENERIC_OWNER_V1", "true")
         .env("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4", "1")
         .env("QDRANT_GENERIC_OWNER_DATABASE_URL_FILE", &roles.qdrant_worker_secret)
@@ -1812,7 +1812,8 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         .env("TEMPORAL_URL", &temporal.temporal_url)
         .env("TEMPORAL_NAMESPACE", &temporal.namespace)
         .env_remove("DATABASE_URL")
-        .spawn().expect("Qdrant typed ValidateChild and effect Child worker")));
+        .spawn().expect("Qdrant typed ValidateChild and effect Child worker");
+    let mut qdrant_guard = ChildGuard(Some(start_qdrant_worker()));
     let client = connect_client(&temporal.temporal_url,
         format!("ci-mixed-v2-{}", Uuid::new_v4()), &temporal.namespace)
         .await.expect("connect actual Temporal History server");
@@ -1931,12 +1932,13 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
                 if payloads.payloads.len() != 1 { return None; }
                 let invocation: operation_protocol::OwnerInvocationV1 =
                     serde_json::from_slice(&payloads.payloads[0].data).ok()?;
-                Some(invocation.checked_dispatch.operation.id.as_str().to_owned())
+                Some((invocation.checked_dispatch.operation.id.as_str().to_owned(),
+                    invocation.checked_dispatch.execution_key))
             }).expect("trusted server ChildInitiated input must be typed OwnerInvocationV1");
-            (child_id.clone(),child_run.clone(),*started,initiated)
+            (child_id.clone(),child_run.clone(),*started,initiated.0,initiated.1)
         }).collect::<Vec<_>>();
-        let (pg_child_id, pg_child_run, _, _) = classified.iter()
-            .find(|(_,_,_,operation)| operation == "pg.vector_projection.read")
+        let (pg_child_id, pg_child_run, _, _, _) = classified.iter()
+            .find(|(_,_,_,operation,_)| operation == "pg.vector_projection.read")
             .expect("PG projection owner Child initiated independently of start order");
         let pg_request = private_locators.request("v2-pg-child-locator", &serde_json::json!({
             "admission_id": pg_admission, "canonical_run_id": run_id,
@@ -1982,8 +1984,8 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             String::from_utf8_lossy(&issued_pg.stdout),
             String::from_utf8_lossy(&issued_pg.stderr));
         let (q_child_id, q_child_run) = if independent {
-            let (id,run,_,_) = classified.iter()
-                .find(|(_,_,_,operation)| operation == "qdrant.keyword_projection.upsert")
+            let (id,run,_,_,_) = classified.iter()
+                .find(|(_,_,_,operation,_)| operation == "qdrant.keyword_projection.upsert")
                 .expect("parallel Qdrant Child operation is identified by server payload");
             (id.clone(),run.clone())
         } else {
@@ -2040,10 +2042,61 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         }).to_string());
         assert!(!q_issuer(&q_wrong, tenant).status.success(),
             "{case}: forged Qdrant Child Run ID must fail V2 History proof");
+        if independent {
+            // The Child has been started by the real Temporal server but no
+            // operator admission or provider attempt exists. A worker crash
+            // here must be replay-safe: the signal and all history-visible
+            // state survive the process, not just a local Rust future.
+            let mut child = qdrant_guard.0.take().expect("running Qdrant Worker");
+            child.kill().expect("stop Qdrant Worker before recovery admission");
+            child.wait().expect("reap stopped Qdrant Worker");
+        }
         let q_success = q_issuer(&q_request, tenant);
         assert!(q_success.status.success(), "{case}: real Qdrant V4 issuer: stdout={} stderr={}",
             String::from_utf8_lossy(&q_success.stdout),
             String::from_utf8_lossy(&q_success.stderr));
+        if independent {
+            // Simulate the precise unknown-outcome window: the SQL attempt
+            // committed, Qdrant accepted the effect, and the Worker died
+            // before the immutable SQL confirmation. There is NO Worker
+            // running to race this setup. The replay must only read back the
+            // exact already-written point, then create the missing receipt.
+            let (_, _, _, _, dispatch_key) = classified.iter()
+                .find(|(_,_,_,operation,_)| operation == "qdrant.keyword_projection.upsert")
+                .expect("Qdrant V2 invocation from real parent History");
+            let command_bytes = &run.owner_commands[&"qdrant_external_upsert".into()].command_bytes;
+            let command: qdrant_contracts::QdrantKeywordProjectionCommandV1 =
+                serde_json::from_slice(command_bytes).unwrap();
+            let worker_dsn = fs::read_to_string(&roles.qdrant_worker_secret).unwrap();
+            let worker_pool = sqlx::PgPool::connect(&worker_dsn).await.unwrap();
+            let first_attempt: String = sqlx::query_scalar(
+                "SELECT pipeline.begin_qdrant_projection_v4($1,$2,$3)"
+            ).bind(q_admission).bind(command_bytes).bind(dispatch_key)
+                .fetch_one(&worker_pool).await.expect("commit unknown-outcome barrier");
+            assert_eq!(first_attempt, "started");
+            let before_receipt: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts WHERE admission_id=$1"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            assert_eq!(before_receipt, 0, "effect is not yet SQL-confirmed");
+            let approved_sha: String = sqlx::query_scalar(
+                "SELECT command_sha256 FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
+            ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+            let identity = vector_qdrant::projection_commands::ProjectionIdentity::new(
+                "seo_keyword_clusters_4", "keyword_cluster",
+                &format!("tenant/{tenant}/context/{context}/keyword/{q_keyword}"),
+            ).unwrap();
+            let upsert = vector_qdrant::projection_commands::ProjectionUpsert::new(
+                identity, q_admission.to_string(), command.vector, 1024, "cosine",
+                serde_json::json!({
+                    "tenant_id": tenant, "context_key": context, "keyword_key": q_keyword,
+                    "operator_admission_id": q_admission.to_string(),
+                    "approved_command_sha256": approved_sha,
+                }),
+            ).unwrap();
+            vector_qdrant::projection_commands::upsert_projection(upsert)
+                .await.expect("provider accepted write before the lost SQL receipt");
+            qdrant_guard.0 = Some(start_qdrant_worker());
+        }
         let completion = timeout(Duration::from_secs(110),
             parent.get_result(WorkflowGetResultOptions::default()))
             .await.expect("V2 DAG never finished")
@@ -2084,6 +2137,33 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
         assert_eq!((receipts,attempts),(1,1),
             "{case}: V2 owner Activity is idempotently admitted exactly once");
+        if independent {
+            let recovered: qdrant_contracts::QdrantKeywordChildResultV2 = serde_json::from_slice(
+                &receipt.owner_results[&"qdrant_external_upsert".into()].receipt_bytes,
+            ).expect("typed Qdrant V4 recovery result from real Temporal Child");
+            assert_eq!(recovered.outcome, qdrant_contracts::QdrantChildOutcomeV1::Reconciled,
+                "unknown provider outcome must reconcile, never upsert again");
+            let (_, _, _, _, dispatch_key) = classified.iter()
+                .find(|(_,_,_,operation,_)| operation == "qdrant.keyword_projection.upsert")
+                .unwrap();
+            let worker_dsn = fs::read_to_string(&roles.qdrant_worker_secret).unwrap();
+            let worker_pool = sqlx::PgPool::connect(&worker_dsn).await.unwrap();
+            let retry: String = sqlx::query_scalar(
+                "SELECT pipeline.begin_qdrant_projection_v4($1,$2,$3)"
+            ).bind(q_admission)
+                .bind(&run.owner_commands[&"qdrant_external_upsert".into()].command_bytes)
+                .bind(dispatch_key).fetch_one(&worker_pool).await.unwrap();
+            assert_eq!(retry, "confirmed", "retry must reuse the immutable receipt");
+            let history = parent.fetch_history(
+                WorkflowFetchHistoryOptions::builder().build()
+            ).into_events().await.unwrap();
+            assert_eq!(history.iter().filter(|event| matches!(
+                &event.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                    if a.workflow_id == q_child_id
+            )).count(), 1, "worker replay must not start a second Qdrant Child");
+            eprintln!("CI_MIXED_V2_NATIVE_UNKNOWN_OUTCOME_WORKER_REPLAY=PASS");
+        }
         eprintln!("CI_MIXED_V2_NATIVE_REAL_{case}_PG_TEMPORAL_QDRANT=PASS");
         let _ = routes;
     }
