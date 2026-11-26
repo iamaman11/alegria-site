@@ -45,6 +45,7 @@ members = [
   "services/temporal_orchestrator",
   "services/temporal_pg_effects",
   "services/temporal_qdrant_effects",
+  "services/temporal_dataforseo",
   "services/outbox_worker",
   "services/reconcile",
   "services/cli_tools",

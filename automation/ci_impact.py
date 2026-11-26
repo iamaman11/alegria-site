@@ -396,6 +396,28 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    # One REAL disposable PostgreSQL admission boundary for the opt-in
+    # DataForSEO Temporal owner.  This test cannot attest live Temporal
+    # History or paid HTTP; it proves no missing operator grant can start an
+    # effect and that immutable attempts cannot be erased.  Keep it in the
+    # existing PG-app runner, not on the costly Qdrant/Temporal binary chain.
+    "dataforseo_owner_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_owner_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts", "operation_protocol"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "dataforseo_owner_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
     "planning_atomicity": {
         "paths": PLANNING_ATOMICITY_PATHS,
         "prefixes": (),
@@ -1152,6 +1174,7 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
+    "dataforseo_owner_pg_v1",
     "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
     "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
@@ -1229,7 +1252,10 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "temporal_draft": (("draft_qa_scenario", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness", 1),),
     "temporal_pure": (("pure_dag_v3", "pure_v3_", 1),),
     "qdrant_knowledge": (("knowledge_a13", "knowledge_a13_", 3),),
-    "pg_app_truth": (("truth_adjudication_integrity", "truth_adjudication_", 3),),
+    "pg_app_truth": (
+        ("truth_adjudication_integrity", "truth_adjudication_", 3),
+        ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
+    ),
     "pg_app_cms": (("cms_review_revision", "cms_revision_", 4),),
     "pg_app_planning": (("planning_atomicity", "planning_atomic_", 6),),
     "pg_app_delivery": (

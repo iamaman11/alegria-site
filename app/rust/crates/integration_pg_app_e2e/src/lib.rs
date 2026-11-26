@@ -27,4 +27,5 @@ mod tests {
     include!("tests/cms_cross_scope_pg_tests.rs");
     include!("tests/planning_atomic_pg_tests.rs");
     include!("tests/cms_navigation_pg_tests.rs");
+    include!("tests/dataforseo_owner_pg_tests.rs");
 }

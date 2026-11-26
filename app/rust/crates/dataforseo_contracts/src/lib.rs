@@ -9,8 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    ArtifactSchema, ArtifactTypeId, EffectId, IdempotencyPolicy, Operation, OperationContract,
-    OperationId, OperationOwnerId, OperationRef, PortId, RunScope,
+    AdmittedArtifactV1, ArtifactBinding, ArtifactSchema, ArtifactTypeId, EffectId,
+    IdempotencyPolicy, Operation, OperationContract, OperationId, OperationOwnerId, OperationRef,
+    OwnerInvocationV1, OwnerValidationRequestV1, OwnerValidationResultV1, PinnedOwnerRouteV1,
+    PortId, RunScope, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -30,6 +32,10 @@ pub const SCHEMA_REVISION: u16 = 1;
 /// or evidence that the provider will charge less than this amount.
 pub const MAX_REQUEST_COST_USD_MICROS: u64 = 10_000_000;
 pub const MAX_DISCOVERY_OUTPUT_BYTES: usize = 512 * 1024;
+/// Distinct owner Task Queue: the coordinator and other owners cannot poll it.
+pub const DATAFORSEO_OWNER_QUEUE_V1: &str = "alegria-dataforseo-owner-v1";
+pub const DATAFORSEO_ACTIVITY_QUEUE_V1: &str = "alegria-dataforseo-owner-activities-v1";
+pub const DATAFORSEO_OPERATOR_SIGNAL_V1: &str = "operator_admission_ready_dataforseo_v1";
 
 /// Concrete, versioned provider parameters. No credentials, endpoint URL,
 /// Task Queue or authority fields can be supplied from the recipe.
@@ -52,6 +58,8 @@ pub struct DataForSeoGoogleOrganicSearchInputV1 {
 #[serde(rename_all = "snake_case")]
 pub enum DataForSeoSourceStatusV1 {
     SerpDiscoveryOnly,
+    /// Offline/physical integration fixture, never authenticated provider data.
+    StubFixtureOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +106,10 @@ pub enum DataForSeoContractError {
     Encoding(#[source] serde_json::Error),
     #[error("DataForSEO provider discovery result has an invalid shape or exceeds bounds")]
     InvalidDiscovery,
+    #[error("DataForSEO owner rejects foreign, produced or inconsistent Temporal input")]
+    InvalidOwnerInvocation,
+    #[error("DataForSEO ValidateOnly rejects foreign or mismatched typed input")]
+    InvalidOwnerValidation,
 }
 
 /// No accepted provider spend or owner ValidateOnly Child is implied.
@@ -114,6 +126,88 @@ pub struct DataForSeoParameterPreflightV1 {
 }
 
 pub struct DataForSeoGoogleOrganicSearchV1;
+
+/// Local type check only. The placeholder build-id is intentionally NOT an
+/// operator deployment credential, and cannot authorize an HTTP request.
+fn typecheck_route() -> Result<(OperationContract, PinnedOwnerRouteV1), DataForSeoContractError> {
+    let contract = DataForSeoGoogleOrganicSearchV1::contract();
+    let fingerprint = contract
+        .fingerprint()
+        .map_err(|_| DataForSeoContractError::InvalidOwnerInvocation)?;
+    let route = PinnedOwnerRouteV1 {
+        operation: contract.reference.clone(),
+        owner: contract.owner.clone(),
+        contract_hash: fingerprint,
+        workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.to_owned(),
+        task_queue: DATAFORSEO_OWNER_QUEUE_V1.to_owned(),
+        build_id: "dataforseo-owner-v1-local-typecheck-not-authority".to_owned(),
+    };
+    Ok((contract, route))
+}
+
+/// Independently parse actual immutable external bytes at the typed owner.
+/// A parent/child History check and SQL admission are STILL required before
+/// any Activity; syntactically consistent bytes alone carry no authority.
+pub fn verify_dataforseo_owner_invocation(
+    invocation: &OwnerInvocationV1,
+) -> Result<DataForSeoGoogleOrganicSearchInputV1, DataForSeoContractError> {
+    let (contract, route) = typecheck_route()?;
+    let mut catalog = TrustedRouteCatalog::default();
+    catalog
+        .register(contract, route)
+        .map_err(|_| DataForSeoContractError::InvalidOwnerInvocation)?;
+    invocation
+        .verify_integrity(&catalog)
+        .map_err(|_| DataForSeoContractError::InvalidOwnerInvocation)?;
+    let bound = invocation
+        .bound_inputs
+        .get(&PortId(INPUT_PORT.to_owned()))
+        .ok_or(DataForSeoContractError::InvalidOwnerInvocation)?;
+    if !matches!(&bound.source, ArtifactBinding::External { .. })
+        || bound.produced_evidence.is_some()
+        || bound.artifact.payload != invocation.command_bytes
+    {
+        return Err(DataForSeoContractError::InvalidOwnerInvocation);
+    }
+    let query: DataForSeoGoogleOrganicSearchInputV1 = serde_json::from_slice(&invocation.command_bytes)
+        .map_err(DataForSeoContractError::Encoding)?;
+    validate_parameters_only(&query, &invocation.checked_dispatch.scope)?;
+    Ok(query)
+}
+
+/// Provider-local ValidateOnly logic for the *real* typed Temporal child.
+/// This result only lets the parent schedule effect children; operator SQL
+/// admission remains independent and MUST verify real Temporal Histories.
+pub fn validate_dataforseo_owner_request(
+    request: &OwnerValidationRequestV1,
+) -> Result<OwnerValidationResultV1, DataForSeoContractError> {
+    request
+        .validate_shape()
+        .map_err(|_| DataForSeoContractError::InvalidOwnerValidation)?;
+    let (contract, route) = typecheck_route()?;
+    let port = PortId(INPUT_PORT.to_owned());
+    if request.operation != contract.reference
+        || request.owner != contract.owner
+        || request.contract_hash != route.contract_hash
+        || request.input_schemas != contract.inputs
+        || !request.produced_input_ports.is_empty()
+        || request.external_inputs.len() != 1
+    {
+        return Err(DataForSeoContractError::InvalidOwnerValidation);
+    }
+    let expected: &AdmittedArtifactV1 = request
+        .external_inputs
+        .get(&port)
+        .ok_or(DataForSeoContractError::InvalidOwnerValidation)?;
+    if expected.payload != request.command_bytes {
+        return Err(DataForSeoContractError::InvalidOwnerValidation);
+    }
+    let query: DataForSeoGoogleOrganicSearchInputV1 = serde_json::from_slice(&request.command_bytes)
+        .map_err(DataForSeoContractError::Encoding)?;
+    validate_parameters_only(&query, &request.scope)?;
+    OwnerValidationResultV1::accepted(request)
+        .map_err(|_| DataForSeoContractError::InvalidOwnerValidation)
+}
 
 impl Operation for DataForSeoGoogleOrganicSearchV1 {
     type Input = DataForSeoGoogleOrganicSearchInputV1;
@@ -236,13 +330,24 @@ pub fn validate_discovery_shape_only(
         || !canonical_hash(&result.provider_response_hash)
         || task_id.is_empty()
         || task_id.len() > 128
-        || !task_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        || !(match result.source_status {
+            DataForSeoSourceStatusV1::SerpDiscoveryOnly => task_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+            DataForSeoSourceStatusV1::StubFixtureOnly => task_id
+                .strip_prefix("stub-serp-")
+                .is_some_and(|index| {
+                    !index.is_empty()
+                        && index.len() <= 8
+                        && index.bytes().all(|byte| byte.is_ascii_digit())
+                }),
+        })
         || result.organic_results.len() > usize::try_from(request.depth).unwrap_or(0)
         || result
             .provider_reported_cost_usd_micros
             .is_some_and(|amount| amount > request.max_cost_usd_micros)
+        || (result.source_status == DataForSeoSourceStatusV1::StubFixtureOnly
+            && result.provider_reported_cost_usd_micros != Some(0))
         || result.organic_results.iter().any(|hit| {
             hit.rank == 0
                 || hit.rank > request.depth
@@ -266,6 +371,11 @@ pub fn validate_discovery_shape_only(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use operation_protocol::{
+        checked_execution_key, operation_dag_parent_workflow_id_v2, ArtifactBinding, ArtifactId,
+        BoundArtifactV1, CheckedDispatch, OperationInstanceId, PlanHash,
+        TemporalExecutionIdentityV4, OWNER_INVOCATION_SCHEMA_REVISION,
+    };
 
     fn valid_input() -> DataForSeoGoogleOrganicSearchInputV1 {
         DataForSeoGoogleOrganicSearchInputV1 {
@@ -280,6 +390,127 @@ mod tests {
             depth: 10,
             max_cost_usd_micros: 100_000,
         }
+    }
+
+    fn owner_invocation() -> OwnerInvocationV1 {
+        let contract = DataForSeoGoogleOrganicSearchV1::contract();
+        let input = valid_input();
+        let bytes = serde_json::to_vec(&input).unwrap();
+        let port = PortId(INPUT_PORT.to_owned());
+        let artifact_id = ArtifactId::from("fixture-query");
+        let bindings = BTreeMap::from([(
+            port.clone(),
+            BoundArtifactV1 {
+                artifact_id: artifact_id.clone(),
+                source: ArtifactBinding::External { artifact: artifact_id },
+                artifact: AdmittedArtifactV1 {
+                    schema: contract.inputs[&port].clone(),
+                    scope: input.scope.clone(),
+                    provenance: "fixture-external-not-history-attested".to_owned(),
+                    payload: bytes.clone(),
+                },
+                produced_evidence: None,
+            },
+        )]);
+        let mut dispatch = CheckedDispatch {
+            plan_hash: PlanHash("a".repeat(64)),
+            scope: input.scope.clone(),
+            instance: OperationInstanceId::from("paid-serp-search"),
+            operation: contract.reference,
+            owner: contract.owner,
+            effects: contract.effects,
+            idempotency: contract.idempotency,
+            input_hash: String::new(),
+            execution_key: String::new(),
+        };
+        dispatch.input_hash = blake3::hash(
+            &operation_protocol::canonical_owner_dispatch_input_bytes(&bindings, &bytes).unwrap(),
+        )
+        .to_hex()
+        .to_string();
+        dispatch.execution_key = checked_execution_key(&dispatch, &dispatch.input_hash).unwrap();
+        OwnerInvocationV1 {
+            schema_revision: OWNER_INVOCATION_SCHEMA_REVISION,
+            parent: TemporalExecutionIdentityV4 {
+                workflow_id: operation_dag_parent_workflow_id_v2(&input.scope.run_id),
+                run_id: "123e4567-e89b-42d3-a456-426614174001".into(),
+            },
+            checked_dispatch: dispatch,
+            command_bytes: bytes,
+            bound_inputs: bindings,
+        }
+    }
+
+    #[test]
+    fn owner_validate_only_decodes_exact_external_query() {
+        let invocation = owner_invocation();
+        assert_eq!(verify_dataforseo_owner_invocation(&invocation).unwrap(), valid_input());
+        let contract = DataForSeoGoogleOrganicSearchV1::contract();
+        let request = OwnerValidationRequestV1 {
+            schema_revision: 1,
+            parent: invocation.parent,
+            plan_hash: invocation.checked_dispatch.plan_hash,
+            scope: invocation.checked_dispatch.scope,
+            instance: invocation.checked_dispatch.instance,
+            operation: contract.reference,
+            owner: contract.owner,
+            contract_hash: contract.fingerprint().unwrap(),
+            command_bytes: invocation.command_bytes,
+            input_schemas: contract.inputs,
+            external_inputs: BTreeMap::from([(
+                PortId(INPUT_PORT.to_owned()),
+                invocation.bound_inputs[&PortId(INPUT_PORT.to_owned())].artifact.clone(),
+            )]),
+            produced_input_ports: BTreeSet::new(),
+        };
+        let validated = validate_dataforseo_owner_request(&request).unwrap();
+        validated.verify_success(&request).unwrap();
+        let mut forged = request;
+        forged.command_bytes.push(0);
+        assert!(validate_dataforseo_owner_request(&forged).is_err());
+    }
+
+    #[test]
+    fn owner_rejects_forged_tenant_and_produced_query() {
+        let mut foreign = owner_invocation();
+        foreign.checked_dispatch.scope.tenant_id = "foreign".into();
+        assert!(verify_dataforseo_owner_invocation(&foreign).is_err());
+        let mut produced = owner_invocation();
+        produced.bound_inputs.get_mut(&PortId(INPUT_PORT.to_owned())).unwrap().source =
+            ArtifactBinding::Produced {
+                artifact: ArtifactId::from("fixture-query"),
+                producer: OperationInstanceId::from("model-producer"),
+                port: PortId::from("suggestion"),
+            };
+        assert!(verify_dataforseo_owner_invocation(&produced).is_err());
+    }
+
+    #[test]
+    fn stub_result_cannot_claim_paid_cost_or_real_source_status() {
+        let request = valid_input();
+        let mut output = DataForSeoGoogleOrganicSearchOutputV1 {
+            schema_revision: SCHEMA_REVISION,
+            source_status: DataForSeoSourceStatusV1::StubFixtureOnly,
+            provider_task_id: "stub-serp-0".into(),
+            provider_response_hash: "b".repeat(64),
+            input_hash: blake3::hash(&serde_json::to_vec(&request).unwrap()).to_hex().to_string(),
+            provider_reported_cost_usd_micros: Some(0),
+            organic_results: vec![],
+        };
+        assert!(validate_discovery_shape_only(&output, &request).is_ok());
+        output.provider_reported_cost_usd_micros = Some(42);
+        assert!(validate_discovery_shape_only(&output, &request).is_err());
+        output.provider_reported_cost_usd_micros = Some(0);
+        output.organic_results.push(DataForSeoOrganicHitV1 {
+            rank: 1,
+            title: "not-a-source".into(),
+            source_url: "https://example.com/".into(),
+            domain_norm: "example.com".into(),
+            snippet: "fake".into(),
+        });
+        assert!(validate_discovery_shape_only(&output, &request).is_ok());
+        // The source status remains offline_fixture_only despite typed hits.
+        assert_eq!(output.source_status, DataForSeoSourceStatusV1::StubFixtureOnly);
     }
 
     #[test]

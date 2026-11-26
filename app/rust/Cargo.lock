@@ -4676,6 +4676,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "contracts",
+ "dataforseo_contracts",
  "operation_protocol",
  "primitives",
  "runtime_models",
@@ -4687,7 +4688,9 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "truth_domain",
+ "url",
  "uuid",
+ "web_fetch_contracts",
 ]
 
 [[package]]
@@ -5380,6 +5383,27 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "temporal_dataforseo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "dataforseo_contracts",
+ "operation_protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

@@ -18,6 +18,7 @@ use thiserror::Error;
 
 mod evidence;
 mod parameters_json;
+mod source_bridge;
 pub use evidence::{
     preview_consumer_need_evidence, ConsumerNeedAssessmentV1, ConsumerNeedEvidenceBatchV1,
     ConsumerNeedEvidenceError, ConsumerNeedEvidencePointerV1, ConsumerNeedEvidencePreviewV1,
@@ -27,6 +28,11 @@ pub use evidence::{
 pub use parameters_json::{
     installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
     RecipeParameters, SiteLabCatalog,
+};
+pub use source_bridge::{
+    bind_public_page_findings_v1, preview_serp_fetch_candidates_v1,
+    PublicPageEvidenceInputV1, PublicPageFindingV1, ResearchSourceBridgeErrorV1,
+    SerpFetchCandidateStatusV1, SerpFetchCandidateV1, SerpFetchPolicyV1,
 };
 
 pub const SITE_RECIPE_SCHEMA_REVISION: u16 = 2;
