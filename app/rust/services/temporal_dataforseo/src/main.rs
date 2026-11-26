@@ -155,12 +155,14 @@ impl AlegriaOwnerOperationV1Workflow {
                 break;
             }
         }
-        ctx.start_activity(
-            DataForSeoActivities::materialize_admitted_stub_v1,
-            invocation,
-            stub_effect_options(),
-        )
-        .await
+        let receipt: OwnerResultV1 = ctx
+            .start_activity(
+                DataForSeoActivities::materialize_admitted_stub_v1,
+                invocation,
+                stub_effect_options(),
+            )
+            .await?;
+        Ok(receipt)
     }
 
     #[signal(name = "operator_admission_ready_dataforseo_v1")]
@@ -389,9 +391,11 @@ fn checked_activity_identity(
     let info = ctx.info();
     let workflow_id = info
         .workflow_id
+        .clone()
         .context("missing DataForSEO child Workflow ID")?;
     let run_id = info
         .workflow_run_id
+        .clone()
         .context("missing DataForSEO server Run ID")?;
     ensure!(
         info.workflow_type.as_deref() == Some(OWNER_OPERATION_CHILD_TYPE_V1)
@@ -534,13 +538,17 @@ impl DataForSeoActivities {
                 let bytes = bytes.ok_or_else(|| non_retryable("missing durable owner receipt"))?;
                 let result: OwnerResultV1 =
                     serde_json::from_slice(&bytes).map_err(non_retryable)?;
-                ensure!(
-                    result.dispatch_execution_key == *dispatch_key
-                        && result.receipt_bytes
-                            == result.outputs[&PortId::from(OUTPUT_PORT)].payload,
-                    "durable DataForSEO owner receipt does not match dispatch"
-                )
-                .map_err(non_retryable)?;
+                let output_payload = result
+                    .outputs
+                    .get(&PortId::from(OUTPUT_PORT))
+                    .map(|output| &output.payload);
+                if result.dispatch_execution_key != *dispatch_key
+                    || output_payload != Some(&result.receipt_bytes)
+                {
+                    return Err(non_retryable(
+                        "durable DataForSEO owner receipt does not match dispatch",
+                    ));
+                }
                 Ok(result)
             }
             "uncertain" => Err(non_retryable(

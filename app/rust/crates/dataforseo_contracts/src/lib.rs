@@ -453,6 +453,7 @@ mod tests {
             valid_input()
         );
         let contract = DataForSeoGoogleOrganicSearchV1::contract();
+        let contract_hash = contract.fingerprint().unwrap();
         let request = OwnerValidationRequestV1 {
             schema_revision: 1,
             parent: invocation.parent,
@@ -461,7 +462,7 @@ mod tests {
             instance: invocation.checked_dispatch.instance,
             operation: contract.reference,
             owner: contract.owner,
-            contract_hash: contract.fingerprint().unwrap(),
+            contract_hash,
             command_bytes: invocation.command_bytes,
             input_schemas: contract.inputs,
             external_inputs: BTreeMap::from([(
