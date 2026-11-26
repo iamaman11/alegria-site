@@ -929,8 +929,16 @@ mod tests {
         let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
             .expect("bound source is structurally valid, not independently admitted");
         assert_eq!(preview.preflight.source_authentication, "not_checked");
+        // Replacing Produced with External removes the causal edge, so the
+        // deterministic schedule may order the two now-independent steps
+        // differently. Select by stable instance identity, never by index.
+        let consumer = preview
+            .steps
+            .iter()
+            .find(|step| step.instance.as_str() == "consumer")
+            .expect("the checked plan contains the consumer");
         assert!(matches!(
-            preview.steps[1].inputs.get(&PortId::from("source")),
+            consumer.inputs.get(&PortId::from("source")),
             Some(crate::SiteLabPreviewInputV1::External {
                 artifact,
                 schema: source_schema,

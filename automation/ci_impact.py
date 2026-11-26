@@ -1219,7 +1219,9 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
         ("temporal_mixed_v6_contract", "mixed_v6_", 3),
         ("temporal_mixed_v7_produced", "mixed_v7_", 2),
-        ("temporal_mixed_v2_native", "mixed_v2_native_", 1),
+        # One live Temporal/PG/Qdrant V2 proof plus one isolated test of
+        # the exact trusted Site Lab provider catalog on real owner contracts.
+        ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
