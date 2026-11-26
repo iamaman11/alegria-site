@@ -620,11 +620,11 @@ dependencies = [
  "serde_json",
  "sqlx",
  "temporal_gateway",
- "trusted_owner_catalog",
  "tokio",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "trusted_owner_catalog",
  "truth_domain",
  "uuid",
 ]
@@ -2279,6 +2279,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_pg_v3_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "postgres_store",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "testcontainers",
+ "tokio",
+ "truth_domain",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "integration_qdrant_e2e"
 version = "0.1.0"
 dependencies = [
@@ -2323,25 +2342,6 @@ dependencies = [
  "url",
  "uuid",
  "vector_qdrant",
-]
-
-[[package]]
-name = "integration_pg_v3_e2e"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "operation_protocol",
- "postgres_store",
- "serde_json",
- "serial_test",
- "sqlx",
- "temporalio-client",
- "temporalio-common",
- "testcontainers",
- "tokio",
- "truth_domain",
- "url",
- "uuid",
 ]
 
 [[package]]
@@ -3266,6 +3266,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "operation_protocol"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3643,17 +3654,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "operation_protocol"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
 name = "postgres_store"
 version = "0.1.0"
 dependencies = [
@@ -3672,67 +3672,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "projection_contracts"
-version = "0.1.0"
-dependencies = [
- "operation_protocol",
- "serde",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
-name = "projection_delivery"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "contracts",
- "graph_neo4j",
- "operation_protocol",
- "postgres_store",
- "primitives",
- "prost",
- "qdrant_effects_core",
- "serde",
- "serde_json",
- "sqlx",
- "uuid",
- "vector_qdrant",
- "voyage_api",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
-]
-
-[[package]]
-name = "qdrant_contracts"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "operation_protocol",
- "projection_contracts",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "uuid",
-]
-
-[[package]]
-name = "qdrant_effects_core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "qdrant_contracts",
- "serde_json",
- "sqlx",
- "uuid",
- "vector_qdrant",
 ]
 
 [[package]]
@@ -3821,6 +3766,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "projection_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "serde",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "projection_delivery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "contracts",
+ "graph_neo4j",
+ "operation_protocol",
+ "postgres_store",
+ "primitives",
+ "prost",
+ "qdrant_effects_core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
+ "voyage_api",
 ]
 
 [[package]]
@@ -4005,6 +3980,31 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost",
+]
+
+[[package]]
+name = "qdrant_contracts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "operation_protocol",
+ "projection_contracts",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "qdrant_effects_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qdrant_contracts",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]
@@ -4389,8 +4389,8 @@ dependencies = [
  "graph_capability",
  "graph_neo4j",
  "infrastructure",
- "postgres_store",
  "pg_runtime_ports",
+ "postgres_store",
  "primitives",
  "prost",
  "runtime_models",
@@ -5393,7 +5393,7 @@ dependencies = [
  "blake3",
  "dataforseo_contracts",
  "operation_protocol",
- "reqwest",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sqlx",
@@ -5479,9 +5479,9 @@ dependencies = [
  "futures",
  "futures-util",
  "operation_protocol",
+ "projection_contracts",
  "qdrant_contracts",
  "qdrant_effects_core",
- "projection_contracts",
  "serde",
  "serde_json",
  "sqlx",
@@ -6547,6 +6547,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "version_check"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
 name = "voyage_api"
 version = "0.1.0"
 dependencies = [
@@ -6557,12 +6563,6 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
-
-[[package]]
-name = "version_check"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "walkdir"
