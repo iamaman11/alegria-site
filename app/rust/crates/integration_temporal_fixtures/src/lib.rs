@@ -4,13 +4,13 @@
 
 use anyhow::{Context, Result};
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
-use url::Url;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
 use tokio::time::{sleep, Duration};
+use url::Url;
 use uuid::Uuid;
 
 pub struct TemporalHarness {

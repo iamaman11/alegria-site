@@ -30,8 +30,8 @@ mod tests {
         data_converters::{PayloadConverter, RawValue},
         protos::temporal::api::history::v1::history_event::Attributes,
     };
-    use url::Url;
     use tokio::time::{sleep, timeout};
+    use url::Url;
     use uuid::Uuid;
 
     struct ChildGuard(Option<Child>);

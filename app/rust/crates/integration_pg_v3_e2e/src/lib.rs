@@ -26,8 +26,8 @@ mod tests {
         enums::v1::EventType,
         history::v1::{history_event::Attributes, History},
     };
-    use url::Url;
     use tokio::time::timeout;
+    use url::Url;
     use uuid::Uuid;
 
     struct ChildGuard {
