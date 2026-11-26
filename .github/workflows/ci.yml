@@ -172,6 +172,16 @@ jobs:
           (cd app/rust && cargo fmt --all -- --check)
           python3 automation/check_rust_adapter_boundaries.py
 
+      # Detect a stale manually edited workspace lock before expensive matrix
+      # compilers; print Cargo's exact offline reconciliation for review.
+      - name: Verify Cargo.lock matches the complete workspace
+        if: steps.decide.outputs.cargo_scope == 'full'
+        working-directory: app/rust
+        run: |
+          cargo metadata --offline --format-version 1 --no-deps > /dev/null
+          git diff -- Cargo.lock
+          git diff --exit-code -- Cargo.lock
+
       - name: Preserve selected and not-applicable evidence
         if: always()
         uses: actions/upload-artifact@v7
