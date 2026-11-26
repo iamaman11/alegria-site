@@ -592,27 +592,39 @@ impl PgTruthReviewReconcileV3Workflow {
     }
 }
 
-/// Replay an actual persisted Workflow History with the SDK, offline. The
-/// operator's admission, PostgreSQL connection and Activity Worker are never
-/// available to replay; completed Activity outcomes come from History.
-async fn replay_history(path: &std::path::Path) -> Result<()> {
+/// Replay an actual persisted Workflow History with the SDK, offline. Each
+/// historical command queue registers *only* its own Workflow Types; the
+/// generic owner/Validate Child cannot be reinterpreted on the old V3 queue.
+/// No operator admission, PostgreSQL connection or Activity Worker exists in
+/// this replay process: completed Activity outcomes come from History.
+async fn replay_history_for_queue(path: &std::path::Path, queue: &str) -> Result<()> {
     let bytes = std::fs::read(path)
-        .with_context(|| format!("read real PG V3 Temporal history {}", path.display()))?;
+        .with_context(|| format!("read real PG Temporal history {}", path.display()))?;
     let history = WorkflowHistory::from_json(&bytes)
-        .map_err(|error| anyhow::anyhow!("decode PG V3 Temporal history: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("decode PG Temporal history: {error}"))?;
     let mut options = WorkflowReplayerOptions::new()
         .namespace("default".to_string())
-        .task_queue(COMMAND_TASK_QUEUE.to_string())
+        .task_queue(queue.to_string())
         .build();
-    options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
-    options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
-    options.register_workflow::<PgTruthReviewReconcileV5Workflow>()?;
-    options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
+    match queue {
+        COMMAND_TASK_QUEUE => {
+            options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
+            options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
+        }
+        V5_CHILD_COMMAND_TASK_QUEUE => {
+            options.register_workflow::<PgTruthReviewReconcileV5Workflow>()?;
+        }
+        PG_OWNER_TASK_QUEUE_V1 => {
+            options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
+            options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?;
+        }
+        _ => anyhow::bail!("PG offline History replay has an unknown command Task Queue"),
+    }
     WorkflowReplayer::new(options)
-        .map_err(|error| anyhow::anyhow!("construct PG V3 Temporal replayer: {error}"))?
+        .map_err(|error| anyhow::anyhow!("construct PG Temporal replayer: {error}"))?
         .replay_workflow(history)
         .await
-        .map_err(|error| anyhow::anyhow!("PG V3 Temporal history replay failed: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("PG Temporal history replay failed: {error}"))?;
     Ok(())
 }
 
@@ -627,8 +639,28 @@ async fn main() -> Result<()> {
                 .next()
                 .context("--replay-history requires one JSON file")?;
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
-            replay_history(std::path::Path::new(&path)).await?;
+            replay_history_for_queue(std::path::Path::new(&path), COMMAND_TASK_QUEUE).await?;
             println!("CI_TEMPORAL_PG_EFFECT_REPLAY=PASS");
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--replay-v5-history") {
+            let path = args
+                .next()
+                .context("--replay-v5-history requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected PG V5 replay arguments");
+            replay_history_for_queue(std::path::Path::new(&path), V5_CHILD_COMMAND_TASK_QUEUE)
+                .await?;
+            println!("CI_TEMPORAL_PG_EFFECT_V5_REPLAY=PASS");
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--replay-owner-history") {
+            let path = args
+                .next()
+                .context("--replay-owner-history requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected PG owner replay arguments");
+            replay_history_for_queue(std::path::Path::new(&path), PG_OWNER_TASK_QUEUE_V1)
+                .await?;
+            println!("CI_TEMPORAL_PG_OWNER_REPLAY=PASS");
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue") {
@@ -852,6 +884,17 @@ mod tests {
             "alegria-pg-v3-no-such-history-{}",
             std::process::id()
         ));
-        assert!(replay_history(&nonexistent).await.is_err());
+        for queue in [
+            COMMAND_TASK_QUEUE,
+            V5_CHILD_COMMAND_TASK_QUEUE,
+            PG_OWNER_TASK_QUEUE_V1,
+        ] {
+            assert!(
+                replay_history_for_queue(&nonexistent, queue)
+                    .await
+                    .is_err(),
+                "{queue}: replay requires actual persisted Temporal History"
+            );
+        }
     }
 }

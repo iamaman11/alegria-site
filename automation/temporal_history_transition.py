@@ -185,10 +185,25 @@ REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
         ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
     ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"):
         ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
+    ("PgTruthReviewReconcileV5Workflow", "alegria-pg-command-v5"):
+        ("pg", "--replay-v5-history", "CI_TEMPORAL_PG_EFFECT_V5_REPLAY=PASS"),
+    # The common generic wire Type belongs to two *independent* owner queues.
+    # Never choose a provider by Type alone, and never replay either on a
+    # historical command queue with the wrong registered Workflow set.
+    ("AlegriaOwnerOperationV1Workflow", "alegria-pg-owner-v1"):
+        ("pg", "--replay-owner-history", "CI_TEMPORAL_PG_OWNER_REPLAY=PASS"),
+    ("AlegriaOwnerValidateV1Workflow", "alegria-pg-owner-v1"):
+        ("pg", "--replay-owner-history", "CI_TEMPORAL_PG_OWNER_REPLAY=PASS"),
     ("AlegriaQdrantProjectionDagV1Workflow", "alegria-qdrant-dag-v1"):
         ("orchestrator", "--replay-qdrant-effect-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
     ("QdrantKeywordProjectionV1Workflow", "alegria-qdrant-command-v1"):
         ("qdrant", "--replay-history", "CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS"),
+    ("QdrantKeywordProjectionV2Workflow", "alegria-qdrant-command-v2"):
+        ("qdrant", "--replay-history-v2", "CI_TEMPORAL_QDRANT_EFFECT_V2_REPLAY=PASS"),
+    ("AlegriaOwnerOperationV1Workflow", "alegria-qdrant-owner-v1"):
+        ("qdrant", "--replay-history-generic-v1", "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS"),
+    ("AlegriaOwnerValidateV1Workflow", "alegria-qdrant-owner-v1"):
+        ("qdrant", "--replay-history-generic-v1", "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS"),
 }
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
 MAX_REPLAYER_BYTES = 512 * 1024 * 1024

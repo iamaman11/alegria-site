@@ -448,6 +448,140 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
                 self.assertFalse(Path(argv[0]).exists())
                 self.assertNotEqual(argv[2], str(self.root / "history.json"))
 
+    def test_new_pg_qdrant_native_owner_and_validate_histories_replay_on_exact_queue(self):
+        routes = (
+            ("PgTruthReviewReconcileV5Workflow", "alegria-pg-command-v5",
+             "pg", "--replay-v5-history", "CI_TEMPORAL_PG_EFFECT_V5_REPLAY=PASS"),
+            ("AlegriaOwnerOperationV1Workflow", "alegria-pg-owner-v1",
+             "pg", "--replay-owner-history", "CI_TEMPORAL_PG_OWNER_REPLAY=PASS"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-pg-owner-v1",
+             "pg", "--replay-owner-history", "CI_TEMPORAL_PG_OWNER_REPLAY=PASS"),
+            ("QdrantKeywordProjectionV2Workflow", "alegria-qdrant-command-v2",
+             "qdrant", "--replay-history-v2", "CI_TEMPORAL_QDRANT_EFFECT_V2_REPLAY=PASS"),
+            ("AlegriaOwnerOperationV1Workflow", "alegria-qdrant-owner-v1",
+             "qdrant", "--replay-history-generic-v1",
+             "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-qdrant-owner-v1",
+             "qdrant", "--replay-history-generic-v1",
+             "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS"),
+        )
+        for workflow_type, queue, owner, flag, marker in routes:
+            with self.subTest(workflow_type=workflow_type, queue=queue):
+                self.capture, self.manifest, history = replay_fixture(
+                    workflow_type=workflow_type, task_queue=queue,
+                )
+                (self.root / "history.json").write_bytes(history)
+                self.binaries = {owner: self.binary}
+                with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+                     patch.object(transition, "run_command", return_value=marker) as command:
+                    result = transition.replay_audit(
+                        self.capture, self.manifest, history_root=self.root,
+                        binaries=self.binaries, clock=NOW,
+                    )
+                self.assertEqual(result["status"], "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY")
+                self.assertFalse(result["cutover_authorized"])
+                self.assertEqual(result["replay_count"], 1)
+                argv = command.call_args.args[0]
+                self.assertEqual(argv[1], flag)
+                self.assertEqual(Path(argv[0]).name, f"replayer-{owner}")
+                self.assertFalse(Path(argv[0]).exists())
+                self.assertFalse(Path(argv[2]).exists())
+                self.assertTrue(set(command.call_args.kwargs["env"]) <= set(transition.REPLAY_ENV_ALLOW))
+
+    def test_new_owner_wrong_queue_and_catalog_dependent_parents_fail_closed(self):
+        for workflow_type, queue in (
+            ("AlegriaOwnerOperationV1Workflow", "alegria-pg-command-v3"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-pg-command-v5"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-qdrant-command-v2"),
+            ("QdrantKeywordProjectionV2Workflow", "alegria-qdrant-owner-v1"),
+            ("PgTruthReviewReconcileV5Workflow", "alegria-pg-command-v3"),
+            # Generic parents require an independently bound immutable owner
+            # catalog; the Python scrubbed-environment replayer has none.
+            ("AlegriaOperationDagV1Workflow", "alegria-operation-dag-v1"),
+            ("AlegriaOperationDagV2Workflow", "alegria-operation-dag-v2"),
+        ):
+            with self.subTest(workflow_type=workflow_type, queue=queue):
+                self.capture, self.manifest, history = replay_fixture(
+                    workflow_type=workflow_type, task_queue=queue,
+                )
+                (self.root / "history.json").write_bytes(history)
+                with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+                     patch.object(transition, "run_command") as command, \
+                     self.assertRaisesRegex(transition.EvidenceError, "lacks an SDK replay route"):
+                    transition.replay_audit(
+                        self.capture, self.manifest, history_root=self.root,
+                        binaries={"pg": self.binary, "qdrant": self.binary}, clock=NOW,
+                    )
+                command.assert_not_called()
+
+    def test_same_generic_workflow_type_replays_with_two_independent_owner_binaries(self):
+        self.capture, self.manifest, pg_history = replay_fixture(
+            workflow_type="AlegriaOwnerOperationV1Workflow",
+            task_queue="alegria-pg-owner-v1",
+        )
+        (self.root / "history.json").write_bytes(pg_history)
+        q_history = json.dumps({"events": [{
+            "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+            "workflowExecutionStartedEventAttributes": {
+                "workflowType": {"name": "AlegriaOwnerOperationV1Workflow"},
+                "taskQueue": {"name": "alegria-qdrant-owner-v1"},
+            },
+        }]}, sort_keys=True).encode("utf-8")
+        (self.root / "qdrant-history.json").write_bytes(q_history)
+        q_item = dict(self.manifest["histories"][0])
+        q_item.update({
+            "workflow_id": "other-owner-workflow", "run_id": "other-owner-run",
+            "task_queue": "alegria-qdrant-owner-v1", "file": "qdrant-history.json",
+            "sha256": hashlib.sha256(q_history).hexdigest(),
+        })
+        self.manifest["histories"].append(q_item)
+        counts = self.capture["temporal"]["legacy_workflow_types"]
+        counts["AlegriaOwnerOperationV1Workflow"]["total"] = 2
+        self.capture["temporal"]["total_all_before"] = 2
+        self.capture["temporal"]["total_all_after"] = 2
+        self.capture["blockers"] = transition.blockers(
+            self.capture["temporal"], self.capture["postgres"])
+        q_binary = self.root / "temporal_qdrant_effects"
+        q_binary.write_bytes(b"independently built Qdrant owner replayer")
+        q_binary.chmod(0o700)
+
+        def native_marker(argv, *, env):
+            self.assertEqual(set(env) - set(transition.REPLAY_ENV_ALLOW), set())
+            return {
+                "--replay-owner-history": "CI_TEMPORAL_PG_OWNER_REPLAY=PASS",
+                "--replay-history-generic-v1": "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS",
+            }[argv[1]]
+
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", side_effect=native_marker) as commands:
+            result = transition.replay_audit(
+                self.capture, self.manifest, history_root=self.root,
+                binaries={"pg": self.binary, "qdrant": q_binary}, clock=NOW,
+            )
+        self.assertEqual(result["replayed_by_type"]["AlegriaOwnerOperationV1Workflow"], 2)
+        self.assertEqual(set(result["native_replayers"]), {"pg", "qdrant"})
+        self.assertEqual({call.args[0][1] for call in commands.call_args_list}, {
+            "--replay-owner-history", "--replay-history-generic-v1",
+        })
+        self.assertEqual(result["status"], "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY")
+        self.assertFalse(result["cutover_authorized"])
+
+    def test_native_generic_replay_cli_registration_has_queue_correct_workflows(self):
+        services = Path(__file__).resolve().parents[1] / "app/rust/services"
+        pg = (services / "temporal_pg_effects/src/main.rs").read_text(encoding="utf-8")
+        qdrant = (services / "temporal_qdrant_effects/src/main.rs").read_text(encoding="utf-8")
+        generic = (services / "temporal_qdrant_effects/src/owner_generic_v1.rs").read_text(
+            encoding="utf-8")
+        self.assertIn('OsStr::new("--replay-owner-history")', pg)
+        self.assertIn('OsStr::new("--replay-v5-history")', pg)
+        self.assertIn('replay_history_for_queue(std::path::Path::new(&path), PG_OWNER_TASK_QUEUE_V1)', pg)
+        self.assertIn('replay_history_for_queue(std::path::Path::new(&path), V5_CHILD_COMMAND_TASK_QUEUE)', pg)
+        self.assertIn('options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?', pg)
+        self.assertIn('OsStr::new("--replay-history-v2")', qdrant)
+        self.assertIn('OsStr::new("--replay-history-generic-v1")', qdrant)
+        self.assertIn('task_queue(QDRANT_GENERIC_OWNER_QUEUE_V1.to_owned())', generic)
+        self.assertIn('options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?', generic)
+
     def test_sdk_replayer_receives_verified_immutable_executable_bytes(self):
         observed = {}
 
@@ -643,8 +777,14 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
             ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"),
             ("PgTruthReviewReconcileV3Workflow", "alegria-pg-command-v3"),
             ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"),
+            ("PgTruthReviewReconcileV5Workflow", "alegria-pg-command-v5"),
+            ("AlegriaOwnerOperationV1Workflow", "alegria-pg-owner-v1"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-pg-owner-v1"),
             ("AlegriaQdrantProjectionDagV1Workflow", "alegria-qdrant-dag-v1"),
             ("QdrantKeywordProjectionV1Workflow", "alegria-qdrant-command-v1"),
+            ("QdrantKeywordProjectionV2Workflow", "alegria-qdrant-command-v2"),
+            ("AlegriaOwnerOperationV1Workflow", "alegria-qdrant-owner-v1"),
+            ("AlegriaOwnerValidateV1Workflow", "alegria-qdrant-owner-v1"),
         }, set(), "SDK replay queue routes require explicit test coverage")
         self.assertTrue(set(t for t, _ in transition.REPLAY_ROUTES) <= set(transition.WORKFLOW_TYPES))
 

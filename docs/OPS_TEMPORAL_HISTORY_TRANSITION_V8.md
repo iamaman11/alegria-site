@@ -41,6 +41,36 @@ directory or rewriting a file of the same size. Use a private immutable
 artifact directory and independent signed server/CI attestation later; V8
 does not claim either guarantee.
 
+## Native owner SDK replay routes (26.11.2026)
+
+The same read-only `replay-audit` accepts real exported Histories for these
+additional **already registered** native queues; the exact pair of Workflow
+Type **and** Task Queue determines the replayer, never a generic Type alone:
+
+| Task Queue | Workflow Types | Native CLI |
+| --- | --- | --- |
+| `alegria-pg-command-v5` | `PgTruthReviewReconcileV5Workflow` | `temporal_pg_effects --replay-v5-history` |
+| `alegria-pg-owner-v1` | `AlegriaOwnerOperationV1Workflow`, `AlegriaOwnerValidateV1Workflow` | `temporal_pg_effects --replay-owner-history` |
+| `alegria-qdrant-command-v2` | `QdrantKeywordProjectionV2Workflow` | `temporal_qdrant_effects --replay-history-v2` |
+| `alegria-qdrant-owner-v1` | `AlegriaOwnerOperationV1Workflow`, `AlegriaOwnerValidateV1Workflow` | `temporal_qdrant_effects --replay-history-generic-v1` |
+
+The new PostgreSQL replay CLI uses the real isolated owner queue and registers
+both owner and side-effect-free validation Workflow Types; its historical V3/V4
+and V5 queues remain distinct. No Worker is started, and replay neither reads
+provider credentials nor performs an Activity. A History claiming the wrong
+queue/Type fails before the SDK process is invoked.
+
+**Not accepted:** `AlegriaOperationDagV1Workflow` and
+`AlegriaOperationDagV2Workflow` parent Histories still require their original
+root-owned immutable trusted route catalog. The replay tool deliberately
+scrubs operator environment variables and cannot manufacture or guess that
+catalog. Those routes remain fail-closed until a protected catalog snapshot
+is bound to each actual parent History and its original source/contract set.
+The new owner routes expand offline compatibility coverage only; they are
+still `OFFLINE_SDK_REPLAY_CANDIDATE_ONLY`, never a genuine staging/production
+History replay, drain proof or cutover authorization without independent
+Temporal server/export and Worker Build ID attestation.
+
 ## Strict input manifest
 
 Prepare an explicit operator-controlled private directory containing the

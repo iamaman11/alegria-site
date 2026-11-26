@@ -2315,6 +2315,41 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
                 Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
                     if a.workflow_id == q_child_id
             )).count(), 1, "worker replay must not start a second Qdrant Child");
+            // Prove that the *actual server-issued* generic owner histories
+            // also replay with their own native SDK binaries, on their own
+            // Task Queues, without live Temporal/PG/Qdrant credentials. A
+            // parser-only manifest cannot establish this compatibility.
+            for (child_id, replay_bin, replay_flag, marker) in [
+                (pg_child_id.as_str(), &pg_bin, "--replay-owner-history",
+                    "CI_TEMPORAL_PG_OWNER_REPLAY=PASS"),
+                (q_child_id.as_str(), &qdrant_bin, "--replay-history-generic-v1",
+                    "CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS"),
+            ] {
+                let child = client.get_workflow_handle::<UntypedWorkflow>(child_id.to_owned());
+                let server_history = child.fetch_history(
+                    WorkflowFetchHistoryOptions::builder().build()
+                ).to_json().await.expect("fetch complete server-issued generic owner History");
+                assert!(server_history.len() > 100, "actual owner History cannot be empty");
+                let replay_file = private_locators.request("v2-generic-owner-sdk-replay", "{}");
+                fs::write(&replay_file, &server_history).unwrap();
+                let mut replay_command = Command::new(replay_bin);
+                replay_command.arg(replay_flag).arg(&replay_file).env_clear();
+                for key in ["PATH", "LD_LIBRARY_PATH", "LANG", "LC_ALL", "TZ",
+                    "RUST_BACKTRACE", "TMPDIR"] {
+                    if let Some(value) = env::var_os(key) {
+                        replay_command.env(key, value);
+                    }
+                }
+                let replay = replay_command.output()
+                    .expect("run credential-free generic owner offline SDK History replay");
+                assert!(replay.status.success(),
+                    "{replay_flag}: generic owner replay failed: stdout={} stderr={}",
+                    String::from_utf8_lossy(&replay.stdout),
+                    String::from_utf8_lossy(&replay.stderr));
+                assert!(String::from_utf8_lossy(&replay.stdout).lines().any(|line| line == marker),
+                    "{replay_flag}: SDK replay omitted exact owner completion marker");
+            }
+            eprintln!("CI_MIXED_V2_NATIVE_GENERIC_OWNER_REAL_SDK_REPLAY=PASS");
             eprintln!("CI_MIXED_V2_NATIVE_UNKNOWN_OUTCOME_REVOKED_WORKER_REPLAY=PASS");
         }
         eprintln!("CI_MIXED_V2_NATIVE_REAL_{case}_PG_TEMPORAL_QDRANT=PASS");
