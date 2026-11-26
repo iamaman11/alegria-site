@@ -159,6 +159,15 @@ NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_qdrant_effects/src/owner_generic_v1.rs",
 })
 
+# Site Lab accepts untrusted *authoring* JSON, not runtime owner commands.
+# This one adapter decodes owner-authored parameter DTOs and hashes their
+# canonical bytes without performing an effect. Its exact test fixture file
+# exercises strict types and schema pins; no blanket seo_application waiver.
+SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/seo_application/src/site_lab/parameters_json.rs",
+    "app/rust/crates/seo_application/src/site_lab/tests.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -174,7 +183,7 @@ def is_allowed_json_boundary(path: Path) -> bool:
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
                | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES
-               | NATIVE_OWNER_V2_JSON_BOUNDARIES):
+               | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

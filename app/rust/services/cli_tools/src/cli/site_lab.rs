@@ -2,8 +2,9 @@ use std::io::Read;
 
 use seo_application::operation_adapter::semantic_extraction_registry;
 use seo_application::site_lab::{
-    compare_executions, describe_tools, diff_recipes, inspect_execution, preview_recipe,
-    ExecutionPlan, OperationDagReceiptV1, SiteRecipe,
+    compare_executions, describe_tools, diff_recipes, inspect_execution,
+    installed_semantic_lab_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
+    SiteRecipe,
 };
 
 const SITE_LAB_SAVED_MAX_BYTES: u64 = 512 * 1024;
@@ -108,7 +109,9 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
     // The registry is compiled from actual, trusted owner operations. User
     // recipes cannot inject contracts, owner routes, credentials or task queues.
     let registry = semantic_extraction_registry().context("register Site Lab operations")?;
-    let catalog = registry.catalog();
+    let installed = installed_semantic_lab_catalog(registry.catalog().clone())
+        .context("register trusted Site Lab parameter contracts")?;
+    let catalog = &installed;
 
     match action {
         SiteLabCommand::Tools => {
@@ -172,7 +175,7 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
                     return Ok(2);
                 }
             };
-            match inspect_execution(&plan, &receipt, catalog) {
+            match inspect_execution(&plan, &receipt, catalog.catalog()) {
                 Ok(report) => site_lab_print(&report)?,
                 Err(error) => {
                     site_lab_print(&error.problem())?;
@@ -207,7 +210,7 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
                 &first_receipt,
                 &second_plan,
                 &second_receipt,
-                catalog,
+                catalog.catalog(),
             ) {
                 Ok(report) => site_lab_print(&report)?,
                 Err(error) => {
@@ -267,7 +270,7 @@ mod site_lab_cli_tests {
     #[test]
     fn recipe_json_rejects_runtime_credentials_and_supplied_contracts() {
         let raw = json!({
-            "schema_revision": 1,
+            "schema_revision": 2,
             "scope": { "tenant_id": "lab", "run_id": "hypothesis-1" },
             "steps": [],
         });

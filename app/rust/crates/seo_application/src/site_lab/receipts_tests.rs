@@ -42,7 +42,7 @@ fn catalog() -> ContractCatalog {
 
 fn plan(run_id: &str) -> ExecutionPlan {
     let recipe = SiteRecipe {
-        schema_revision: 1,
+        schema_revision: 2,
         scope: RunScope {
             tenant_id: "tenant-test".to_owned(),
             run_id: run_id.to_owned(),
@@ -58,6 +58,7 @@ fn plan(run_id: &str) -> ExecutionPlan {
             RecipeStep {
                 id: OperationInstanceId::from("extract"),
                 operation: ref_id("lab.extract"),
+                parameters: RecipeParameters::default(),
                 inputs: BTreeMap::from([(
                     PortId::from("input"),
                     RecipeInput::External {
@@ -69,6 +70,7 @@ fn plan(run_id: &str) -> ExecutionPlan {
             RecipeStep {
                 id: OperationInstanceId::from("analyze"),
                 operation: ref_id("lab.analyze"),
+                parameters: RecipeParameters::default(),
                 inputs: BTreeMap::from([(
                     PortId::from("input"),
                     RecipeInput::Produced {

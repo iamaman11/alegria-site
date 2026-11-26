@@ -8,15 +8,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId, ExternalArtifact,
-    IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef, PlanError, PlanHash,
-    PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
+    owner_content_hash, ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId,
+    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef,
+    PlanError, PlanHash, PortId, RunScope, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
 pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const SITE_RECIPE_SCHEMA_REVISION: u16 = 1;
+mod parameters_json;
+pub use parameters_json::{
+    installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
+    RecipeParameters, SiteLabCatalog,
+};
+
+pub const SITE_RECIPE_SCHEMA_REVISION: u16 = 2;
+const LEGACY_SITE_RECIPE_SCHEMA_REVISION: u16 = 1;
 
 /// An external artifact is only *declared* here. A string provenance label is
 /// never evidence of an authenticated Truth/source revision or permission to
@@ -48,6 +55,10 @@ pub struct RecipeStep {
     pub id: OperationInstanceId,
     pub operation: OperationRef,
     pub inputs: BTreeMap<PortId, RecipeInput>,
+    /// Versioned owner parameters; validated against a trusted Rust DTO or
+    /// explicitly deferred to the independent owner ValidateOnly preflight.
+    #[serde(default)]
+    pub parameters: RecipeParameters,
     #[serde(default)]
     pub after: BTreeSet<OperationInstanceId>,
 }
@@ -74,6 +85,7 @@ pub struct ToolDescription {
     pub effects: BTreeSet<EffectId>,
     pub idempotency: IdempotencyPolicy,
     pub contract_hash: String,
+    pub parameters: Option<ParameterDescription>,
     /// An operation's contract being registered does not grant operator
     /// admission or mean a provider is online.
     pub readiness: &'static str,
@@ -82,8 +94,9 @@ pub struct ToolDescription {
 /// Every registered owner contract is discoverable without adding a new
 /// provider-specific case to the CLI or the DAG kernel. The caller must pass
 /// a *trusted* catalog; never register contracts from a user recipe.
-pub fn describe_tools(catalog: &ContractCatalog) -> Result<Vec<ToolDescription>, SiteLabError> {
+pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, SiteLabError> {
     catalog
+        .catalog()
         .contracts()
         .map(|contract| {
             Ok(ToolDescription {
@@ -95,7 +108,10 @@ pub fn describe_tools(catalog: &ContractCatalog) -> Result<Vec<ToolDescription>,
                 effects: contract.effects.clone(),
                 idempotency: contract.idempotency,
                 contract_hash: contract.fingerprint()?.as_str().to_owned(),
-                readiness: if contract.effects.is_empty()
+                parameters: catalog.describe(&contract.reference),
+                readiness: if catalog.describe(&contract.reference).is_none() {
+                    "missing_parameter_schema"
+                } else if contract.effects.is_empty()
                     && contract.idempotency == IdempotencyPolicy::Pure
                 {
                     "pure_plan_only"
@@ -109,7 +125,7 @@ pub fn describe_tools(catalog: &ContractCatalog) -> Result<Vec<ToolDescription>,
 
 #[derive(Debug, Error)]
 pub enum SiteLabError {
-    #[error("unsupported recipe revision {0}; expected 1")]
+    #[error("unsupported recipe revision {0}; supported revisions are 1 (without parameters) and 2")]
     UnsupportedRevision(u16),
     #[error("recipe must include at least one operation")]
     EmptyRecipe,
@@ -117,6 +133,10 @@ pub enum SiteLabError {
     TooManySteps(usize),
     #[error("operation {0:?} is not registered by an installed owner")]
     UnavailableOperation(OperationRef),
+    #[error(transparent)]
+    InvalidParameters(#[from] ParameterError),
+    #[error("recipe parameters cannot be encoded")]
+    ParameterEncoding,
     #[error(transparent)]
     InvalidPlan(#[from] PlanError),
 }
@@ -147,6 +167,10 @@ impl SiteLabError {
             Self::UnavailableOperation(_) => (
                 "operation_unavailable",
                 "Inspect the catalog and install an independently authorized owner adapter.",
+            ),
+            Self::InvalidParameters(_) | Self::ParameterEncoding => (
+                "operation_parameters_invalid",
+                "Use the installed operation's exact typed parameter schema; remote owners require ValidateOnly before effects.",
             ),
             Self::InvalidPlan(PlanError::Cycle) => (
                 "recipe_cycle",
@@ -188,9 +212,14 @@ impl SiteLabError {
 #[derive(Debug, Serialize)]
 pub struct RecipePreview {
     pub status: &'static str,
+    /// The full authoring identity changes when typed parameters change even
+    /// if the generic ExecutionPlan graph and plan_hash remain unchanged.
+    pub recipe_hash: String,
     pub plan_hash: PlanHash,
     pub ordered_steps: Vec<OperationInstanceId>,
     pub source_count: usize,
+    pub parameter_hashes: BTreeMap<OperationInstanceId, String>,
+    pub steps_requiring_owner_parameter_validation: Vec<OperationInstanceId>,
     /// These steps can be designed and checked, but never run merely because
     /// their contracts are present in the catalog or a preview was accepted.
     pub steps_requiring_owner_admission: Vec<OperationInstanceId>,
@@ -205,6 +234,7 @@ pub struct RecipeDifference {
     pub first: RecipePreview,
     pub second: RecipePreview,
     pub same_plan: bool,
+    pub same_recipe: bool,
     /// Same *declarations*, not necessarily the same fetched source bytes.
     pub same_declared_sources: bool,
     pub note: &'static str,
@@ -220,7 +250,14 @@ pub fn compile_recipe(
     recipe: &SiteRecipe,
     catalog: &ContractCatalog,
 ) -> Result<ExecutionPlan, SiteLabError> {
-    if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION {
+    if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION
+        && recipe.schema_revision != LEGACY_SITE_RECIPE_SCHEMA_REVISION
+    {
+        return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
+    }
+    if recipe.schema_revision == LEGACY_SITE_RECIPE_SCHEMA_REVISION
+        && recipe.steps.iter().any(|step| !step.parameters.is_empty())
+    {
         return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
     }
     if recipe.steps.is_empty() {
@@ -303,25 +340,49 @@ pub fn compile_recipe(
 
 pub fn preview_recipe(
     recipe: &SiteRecipe,
-    catalog: &ContractCatalog,
+    catalog: &SiteLabCatalog,
 ) -> Result<RecipePreview, SiteLabError> {
-    let plan = compile_recipe(recipe, catalog)?;
-    let checked = plan.validate(catalog)?;
+    let plan = compile_recipe(recipe, catalog.catalog())?;
+    let checked = plan.validate(catalog.catalog())?;
+    let mut parameter_hashes = BTreeMap::new();
+    let mut steps_requiring_owner_parameter_validation = Vec::new();
+    for step in &recipe.steps {
+        let checked = catalog.validate(&step.operation, &step.parameters)?;
+        if checked.verification == "requires_owner_validate_only" {
+            steps_requiring_owner_parameter_validation.push(step.id.clone());
+        }
+        parameter_hashes.insert(step.id.clone(), checked.digest);
+    }
+    // Use the sealed plan's order-independent identity plus versioned owner
+    // parameter digests. A reordering of independent steps or a harmless v1
+    // -> v2 migration must not create a fictitious new experiment, while a
+    // parameter schema change must change the experiment identity.
+    let recipe_hash = owner_content_hash(
+        &serde_json::to_vec(&(&plan.hash, &parameter_hashes))
+            .map_err(|_| SiteLabError::ParameterEncoding)?,
+    );
     let steps_requiring_owner_admission = plan
         .nodes
         .iter()
         .filter(|node| {
-            catalog.contract(&node.operation).is_some_and(|contract| {
+            catalog.catalog().contract(&node.operation).is_some_and(|contract| {
                 !contract.effects.is_empty() || contract.idempotency != IdempotencyPolicy::Pure
             })
         })
         .map(|node| node.instance.clone())
         .collect();
     Ok(RecipePreview {
-        status: "valid_preview_only",
+        status: if steps_requiring_owner_parameter_validation.is_empty() {
+            "valid_preview_only"
+        } else {
+            "pending_owner_parameter_validation"
+        },
+        recipe_hash,
         plan_hash: plan.hash,
         ordered_steps: checked.execution_order().to_vec(),
         source_count: recipe.sources.len(),
+        parameter_hashes,
+        steps_requiring_owner_parameter_validation,
         steps_requiring_owner_admission,
         source_authentication: "not_verified",
         execution: "not_started",
@@ -331,18 +392,19 @@ pub fn preview_recipe(
 pub fn diff_recipes(
     first: &SiteRecipe,
     second: &SiteRecipe,
-    catalog: &ContractCatalog,
+    catalog: &SiteLabCatalog,
 ) -> Result<RecipeDifference, SiteLabError> {
     let first_preview = preview_recipe(first, catalog)?;
     let second_preview = preview_recipe(second, catalog)?;
     Ok(RecipeDifference {
         status: "structural_comparison_only",
         same_plan: first_preview.plan_hash == second_preview.plan_hash,
+        same_recipe: first_preview.recipe_hash == second_preview.recipe_hash,
         same_declared_sources: first.scope.tenant_id == second.scope.tenant_id
             && first.sources == second.sources,
         first: first_preview,
         second: second_preview,
-        note: "Only declared recipe structure was compared; provider data, execution and SEO outcomes were not measured.",
+        note: "Only recipes, pinned parameter bytes and declared sources were compared; provider data, execution and SEO outcomes were not measured.",
     })
 }
 

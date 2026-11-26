@@ -35,13 +35,14 @@ fn step(name: &str, operation: &str, inputs: BTreeMap<PortId, RecipeInput>) -> R
         id: OperationInstanceId::from(name),
         operation: op(operation),
         inputs,
+        parameters: RecipeParameters::default(),
         after: BTreeSet::new(),
     }
 }
 
 fn recipe() -> SiteRecipe {
     SiteRecipe {
-        schema_revision: 1,
+        schema_revision: 2,
         scope: RunScope {
             tenant_id: "lab".to_owned(),
             run_id: "hypothesis-1".to_owned(),
@@ -74,11 +75,14 @@ fn recipe() -> SiteRecipe {
     }
 }
 
-fn catalog() -> ContractCatalog {
-    semantic_extraction_registry()
-        .expect("real semantic operations are registered")
-        .catalog()
-        .clone()
+fn catalog() -> SiteLabCatalog {
+    installed_semantic_lab_catalog(
+        semantic_extraction_registry()
+            .expect("real semantic operations are registered")
+            .catalog()
+            .clone(),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -110,6 +114,15 @@ fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
             idempotency: IdempotencyPolicy::Idempotent,
         })
         .unwrap();
+    let contract = registry.catalog().contract(&op("future.search_demand")).unwrap();
+    let fingerprint = contract.fingerprint().unwrap();
+    registry
+        .register_remote(
+            &op("future.search_demand"),
+            &fingerprint,
+            json!({"type":"object", "properties":{"region":{"type":"string"}}}),
+        )
+        .unwrap();
     let catalog_after = describe_tools(&registry).unwrap();
     assert_eq!(catalog_after.len(), 6);
     assert!(catalog_after.iter().any(|tool| {
@@ -117,14 +130,19 @@ fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
     }));
 
     let external_recipe = SiteRecipe {
-        schema_revision: 1,
+        schema_revision: 2,
         scope: recipe().scope,
         sources: BTreeMap::from([(ArtifactId::from("query"), source("research.query_input"))]),
         steps: vec![step("demand", "future.search_demand", external("query"))],
     };
     let preview = preview_recipe(&external_recipe, &registry).unwrap();
+    assert_eq!(preview.status, "pending_owner_parameter_validation");
     assert_eq!(preview.execution, "not_started");
     assert_eq!(preview.source_authentication, "not_verified");
+    assert_eq!(
+        preview.steps_requiring_owner_parameter_validation,
+        vec![OperationInstanceId::from("demand")]
+    );
     assert_eq!(
         preview.steps_requiring_owner_admission,
         vec![OperationInstanceId::from("demand")]
@@ -140,6 +158,7 @@ fn independent_steps_have_one_stable_plan_hash() {
     let first_preview = preview_recipe(&first, &registry).unwrap();
     let second_preview = preview_recipe(&shuffled, &registry).unwrap();
     assert_eq!(first_preview.plan_hash, second_preview.plan_hash);
+    assert_eq!(first_preview.recipe_hash, second_preview.recipe_hash);
     assert_eq!(first_preview.ordered_steps, second_preview.ordered_steps);
     assert_eq!(first_preview.steps_requiring_owner_admission.len(), 0);
     assert_eq!(first_preview.execution, "not_started");
@@ -159,6 +178,7 @@ fn editing_a_recipe_changes_a_hypothesis_without_a_rebuild() {
     assert!(!diff.same_plan);
     assert!(diff.same_declared_sources);
     assert!(diff.note.contains("not measured"));
+    assert!(!diff.same_recipe);
 }
 
 #[test]
@@ -215,7 +235,7 @@ fn cycles_and_undeclared_sources_fail_closed() {
 fn revision_provenance_and_unregistered_operations_are_explicit() {
     let registry = catalog();
     let mut invalid_revision = recipe();
-    invalid_revision.schema_revision = 2;
+    invalid_revision.schema_revision = 3;
     assert_eq!(
         preview_recipe(&invalid_revision, &registry)
             .unwrap_err()
@@ -266,4 +286,206 @@ fn duplicate_instances_and_generated_output_collisions_fail_closed() {
         preview_recipe(&collision, &registry).unwrap_err(),
         SiteLabError::InvalidPlan(PlanError::AmbiguousArtifact(_))
     ));
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HybridSearchParameters {
+    mode: HybridSearchMode,
+    top_k: std::num::NonZeroU16,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum HybridSearchMode {
+    Dense,
+    Hybrid,
+    Sparse,
+}
+
+#[test]
+fn legacy_recipes_remain_valid_without_parameters_but_require_v2_for_parameters() {
+    let registry = catalog();
+    let current = recipe();
+    let current_hash = preview_recipe(&current, &registry).unwrap().recipe_hash;
+    let mut legacy = current;
+    legacy.schema_revision = 1;
+    let legacy_hash = preview_recipe(&legacy, &registry).unwrap().recipe_hash;
+    assert_eq!(current_hash, legacy_hash);
+
+    legacy.steps[0].parameters = json!({"unexpected": "value"}).into();
+    assert_eq!(
+        preview_recipe(&legacy, &registry).unwrap_err().problem().code,
+        "recipe_revision_unsupported"
+    );
+}
+
+#[test]
+fn installed_rust_parameters_are_typed_and_change_recipe_identity() {
+    let mut registry = catalog();
+    let operation = op("qdrant.hybrid_search");
+    registry
+        .register_contract(OperationContract {
+            reference: operation.clone(),
+            owner: OperationOwnerId::from("qdrant"),
+            inputs: BTreeMap::from([(
+                PortId::from("input"),
+                source("semantic.entity_span_input").schema,
+            )]),
+            outputs: BTreeMap::from([(
+                PortId::from("output"),
+                source("semantic.entity_span_output").schema,
+            )]),
+            invalidates: BTreeSet::new(),
+            effects: BTreeSet::from([EffectId::from("qdrant.search")]),
+            idempotency: IdempotencyPolicy::Idempotent,
+        })
+        .unwrap();
+    let fingerprint = registry
+        .catalog()
+        .contract(&operation)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    registry
+        .register_local::<HybridSearchParameters>(
+            &operation,
+            &fingerprint,
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["mode", "top_k"],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["dense", "hybrid", "sparse"]},
+                    "top_k": {"type": "integer", "minimum": 1, "maximum": 65535}
+                }
+            }),
+        )
+        .unwrap();
+    let mut first = recipe();
+    first.steps = vec![step("search", "qdrant.hybrid_search", external("mentions"))];
+    first.steps[0].parameters = json!({"mode": "hybrid", "top_k": 20}).into();
+    let first_preview = preview_recipe(&first, &registry).unwrap();
+    assert_eq!(first_preview.steps_requiring_owner_parameter_validation.len(), 0);
+    assert_eq!(first_preview.steps_requiring_owner_admission.len(), 1);
+
+    let mut second = first.clone();
+    second.steps[0].parameters = json!({"mode": "hybrid", "top_k": 40}).into();
+    let diff = diff_recipes(&first, &second, &registry).unwrap();
+    assert!(diff.same_plan);
+    assert!(!diff.same_recipe);
+    assert_ne!(diff.first.parameter_hashes, diff.second.parameter_hashes);
+
+    second.steps[0].parameters = json!({"mode": "hybrid", "top_k": "40"}).into();
+    assert_eq!(
+        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+    second.steps[0].parameters = json!({"mode": "hybrid", "top_k": 0}).into();
+    assert_eq!(
+        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+    second.steps[0].parameters = json!({"mode": "unknown", "top_k": 40}).into();
+    assert_eq!(
+        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+    second.steps[0].parameters =
+        json!({"mode": "hybrid", "top_k": 40, "api_key": "should-never-be-in-recipe"}).into();
+    assert_eq!(
+        preview_recipe(&second, &registry).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+}
+
+#[test]
+fn pure_operations_reject_extra_settings_and_untrusted_schema_replacement() {
+    let registry = catalog();
+    let mut recipe = recipe();
+    recipe.steps[0].parameters = json!({"top_k": 10}).into();
+    assert_eq!(
+        preview_recipe(&recipe, &registry).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+    let mut registry = catalog();
+    let operation = op("semantic.entity_spans");
+    let fingerprint = registry
+        .catalog()
+        .contract(&operation)
+        .unwrap()
+        .fingerprint()
+        .unwrap();
+    assert!(matches!(
+        registry.register_remote(&operation, &fingerprint, json!({"type":"object"})),
+        Err(ParameterError::Duplicate)
+    ));
+    assert!(matches!(
+        registry.register_remote(
+            &op("semantic.editorial_topics"),
+            &operation_protocol::ContractHash("0".repeat(64)),
+            json!({"type":"object"})
+        ),
+        Err(ParameterError::MismatchedContract)
+    ));
+}
+
+#[test]
+fn missing_schema_fails_closed_and_schema_changes_invalidate_recipe_identity() {
+    let operation = op("future.provider_read");
+    let contract = OperationContract {
+        reference: operation.clone(),
+        owner: OperationOwnerId::from("future_provider_owner"),
+        inputs: BTreeMap::from([(
+            PortId::from("input"),
+            source("semantic.entity_span_input").schema,
+        )]),
+        outputs: BTreeMap::from([(
+            PortId::from("output"),
+            source("semantic.entity_span_output").schema,
+        )]),
+        invalidates: BTreeSet::new(),
+        effects: BTreeSet::from([EffectId::from("provider.read")]),
+        idempotency: IdempotencyPolicy::Idempotent,
+    };
+    let mut first_catalog = catalog();
+    first_catalog.register_contract(contract.clone()).unwrap();
+    let mut first = recipe();
+    first.steps = vec![step("remote", "future.provider_read", external("mentions"))];
+    assert_eq!(
+        preview_recipe(&first, &first_catalog).unwrap_err().problem().code,
+        "operation_parameters_invalid"
+    );
+    let tool = describe_tools(&first_catalog).unwrap();
+    assert_eq!(
+        tool.iter()
+            .find(|tool| tool.operation == operation)
+            .unwrap()
+            .readiness,
+        "missing_parameter_schema"
+    );
+
+    let fingerprint = contract.fingerprint().unwrap();
+    first_catalog
+        .register_remote(
+            &operation,
+            &fingerprint,
+            json!({"type": "object", "properties": {"mode": {"type": "string"}}}),
+        )
+        .unwrap();
+    let first_preview = preview_recipe(&first, &first_catalog).unwrap();
+
+    let mut next_catalog = catalog();
+    next_catalog.register_contract(contract).unwrap();
+    next_catalog
+        .register_remote(
+            &operation,
+            &fingerprint,
+            json!({"type": "object", "properties": {"mode": {"type": "integer"}}}),
+        )
+        .unwrap();
+    let next_preview = preview_recipe(&first, &next_catalog).unwrap();
+    assert_eq!(first_preview.plan_hash, next_preview.plan_hash);
+    assert_ne!(first_preview.recipe_hash, next_preview.recipe_hash);
+    assert_ne!(first_preview.parameter_hashes, next_preview.parameter_hashes);
 }
