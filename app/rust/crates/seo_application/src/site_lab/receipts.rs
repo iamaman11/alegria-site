@@ -115,7 +115,9 @@ pub fn inspect_execution(
         .map_err(|_| InspectionError::Budget)?;
     let validated = plan.validate(catalog).map_err(InspectionError::Plan)?;
     if receipt.plan_hash != plan.hash || receipt.order.as_slice() != validated.execution_order() {
-        return Err(InspectionError::Inconsistent("plan_hash_or_execution_order"));
+        return Err(InspectionError::Inconsistent(
+            "plan_hash_or_execution_order",
+        ));
     }
 
     let nodes: BTreeMap<_, _> = plan
@@ -124,7 +126,13 @@ pub fn inspect_execution(
         .map(|node| (node.instance.clone(), node))
         .collect();
     let expected_steps: BTreeSet<_> = nodes.keys().cloned().collect();
-    if receipt.owner_results.keys().cloned().collect::<BTreeSet<_>>() != expected_steps {
+    if receipt
+        .owner_results
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != expected_steps
+    {
         return Err(InspectionError::Inconsistent("owner_result_set"));
     }
 

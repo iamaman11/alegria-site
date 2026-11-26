@@ -105,7 +105,11 @@ fn fixture_receipt(
     let mut owner_results = BTreeMap::new();
     let mut produced_evidence = BTreeMap::new();
     for instance in &order {
-        let node = plan.nodes.iter().find(|node| &node.instance == instance).unwrap();
+        let node = plan
+            .nodes
+            .iter()
+            .find(|node| &node.instance == instance)
+            .unwrap();
         let contract = registry.contract(&node.operation).unwrap();
         let key = owner_content_hash(format!("{marker}-{instance:?}").as_bytes());
         let mut outputs = BTreeMap::new();
@@ -178,8 +182,11 @@ fn mismatched_result_artifact_evidence_and_history_identity_fail_closed() {
     assert!(inspect_execution(&plan, &altered, &catalog()).is_err());
 
     let mut altered = base.clone();
-    altered.produced_evidence.get_mut(&id).unwrap().child_workflow_id =
-        "alegria-owner-operation-v1-wrong-parent".to_owned();
+    altered
+        .produced_evidence
+        .get_mut(&id)
+        .unwrap()
+        .child_workflow_id = "alegria-owner-operation-v1-wrong-parent".to_owned();
     assert!(inspect_execution(&plan, &altered, &catalog()).is_err());
 
     let mut altered = base.clone();
@@ -187,7 +194,9 @@ fn mismatched_result_artifact_evidence_and_history_identity_fail_closed() {
     assert!(inspect_execution(&plan, &altered, &catalog()).is_err());
 
     let mut altered = base.clone();
-    altered.owner_results.remove(&OperationInstanceId::from("analyze"));
+    altered
+        .owner_results
+        .remove(&OperationInstanceId::from("analyze"));
     assert!(inspect_execution(&plan, &altered, &catalog()).is_err());
 
     let mut altered = base;
@@ -201,14 +210,8 @@ fn results_compare_only_across_two_distinct_runs_with_identical_source_bytes() {
     let second_plan = plan("hypothesis-b");
     let first = fixture_receipt(&first_plan, "a", b"frozen-reviews");
     let second = fixture_receipt(&second_plan, "b", b"frozen-reviews");
-    let report = compare_executions(
-        &first_plan,
-        &first,
-        &second_plan,
-        &second,
-        &catalog(),
-    )
-    .unwrap();
+    let report =
+        compare_executions(&first_plan, &first, &second_plan, &second, &catalog()).unwrap();
     assert_eq!(report.common_output_count, 2);
     assert_eq!(report.changes.len(), 2);
     assert_eq!(report.seo_measurement, "not_performed");
