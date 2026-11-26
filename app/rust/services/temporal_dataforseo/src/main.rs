@@ -11,19 +11,17 @@ use anyhow::{ensure, Context, Result};
 use dataforseo_contracts::{
     validate_dataforseo_owner_request, validate_discovery_shape_only,
     verify_dataforseo_owner_invocation, DataForSeoGoogleOrganicSearchInputV1,
-    DataForSeoGoogleOrganicSearchOutputV1, DataForSeoGoogleOrganicSearchV1,
-    DataForSeoOrganicHitV1,
-    DataForSeoSourceStatusV1, DATAFORSEO_ACTIVITY_QUEUE_V1, DATAFORSEO_OWNER_QUEUE_V1,
-    INPUT_PORT, OUTPUT_PORT, SCHEMA_REVISION,
+    DataForSeoGoogleOrganicSearchOutputV1, DataForSeoGoogleOrganicSearchV1, DataForSeoOrganicHitV1,
+    DataForSeoSourceStatusV1, DATAFORSEO_ACTIVITY_QUEUE_V1, DATAFORSEO_OWNER_QUEUE_V1, INPUT_PORT,
+    OUTPUT_PORT, SCHEMA_REVISION,
 };
 use operation_protocol::{
-    operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2, AdmittedArtifactV1,
-    Operation, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
-    OwnerValidationResultV1, PortId, OWNER_OPERATION_CHILD_TYPE_V1,
-    OWNER_VALIDATION_CHILD_TYPE_V1,
+    operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2, AdmittedArtifactV1, Operation,
+    OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1, PortId,
+    OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
-use sqlx::{PgPool, Row};
 use serde_json::{json, Value};
+use sqlx::{PgPool, Row};
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -47,18 +45,27 @@ fn non_retryable(error: impl std::fmt::Display) -> ActivityError {
 /// retry. Invalid tenant, malformed command, missing SQL grant or governance
 /// denial are terminal; they cannot be fixed by Temporal retries.
 fn admission_probe_error(error: anyhow::Error) -> ActivityError {
-    let retryable = error.downcast_ref::<sqlx::Error>().is_some_and(|sql| match sql {
-        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
-        sqlx::Error::Database(db) => db.code().is_some_and(|code| {
-            code.starts_with("08")
-                || matches!(
-                    code.as_ref(),
-                    "40001" | "40003" | "40P01" | "55P03" | "53300" | "53400"
-                        | "57P01" | "57P02" | "57P03"
-                )
-        }),
-        _ => false,
-    });
+    let retryable = error
+        .downcast_ref::<sqlx::Error>()
+        .is_some_and(|sql| match sql {
+            sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
+            sqlx::Error::Database(db) => db.code().is_some_and(|code| {
+                code.starts_with("08")
+                    || matches!(
+                        code.as_ref(),
+                        "40001"
+                            | "40003"
+                            | "40P01"
+                            | "55P03"
+                            | "53300"
+                            | "53400"
+                            | "57P01"
+                            | "57P02"
+                            | "57P03"
+                    )
+            }),
+            _ => false,
+        });
     if retryable {
         ActivityError::application(ApplicationFailure::new(std::io::Error::other(
             error.to_string(),
@@ -178,7 +185,9 @@ fn offline_fixture_result(
         source_status: DataForSeoSourceStatusV1::StubFixtureOnly,
         provider_task_id: task_id.to_owned(),
         provider_response_hash: blake3::hash(response_bytes).to_hex().to_string(),
-        input_hash: blake3::hash(&serde_json::to_vec(input)?).to_hex().to_string(),
+        input_hash: blake3::hash(&serde_json::to_vec(input)?)
+            .to_hex()
+            .to_string(),
         provider_reported_cost_usd_micros: Some(0),
         organic_results,
     };
@@ -230,9 +239,9 @@ fn validate_stub_url(url: &Url) -> Result<()> {
 }
 
 fn stub_task_id(value: &str) -> bool {
-    value
-        .strip_prefix("stub-serp-")
-        .is_some_and(|index| !index.is_empty() && index.len() <= 8 && index.bytes().all(|b| b.is_ascii_digit()))
+    value.strip_prefix("stub-serp-").is_some_and(|index| {
+        !index.is_empty() && index.len() <= 8 && index.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 async fn capped_stub_json(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>> {
@@ -247,10 +256,7 @@ async fn capped_stub_json(mut response: reqwest::Response, cap: usize) -> Result
     Ok(bytes)
 }
 
-async fn stub_task_post(
-    url: &Url,
-    input: &DataForSeoGoogleOrganicSearchInputV1,
-) -> Result<String> {
+async fn stub_task_post(url: &Url, input: &DataForSeoGoogleOrganicSearchInputV1) -> Result<String> {
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -299,7 +305,10 @@ fn typed_stub_hits(value: &Value, depth: u32) -> Result<Vec<DataForSeoOrganicHit
                     .or_else(|| item["rank_group"].as_u64())
                     .and_then(|rank| u32::try_from(rank).ok())
                     .context("DataForSEO stub organic rank missing")?;
-                ensure!(rank > 0 && rank <= depth, "DataForSEO stub rank exceeds query depth");
+                ensure!(
+                    rank > 0 && rank <= depth,
+                    "DataForSEO stub rank exceeds query depth"
+                );
                 ensure!(seen_ranks.insert(rank), "DataForSEO stub duplicate rank");
                 let title = item["title"]
                     .as_str()
@@ -332,7 +341,10 @@ fn typed_stub_hits(value: &Value, depth: u32) -> Result<Vec<DataForSeoOrganicHit
             }
         }
     }
-    ensure!(organic.len() <= usize::try_from(depth)?, "stub results exceed depth");
+    ensure!(
+        organic.len() <= usize::try_from(depth)?,
+        "stub results exceed depth"
+    );
     Ok(organic)
 }
 
@@ -348,7 +360,11 @@ async fn stub_task_get(
         .timeout(Duration::from_secs(15))
         .build()?;
     let path = format!("v3/serp/google/organic/task_get/advanced/{task_id}");
-    let response = client.get(url.join(&path)?).send().await?.error_for_status()?;
+    let response = client
+        .get(url.join(&path)?)
+        .send()
+        .await?
+        .error_for_status()?;
     let bytes = capped_stub_json(response, 512 * 1024).await?;
     let value: Value = serde_json::from_slice(&bytes)?;
     ensure!(
@@ -371,19 +387,19 @@ fn checked_activity_identity(
 ) -> Result<(String, String)> {
     verify_dataforseo_owner_invocation(invocation)?;
     let info = ctx.info();
-    let workflow_id = info.workflow_id.context("missing DataForSEO child Workflow ID")?;
-    let run_id = info.workflow_run_id.context("missing DataForSEO server Run ID")?;
+    let workflow_id = info
+        .workflow_id
+        .context("missing DataForSEO child Workflow ID")?;
+    let run_id = info
+        .workflow_run_id
+        .context("missing DataForSEO server Run ID")?;
     ensure!(
         info.workflow_type.as_deref() == Some(OWNER_OPERATION_CHILD_TYPE_V1)
             && info.task_queue == DATAFORSEO_ACTIVITY_QUEUE_V1
             && invocation.parent.workflow_id
-                == operation_dag_parent_workflow_id_v2(
-                    &invocation.checked_dispatch.scope.run_id
-                )
+                == operation_dag_parent_workflow_id_v2(&invocation.checked_dispatch.scope.run_id)
             && workflow_id
-                == owner_child_workflow_id_v2(
-                    &invocation.checked_dispatch.execution_key
-                ),
+                == owner_child_workflow_id_v2(&invocation.checked_dispatch.execution_key),
         "DataForSEO Activity does not belong to admitted V2 owner Child"
     );
     Ok((workflow_id, run_id))
@@ -456,22 +472,23 @@ impl DataForSeoActivities {
         let cap = i64::try_from(input.max_cost_usd_micros).map_err(non_retryable)?;
         // SQL transaction claims the exact event BEFORE any effect. A crash
         // before confirm leaves 'uncertain': no automatic second attempt.
-        let state: String = sqlx::query_scalar(
-            "SELECT pipeline.begin_dataforseo_owner_v1($1,$2,$3,$4)",
-        )
-        .bind(admission)
-        .bind(&invocation.command_bytes)
-        .bind(dispatch_key)
-        .bind(cap)
-        .fetch_one(&*self.pool)
-        .await
-        .map_err(non_retryable)?;
+        let state: String =
+            sqlx::query_scalar("SELECT pipeline.begin_dataforseo_owner_v1($1,$2,$3,$4)")
+                .bind(admission)
+                .bind(&invocation.command_bytes)
+                .bind(dispatch_key)
+                .bind(cap)
+                .fetch_one(&*self.pool)
+                .await
+                .map_err(non_retryable)?;
         match state.as_str() {
             "started" => {
                 // A paid POST path does NOT exist. A real local stub POST
                 // starts only after the durable SQL pre-claim committed.
                 let endpoint = stub_endpoint().map_err(non_retryable)?;
-                let task_id = stub_task_post(&endpoint, &input).await.map_err(non_retryable)?;
+                let task_id = stub_task_post(&endpoint, &input)
+                    .await
+                    .map_err(non_retryable)?;
                 let recorded: bool = sqlx::query_scalar(
                     "SELECT pipeline.record_stub_dataforseo_task_v1($1,$2,$3,$4)",
                 )
@@ -483,22 +500,24 @@ impl DataForSeoActivities {
                 .await
                 .map_err(non_retryable)?;
                 if !recorded {
-                    return Err(non_retryable("DataForSEO stub task ID was not durably recorded"));
+                    return Err(non_retryable(
+                        "DataForSEO stub task ID was not durably recorded",
+                    ));
                 }
                 self.complete_posted_stub(&invocation, admission, &input, &task_id)
                     .await
             }
             "posted" => {
-                let task_id: Option<String> = sqlx::query_scalar(
-                    "SELECT pipeline.lookup_stub_dataforseo_task_v1($1,$2,$3)",
-                )
-                .bind(admission)
-                .bind(&invocation.command_bytes)
-                .bind(dispatch_key)
-                .fetch_one(&*self.pool)
-                .await
-                .map_err(non_retryable)?;
-                let task_id = task_id.ok_or_else(|| non_retryable("missing posted stub task ID"))?;
+                let task_id: Option<String> =
+                    sqlx::query_scalar("SELECT pipeline.lookup_stub_dataforseo_task_v1($1,$2,$3)")
+                        .bind(admission)
+                        .bind(&invocation.command_bytes)
+                        .bind(dispatch_key)
+                        .fetch_one(&*self.pool)
+                        .await
+                        .map_err(non_retryable)?;
+                let task_id =
+                    task_id.ok_or_else(|| non_retryable("missing posted stub task ID"))?;
                 self.complete_posted_stub(&invocation, admission, &input, &task_id)
                     .await
             }
@@ -540,10 +559,13 @@ impl DataForSeoActivities {
         input: &DataForSeoGoogleOrganicSearchInputV1,
         task_id: &str,
     ) -> Result<OwnerResultV1, ActivityError> {
-        let (response_bytes, hits) =
-            stub_task_get(&stub_endpoint().map_err(non_retryable)?, task_id, input.depth)
-            .await
-            .map_err(non_retryable)?;
+        let (response_bytes, hits) = stub_task_get(
+            &stub_endpoint().map_err(non_retryable)?,
+            task_id,
+            input.depth,
+        )
+        .await
+        .map_err(non_retryable)?;
         let result = offline_fixture_result(invocation, input, task_id, &response_bytes, hits)
             .map_err(non_retryable)?;
         let encoded = serde_json::to_vec(&result).map_err(non_retryable)?;
@@ -566,7 +588,9 @@ impl DataForSeoActivities {
         .await
         .map_err(non_retryable)?;
         if !confirmed {
-            return Err(non_retryable("DataForSEO stub receipt not durably confirmed"));
+            return Err(non_retryable(
+                "DataForSEO stub receipt not durably confirmed",
+            ));
         }
         Ok(result)
     }
@@ -578,16 +602,25 @@ fn database_secret_file() -> Result<String> {
     let path = Path::new(&filename);
     ensure!(path.is_absolute(), "database secret path must be absolute");
     let meta = std::fs::symlink_metadata(path)?;
-    ensure!(meta.file_type().is_file(), "database secret must not be symlink");
+    ensure!(
+        meta.file_type().is_file(),
+        "database secret must not be symlink"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        ensure!(meta.permissions().mode() & 0o077 == 0, "secret must be 0600/0400");
+        ensure!(
+            meta.permissions().mode() & 0o077 == 0,
+            "secret must be 0600/0400"
+        );
     }
     let value = std::fs::read_to_string(path)?
         .trim_end_matches(|ch| ch == '\r' || ch == '\n')
         .to_owned();
-    ensure!(!value.is_empty() && value.trim() == value, "malformed DB secret");
+    ensure!(
+        !value.is_empty() && value.trim() == value,
+        "malformed DB secret"
+    );
     Ok(value)
 }
 
@@ -655,7 +688,10 @@ async fn run_worker() -> Result<()> {
     )?;
     let endpoint = std::env::var("TEMPORAL_URL")?;
     let namespace = std::env::var("TEMPORAL_NAMESPACE")?;
-    ensure!(!endpoint.is_empty() && !namespace.is_empty(), "explicit Temporal context required");
+    ensure!(
+        !endpoint.is_empty() && !namespace.is_empty(),
+        "explicit Temporal context required"
+    );
     let client = connect_client(&endpoint, &namespace).await?;
     let mut command_options = WorkerOptions::new(DATAFORSEO_OWNER_QUEUE_V1).build();
     command_options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?;
@@ -667,8 +703,8 @@ async fn run_worker() -> Result<()> {
             pool: Arc::new(pool),
         })
         .build();
-    let mut effect = Worker::new(&runtime, client, activities)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut effect =
+        Worker::new(&runtime, client, activities).map_err(|error| anyhow::anyhow!("{error}"))?;
     tokio::try_join!(command.run(), effect.run())?;
     Ok(())
 }
@@ -694,7 +730,10 @@ async fn replay_history(path: &Path) -> Result<()> {
 async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(arg) = args.next() {
-        ensure!(arg == "--replay-history", "unknown DataForSEO owner command");
+        ensure!(
+            arg == "--replay-history",
+            "unknown DataForSEO owner command"
+        );
         let file = args.next().context("--replay-history needs JSON file")?;
         ensure!(args.next().is_none(), "unexpected replay arguments");
         replay_history(Path::new(&file)).await?;
@@ -719,7 +758,10 @@ mod tests {
             "http://user:pass@127.0.0.1:1234/",
             "http://127.0.0.1:1234/?provider=real",
         ] {
-            assert!(validate_stub_url(&Url::parse(rejected).unwrap()).is_err(), "{rejected}");
+            assert!(
+                validate_stub_url(&Url::parse(rejected).unwrap()).is_err(),
+                "{rejected}"
+            );
         }
         assert!(validate_stub_url(&Url::parse("http://127.0.0.1:1234/").unwrap()).is_ok());
     }
@@ -747,6 +789,9 @@ mod tests {
     fn no_live_paid_adapter_or_credentials_linked_in_this_owner() {
         assert_ne!(DATAFORSEO_OWNER_QUEUE_V1, INPUT_PORT);
         assert!(DATAFORSEO_ACTIVITY_QUEUE_V1.contains("dataforseo"));
-        assert_eq!(OWNER_VALIDATION_CHILD_TYPE_V1, "AlegriaOwnerValidateV1Workflow");
+        assert_eq!(
+            OWNER_VALIDATION_CHILD_TYPE_V1,
+            "AlegriaOwnerValidateV1Workflow"
+        );
     }
 }

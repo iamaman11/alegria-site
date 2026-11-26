@@ -144,7 +144,10 @@ fn serp_results_are_review_candidates_only_and_never_network_authority() {
         SerpFetchCandidateStatusV1::RejectedStaticPolicy
     );
     assert!(candidates[1].proposed_request.is_none());
-    assert_eq!(candidates[2].status, SerpFetchCandidateStatusV1::DuplicateUrl);
+    assert_eq!(
+        candidates[2].status,
+        SerpFetchCandidateStatusV1::DuplicateUrl
+    );
     assert!(candidates[2].proposed_request.is_none());
 }
 
@@ -183,7 +186,10 @@ fn stub_only_discovery_cannot_be_promoted_to_real_fetch_candidates() {
             timeout_seconds: 10,
         },
     );
-    assert!(matches!(result, Err(ResearchSourceBridgeErrorV1::InvalidDiscovery)));
+    assert!(matches!(
+        result,
+        Err(ResearchSourceBridgeErrorV1::InvalidDiscovery)
+    ));
 }
 
 #[test]
@@ -195,7 +201,10 @@ fn two_exact_snapshots_generate_only_unattested_multi_source_candidate() {
     let first_snapshot = snapshot(&first_request.source_url, first_bytes, "one");
     let second_snapshot = snapshot(&second_request.source_url, second_bytes, "two");
     let first = [finding("forum-one", "My quote had hidden costs.")];
-    let second = [finding("review-two", "We could not compare kitchen materials.")];
+    let second = [finding(
+        "review-two",
+        "We could not compare kitchen materials.",
+    )];
     let pages = [
         PublicPageEvidenceInputV1 {
             request: &first_request,
@@ -214,7 +223,10 @@ fn two_exact_snapshots_generate_only_unattested_multi_source_candidate() {
     ];
     let preview = bind_public_page_findings_v1(&scope(), &pages, vec![hypothesis()]).unwrap();
     assert_eq!(preview.status, "structural_only_unattested");
-    assert_eq!(preview.assessments[0].owner_receipt_attestation, "not_checked");
+    assert_eq!(
+        preview.assessments[0].owner_receipt_attestation,
+        "not_checked"
+    );
     assert_eq!(preview.assessments[0].source_authentication, "not_checked");
     assert_eq!(
         preview.assessments[0].status,

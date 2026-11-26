@@ -30,9 +30,9 @@ pub use parameters_json::{
     RecipeParameters, SiteLabCatalog,
 };
 pub use source_bridge::{
-    bind_public_page_findings_v1, preview_serp_fetch_candidates_v1,
-    PublicPageEvidenceInputV1, PublicPageFindingV1, ResearchSourceBridgeErrorV1,
-    SerpFetchCandidateStatusV1, SerpFetchCandidateV1, SerpFetchPolicyV1,
+    bind_public_page_findings_v1, preview_serp_fetch_candidates_v1, PublicPageEvidenceInputV1,
+    PublicPageFindingV1, ResearchSourceBridgeErrorV1, SerpFetchCandidateStatusV1,
+    SerpFetchCandidateV1, SerpFetchPolicyV1,
 };
 
 pub const SITE_RECIPE_SCHEMA_REVISION: u16 = 2;

@@ -15,8 +15,8 @@ use url::Url;
 
 use crate::{
     checked_allowed_hosts, checked_url_host, validate_static_redirect_hop_v1,
-    validate_static_web_fetch_request_v1, WebFetchPolicyError, WebFetchRequestV1,
-    MAX_REDIRECTS_V1, MAX_RESPONSE_BYTES_V1, MAX_TIMEOUT_SECONDS_V1,
+    validate_static_web_fetch_request_v1, WebFetchPolicyError, WebFetchRequestV1, MAX_REDIRECTS_V1,
+    MAX_RESPONSE_BYTES_V1, MAX_TIMEOUT_SECONDS_V1,
 };
 
 /// Independent operator policy; never deserialize this from a recipe or a
@@ -185,7 +185,8 @@ fn public_ipv6(ip: Ipv6Addr) -> bool {
     }
     if segments[0] == 0x2002 // 6to4, embeds arbitrary IPv4 destinations
         || (segments[0] == 0x2001 && segments[1] & 0xfe00 == 0) // 2001::/23
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8) // documentation
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+    // documentation
     {
         return false;
     }
@@ -229,7 +230,9 @@ pub fn prepare_runtime_web_fetch_hop_v1(
     let operator_hosts = check_operator_admission(request, operator)?;
     if redirect_number == 0 {
         if url != request.source_url {
-            return Err(RuntimeWebFetchError::Static(WebFetchPolicyError::InvalidUrl));
+            return Err(RuntimeWebFetchError::Static(
+                WebFetchPolicyError::InvalidUrl,
+            ));
         }
     } else {
         validate_static_redirect_hop_v1(request, url, redirect_number - 1)?;
@@ -335,7 +338,9 @@ pub fn drive_owner_web_fetch_v1<T: WebFetchOwnerTransportV1>(
         let (_, host) = checked_url_host(&target)?;
         if redirect_number == 0 {
             if target != request.source_url {
-                return Err(RuntimeWebFetchError::Static(WebFetchPolicyError::InvalidUrl));
+                return Err(RuntimeWebFetchError::Static(
+                    WebFetchPolicyError::InvalidUrl,
+                ));
             }
         } else {
             validate_static_redirect_hop_v1(request, &target, redirect_number - 1)?;
@@ -361,8 +366,8 @@ pub fn drive_owner_web_fetch_v1<T: WebFetchOwnerTransportV1>(
             &answers,
             selected,
         )?;
-        let remaining_bytes = max_bytes
-            .saturating_sub(aggregate_wire_bytes.max(aggregate_decoded_bytes));
+        let remaining_bytes =
+            max_bytes.saturating_sub(aggregate_wire_bytes.max(aggregate_decoded_bytes));
         let remaining_ms = deadline_ms.saturating_sub(previous_elapsed_ms);
         if remaining_bytes == 0 || remaining_ms == 0 {
             return Err(RuntimeWebFetchError::RuntimeBudgetExceeded);
@@ -450,10 +455,7 @@ mod tests {
         WebFetchRequestV1 {
             tenant_id: "tenant-a".into(),
             source_url: "https://www.example.com/review".into(),
-            allowed_hosts: BTreeSet::from([
-                "www.example.com".into(),
-                "pages.example.net".into(),
-            ]),
+            allowed_hosts: BTreeSet::from(["www.example.com".into(), "pages.example.net".into()]),
             max_response_bytes: 64 * 1024,
             max_redirects: 2,
             timeout_seconds: 10,
@@ -463,10 +465,7 @@ mod tests {
     fn operator() -> OperatorFetchPolicyV1 {
         OperatorFetchPolicyV1 {
             authorized_tenant_id: "tenant-a".into(),
-            allowed_hosts: BTreeSet::from([
-                "www.example.com".into(),
-                "pages.example.net".into(),
-            ]),
+            allowed_hosts: BTreeSet::from(["www.example.com".into(), "pages.example.net".into()]),
             max_response_bytes: 128 * 1024,
             max_redirects: 3,
             timeout_seconds: 15,
@@ -513,10 +512,16 @@ mod tests {
             "2001:0:c0a8:101::1",
             "64:ff9b::c0a8:101",
         ] {
-            assert!(!is_public_egress_ip_v1(address.parse().unwrap()), "{address}");
+            assert!(
+                !is_public_egress_ip_v1(address.parse().unwrap()),
+                "{address}"
+            );
         }
         for address in ["1.1.1.1", "8.8.8.8", "9.9.9.9", "2606:4700:4700::1111"] {
-            assert!(is_public_egress_ip_v1(address.parse().unwrap()), "{address}");
+            assert!(
+                is_public_egress_ip_v1(address.parse().unwrap()),
+                "{address}"
+            );
         }
     }
 
@@ -688,7 +693,9 @@ mod tests {
             total_elapsed_ms: 10_001,
             ..valid.clone()
         };
-        assert!(authorize_runtime_web_fetch_response_v1(&request(), &operator(), &expired).is_err());
+        assert!(
+            authorize_runtime_web_fetch_response_v1(&request(), &operator(), &expired).is_err()
+        );
         let pdf = WebFetchResponseProofV1 {
             content_type: "application/pdf".into(),
             ..valid
@@ -810,7 +817,10 @@ mod tests {
             ]
         );
         assert_eq!(result.robots_hashes_by_url.len(), 2);
-        assert_eq!(transport.resolved, vec!["www.example.com", "pages.example.net"]);
+        assert_eq!(
+            transport.resolved,
+            vec!["www.example.com", "pages.example.net"]
+        );
         assert_eq!(transport.robots.len(), 2);
         assert_eq!(transport.fetched.len(), 2);
         assert_eq!(transport.limits[0], (65_536, 10_000));
@@ -822,7 +832,10 @@ mod tests {
         let mut transport = MockOwnerTransport::new(vec![redirect_response(), final_response()]);
         transport.dns.insert(
             "pages.example.net".into(),
-            vec!["8.8.8.8".parse().unwrap(), "169.254.169.254".parse().unwrap()],
+            vec![
+                "8.8.8.8".parse().unwrap(),
+                "169.254.169.254".parse().unwrap(),
+            ],
         );
         let error = drive_owner_web_fetch_v1(&request(), &operator(), &mut transport).unwrap_err();
         assert_eq!(error, RuntimeWebFetchError::UnsafeDnsAnswer);

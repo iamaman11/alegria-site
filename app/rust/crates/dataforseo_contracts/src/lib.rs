@@ -169,8 +169,9 @@ pub fn verify_dataforseo_owner_invocation(
     {
         return Err(DataForSeoContractError::InvalidOwnerInvocation);
     }
-    let query: DataForSeoGoogleOrganicSearchInputV1 = serde_json::from_slice(&invocation.command_bytes)
-        .map_err(DataForSeoContractError::Encoding)?;
+    let query: DataForSeoGoogleOrganicSearchInputV1 =
+        serde_json::from_slice(&invocation.command_bytes)
+            .map_err(DataForSeoContractError::Encoding)?;
     validate_parameters_only(&query, &invocation.checked_dispatch.scope)?;
     Ok(query)
 }
@@ -202,8 +203,9 @@ pub fn validate_dataforseo_owner_request(
     if expected.payload != request.command_bytes {
         return Err(DataForSeoContractError::InvalidOwnerValidation);
     }
-    let query: DataForSeoGoogleOrganicSearchInputV1 = serde_json::from_slice(&request.command_bytes)
-        .map_err(DataForSeoContractError::Encoding)?;
+    let query: DataForSeoGoogleOrganicSearchInputV1 =
+        serde_json::from_slice(&request.command_bytes)
+            .map_err(DataForSeoContractError::Encoding)?;
     validate_parameters_only(&query, &request.scope)?;
     OwnerValidationResultV1::accepted(request)
         .map_err(|_| DataForSeoContractError::InvalidOwnerValidation)
@@ -334,13 +336,13 @@ pub fn validate_discovery_shape_only(
             DataForSeoSourceStatusV1::SerpDiscoveryOnly => task_id
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
-            DataForSeoSourceStatusV1::StubFixtureOnly => task_id
-                .strip_prefix("stub-serp-")
-                .is_some_and(|index| {
+            DataForSeoSourceStatusV1::StubFixtureOnly => {
+                task_id.strip_prefix("stub-serp-").is_some_and(|index| {
                     !index.is_empty()
                         && index.len() <= 8
                         && index.bytes().all(|byte| byte.is_ascii_digit())
-                }),
+                })
+            }
         })
         || result.organic_results.len() > usize::try_from(request.depth).unwrap_or(0)
         || result
@@ -402,7 +404,9 @@ mod tests {
             port.clone(),
             BoundArtifactV1 {
                 artifact_id: artifact_id.clone(),
-                source: ArtifactBinding::External { artifact: artifact_id },
+                source: ArtifactBinding::External {
+                    artifact: artifact_id,
+                },
                 artifact: AdmittedArtifactV1 {
                     schema: contract.inputs[&port].clone(),
                     scope: input.scope.clone(),
@@ -444,7 +448,10 @@ mod tests {
     #[test]
     fn owner_validate_only_decodes_exact_external_query() {
         let invocation = owner_invocation();
-        assert_eq!(verify_dataforseo_owner_invocation(&invocation).unwrap(), valid_input());
+        assert_eq!(
+            verify_dataforseo_owner_invocation(&invocation).unwrap(),
+            valid_input()
+        );
         let contract = DataForSeoGoogleOrganicSearchV1::contract();
         let request = OwnerValidationRequestV1 {
             schema_revision: 1,
@@ -459,7 +466,9 @@ mod tests {
             input_schemas: contract.inputs,
             external_inputs: BTreeMap::from([(
                 PortId(INPUT_PORT.to_owned()),
-                invocation.bound_inputs[&PortId(INPUT_PORT.to_owned())].artifact.clone(),
+                invocation.bound_inputs[&PortId(INPUT_PORT.to_owned())]
+                    .artifact
+                    .clone(),
             )]),
             produced_input_ports: BTreeSet::new(),
         };
@@ -476,12 +485,15 @@ mod tests {
         foreign.checked_dispatch.scope.tenant_id = "foreign".into();
         assert!(verify_dataforseo_owner_invocation(&foreign).is_err());
         let mut produced = owner_invocation();
-        produced.bound_inputs.get_mut(&PortId(INPUT_PORT.to_owned())).unwrap().source =
-            ArtifactBinding::Produced {
-                artifact: ArtifactId::from("fixture-query"),
-                producer: OperationInstanceId::from("model-producer"),
-                port: PortId::from("suggestion"),
-            };
+        produced
+            .bound_inputs
+            .get_mut(&PortId(INPUT_PORT.to_owned()))
+            .unwrap()
+            .source = ArtifactBinding::Produced {
+            artifact: ArtifactId::from("fixture-query"),
+            producer: OperationInstanceId::from("model-producer"),
+            port: PortId::from("suggestion"),
+        };
         assert!(verify_dataforseo_owner_invocation(&produced).is_err());
     }
 
@@ -493,7 +505,9 @@ mod tests {
             source_status: DataForSeoSourceStatusV1::StubFixtureOnly,
             provider_task_id: "stub-serp-0".into(),
             provider_response_hash: "b".repeat(64),
-            input_hash: blake3::hash(&serde_json::to_vec(&request).unwrap()).to_hex().to_string(),
+            input_hash: blake3::hash(&serde_json::to_vec(&request).unwrap())
+                .to_hex()
+                .to_string(),
             provider_reported_cost_usd_micros: Some(0),
             organic_results: vec![],
         };
@@ -510,7 +524,10 @@ mod tests {
         });
         assert!(validate_discovery_shape_only(&output, &request).is_ok());
         // The source status remains offline_fixture_only despite typed hits.
-        assert_eq!(output.source_status, DataForSeoSourceStatusV1::StubFixtureOnly);
+        assert_eq!(
+            output.source_status,
+            DataForSeoSourceStatusV1::StubFixtureOnly
+        );
     }
 
     #[test]
