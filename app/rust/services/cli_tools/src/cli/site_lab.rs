@@ -148,4 +148,25 @@ mod site_lab_cli_tests {
         assert_eq!(problem["status"], "invalid");
         assert_eq!(problem["code"], "recipe_invalid_json");
     }
+
+    #[test]
+    fn recipe_json_rejects_runtime_credentials_and_supplied_contracts() {
+        let raw = json!({
+            "schema_revision": 1,
+            "scope": { "tenant_id": "lab", "run_id": "hypothesis-1" },
+            "steps": [],
+        });
+        for (field, attempted_value) in [
+            ("task_queue", json!("untrusted-queue")),
+            ("pinned_contracts", json!([])),
+            ("provider_credentials", json!({})),
+        ] {
+            let mut forged = raw.clone();
+            forged[field] = attempted_value;
+            assert!(
+                serde_json::from_value::<SiteRecipe>(forged).is_err(),
+                "recipe unexpectedly accepted {field}"
+            );
+        }
+    }
 }

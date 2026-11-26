@@ -267,22 +267,3 @@ fn duplicate_instances_and_generated_output_collisions_fail_closed() {
         SiteLabError::InvalidPlan(PlanError::AmbiguousArtifact(_))
     ));
 }
-
-#[test]
-fn recipe_json_rejects_runtime_credentials_and_supplied_contracts() {
-    let raw = serde_json::to_value(recipe()).unwrap();
-    let mut forged = raw.as_object().unwrap().clone();
-    forged.insert(
-        "task_queue".to_owned(),
-        serde_json::json!("attacker-supplied-queue"),
-    );
-    assert!(serde_json::from_value::<SiteRecipe>(serde_json::Value::Object(forged)).is_err());
-
-    let mut forged = raw.as_object().unwrap().clone();
-    forged.insert("pinned_contracts".to_owned(), serde_json::json!([]));
-    assert!(serde_json::from_value::<SiteRecipe>(serde_json::Value::Object(forged)).is_err());
-
-    let mut forged = raw.as_object().unwrap().clone();
-    forged.insert("provider_credentials".to_owned(), serde_json::json!({}));
-    assert!(serde_json::from_value::<SiteRecipe>(serde_json::Value::Object(forged)).is_err());
-}
