@@ -178,7 +178,7 @@ jobs:
         if: steps.decide.outputs.cargo_scope == 'full'
         working-directory: app/rust
         run: |
-          cargo update --offline --workspace
+          cargo update --workspace
           git diff -- Cargo.lock
           git diff --exit-code -- Cargo.lock
 
