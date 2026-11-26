@@ -657,9 +657,11 @@ async fn main() -> Result<()> {
             let path = args
                 .next()
                 .context("--replay-owner-history requires one JSON file")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected PG owner replay arguments");
-            replay_history_for_queue(std::path::Path::new(&path), PG_OWNER_TASK_QUEUE_V1)
-                .await?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected PG owner replay arguments"
+            );
+            replay_history_for_queue(std::path::Path::new(&path), PG_OWNER_TASK_QUEUE_V1).await?;
             println!("CI_TEMPORAL_PG_OWNER_REPLAY=PASS");
             return Ok(());
         }
@@ -890,9 +892,7 @@ mod tests {
             PG_OWNER_TASK_QUEUE_V1,
         ] {
             assert!(
-                replay_history_for_queue(&nonexistent, queue)
-                    .await
-                    .is_err(),
+                replay_history_for_queue(&nonexistent, queue).await.is_err(),
                 "{queue}: replay requires actual persisted Temporal History"
             );
         }
