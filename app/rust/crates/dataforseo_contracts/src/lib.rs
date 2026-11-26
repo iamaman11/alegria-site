@@ -159,8 +159,8 @@ pub fn validate_parameters_only(
     if input.schema_revision != SCHEMA_REVISION {
         return Err(DataForSeoContractError::Revision);
     }
-    let run = uuid::Uuid::parse_str(&input.scope.run_id)
-        .map_err(|_| DataForSeoContractError::Scope)?;
+    let run =
+        uuid::Uuid::parse_str(&input.scope.run_id).map_err(|_| DataForSeoContractError::Scope)?;
     if &input.scope != expected_scope
         || input.scope.run_id != run.to_string()
         || input.scope.tenant_id.is_empty()
@@ -180,7 +180,12 @@ pub fn validate_parameters_only(
     if !(2..=8).contains(&input.language_code.len())
         || input.language_code.starts_with('-')
         || input.language_code.ends_with('-')
-        || input.language_code.bytes().filter(|byte| *byte == b'-').count() > 1
+        || input
+            .language_code
+            .bytes()
+            .filter(|byte| *byte == b'-')
+            .count()
+            > 1
         || !input
             .language_code
             .bytes()
@@ -215,11 +220,10 @@ pub fn validate_discovery_shape_only(
     result: &DataForSeoGoogleOrganicSearchOutputV1,
     request: &DataForSeoGoogleOrganicSearchInputV1,
 ) -> Result<(), DataForSeoContractError> {
-    let expected_hash = blake3::hash(
-        &serde_json::to_vec(request).map_err(DataForSeoContractError::Encoding)?,
-    )
-    .to_hex()
-    .to_string();
+    let expected_hash =
+        blake3::hash(&serde_json::to_vec(request).map_err(DataForSeoContractError::Encoding)?)
+            .to_hex()
+            .to_string();
     let canonical_hash = |hash: &str| {
         hash.len() == 64
             && hash
@@ -285,7 +289,10 @@ mod tests {
         assert_eq!(contract.reference.revision, 1);
         assert_eq!(contract.owner.as_str(), OWNER_ID);
         assert_eq!(contract.idempotency, IdempotencyPolicy::AtMostOnce);
-        assert_eq!(contract.effects, BTreeSet::from([EffectId(PAID_EFFECT_ID.into())]));
+        assert_eq!(
+            contract.effects,
+            BTreeSet::from([EffectId(PAID_EFFECT_ID.into())])
+        );
         assert_eq!(contract.inputs.len(), 1);
         assert_eq!(contract.outputs.len(), 1);
         assert_eq!(contract.inputs[&PortId(INPUT_PORT.into())].revision, 1);

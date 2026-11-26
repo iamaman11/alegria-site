@@ -141,7 +141,9 @@ fn valid_dns_host(host: &str) -> bool {
             || label.len() > 63
             || label.starts_with('-')
             || label.ends_with('-')
-            || !label.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || !label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     }) {
         return false;
     }
@@ -150,7 +152,19 @@ fn valid_dns_host(host: &str) -> bool {
     // including resolved addresses and DNS rebinding, at runtime.
     !matches!(
         labels.last().copied(),
-        Some("localhost" | "local" | "internal" | "lan" | "home" | "onion" | "test" | "invalid" | "example" | "arpa" | "corp")
+        Some(
+            "localhost"
+                | "local"
+                | "internal"
+                | "lan"
+                | "home"
+                | "onion"
+                | "test"
+                | "invalid"
+                | "example"
+                | "arpa"
+                | "corp"
+        )
     )
 }
 
@@ -271,8 +285,14 @@ mod tests {
         assert_eq!(contract.reference.revision, 1);
         assert_eq!(contract.owner.as_str(), OWNER_ID_V1);
         assert_eq!(contract.idempotency, IdempotencyPolicy::AtMostOnce);
-        assert_eq!(contract.inputs[&PortId::from(REQUEST_PORT_V1)], request_schema_v1());
-        assert_eq!(contract.outputs[&PortId::from(SNAPSHOT_PORT_V1)], snapshot_schema_v1());
+        assert_eq!(
+            contract.inputs[&PortId::from(REQUEST_PORT_V1)],
+            request_schema_v1()
+        );
+        assert_eq!(
+            contract.outputs[&PortId::from(SNAPSHOT_PORT_V1)],
+            snapshot_schema_v1()
+        );
         assert!(contract.effects.contains(&EffectId::from(EFFECT_ID_V1)));
     }
 
@@ -290,24 +310,37 @@ mod tests {
     #[test]
     fn deny_local_private_literal_userinfo_and_unsupported_urls() {
         for url in [
-            "http://www.example.com/", "ftp://www.example.com/",
-            "file:///etc/passwd", "https://127.0.0.1/", "https://[::1]/",
-            "https://192.168.1.10/", "https://169.254.169.254/latest/meta-data/",
-            "https://localhost/", "https://service.internal/", "https://printer.local/",
-            "https://name:token@www.example.com/", "https://www.example.com:8443/",
-            "https://www.example.com/#section", "https://127.1/",
-            " https://www.example.com/", "https://www.example.com/\\@elsewhere.net",
+            "http://www.example.com/",
+            "ftp://www.example.com/",
+            "file:///etc/passwd",
+            "https://127.0.0.1/",
+            "https://[::1]/",
+            "https://192.168.1.10/",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://localhost/",
+            "https://service.internal/",
+            "https://printer.local/",
+            "https://name:token@www.example.com/",
+            "https://www.example.com:8443/",
+            "https://www.example.com/#section",
+            "https://127.1/",
+            " https://www.example.com/",
+            "https://www.example.com/\\@elsewhere.net",
         ] {
             let mut candidate = request();
             candidate.source_url = url.into();
-            assert!(validate_static_web_fetch_request_v1(&candidate).is_err(), "{url}");
+            assert!(
+                validate_static_web_fetch_request_v1(&candidate).is_err(),
+                "{url}"
+            );
         }
     }
 
     #[test]
     fn exact_allowlist_rejects_wildcards_suffix_confusion_and_missing_hosts() {
         for hosts in [
-            BTreeSet::new(), BTreeSet::from(["*.example.com".into()]),
+            BTreeSet::new(),
+            BTreeSet::from(["*.example.com".into()]),
             BTreeSet::from(["example.com".into()]),
             BTreeSet::from(["www.example.com.evil.net".into()]),
             BTreeSet::from(["www.example.com:443".into()]),
@@ -322,8 +355,10 @@ mod tests {
     #[test]
     fn bounded_budgets_and_redirect_targets_fail_closed() {
         for (bytes, hops, timeout) in [
-            (0, 1, 5), (MAX_RESPONSE_BYTES_V1 + 1, 1, 5),
-            (1024, MAX_REDIRECTS_V1 + 1, 5), (1024, 1, 0),
+            (0, 1, 5),
+            (MAX_RESPONSE_BYTES_V1 + 1, 1, 5),
+            (1024, MAX_REDIRECTS_V1 + 1, 5),
+            (1024, 1, 0),
             (1024, 1, MAX_TIMEOUT_SECONDS_V1 + 1),
         ] {
             let mut candidate = request();
@@ -342,8 +377,10 @@ mod tests {
             WebFetchPolicyError::RedirectLimit
         );
         for target in [
-            "https://private.example.net/", "https://localhost/",
-            "https://[::1]/", "http://www.example.com/redirect",
+            "https://private.example.net/",
+            "https://localhost/",
+            "https://[::1]/",
+            "http://www.example.com/redirect",
             "https://www.example.com.evil.net/",
         ] {
             assert!(validate_static_redirect_hop_v1(&req, target, 0).is_err());

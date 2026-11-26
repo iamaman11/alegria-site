@@ -112,8 +112,13 @@ fn serp_snippet_and_destination_page_never_count_as_two_sources() {
         .unwrap()
         .assessments
         .remove(0);
-    assert_eq!(assessment.status, ConsumerNeedEvidenceStatusV1::InsufficientEvidence);
-    assert!(assessment.structurally_independent_observation_ids.is_empty());
+    assert_eq!(
+        assessment.status,
+        ConsumerNeedEvidenceStatusV1::InsufficientEvidence
+    );
+    assert!(assessment
+        .structurally_independent_observation_ids
+        .is_empty());
     assert_eq!(assessment.observations.len(), 2);
 }
 
@@ -135,9 +140,12 @@ fn same_publisher_or_copied_document_does_not_create_independence() {
         "one-publisher/page-b",
         b"different content, same original publisher",
     );
-    let result = preview_consumer_need_evidence(&batch(vec![first.clone(), same_publisher]))
-        .unwrap();
-    assert_eq!(result.assessments[0].status, ConsumerNeedEvidenceStatusV1::InsufficientEvidence);
+    let result =
+        preview_consumer_need_evidence(&batch(vec![first.clone(), same_publisher])).unwrap();
+    assert_eq!(
+        result.assessments[0].status,
+        ConsumerNeedEvidenceStatusV1::InsufficientEvidence
+    );
 
     let copied_bytes = observation(
         "mirror-claim",
@@ -148,7 +156,10 @@ fn same_publisher_or_copied_document_does_not_create_independence() {
         b"one source content",
     );
     let result = preview_consumer_need_evidence(&batch(vec![first, copied_bytes])).unwrap();
-    assert_eq!(result.assessments[0].status, ConsumerNeedEvidenceStatusV1::InsufficientEvidence);
+    assert_eq!(
+        result.assessments[0].status,
+        ConsumerNeedEvidenceStatusV1::InsufficientEvidence
+    );
 }
 
 #[test]
@@ -178,7 +189,10 @@ fn mirrored_documents_and_model_summaries_never_count_as_primary_sources() {
         b"summary",
     );
     let result = preview_consumer_need_evidence(&batch(vec![primary, mirrored, summary])).unwrap();
-    assert_eq!(result.assessments[0].status, ConsumerNeedEvidenceStatusV1::InsufficientEvidence);
+    assert_eq!(
+        result.assessments[0].status,
+        ConsumerNeedEvidenceStatusV1::InsufficientEvidence
+    );
     assert_eq!(result.assessments[0].observations.len(), 3);
 }
 
@@ -271,7 +285,12 @@ fn duplicate_observations_and_invalid_excerpt_hash_fail_closed() {
 #[test]
 fn missing_evidence_remains_insufficient_and_does_not_invent_observations() {
     let preview = preview_consumer_need_evidence(&batch(Vec::new())).unwrap();
-    assert_eq!(preview.assessments[0].status, ConsumerNeedEvidenceStatusV1::InsufficientEvidence);
+    assert_eq!(
+        preview.assessments[0].status,
+        ConsumerNeedEvidenceStatusV1::InsufficientEvidence
+    );
     assert!(preview.assessments[0].observations.is_empty());
-    assert!(preview.assessments[0].structurally_independent_observation_ids.is_empty());
+    assert!(preview.assessments[0]
+        .structurally_independent_observation_ids
+        .is_empty());
 }

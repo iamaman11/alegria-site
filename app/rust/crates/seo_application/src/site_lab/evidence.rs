@@ -233,7 +233,10 @@ pub fn preview_consumer_need_evidence(
                 return Err(ConsumerNeedEvidenceError::ConflictingPrimaryDocument);
             }
         }
-        by_need.entry(&observation.need_key).or_default().push(observation);
+        by_need
+            .entry(&observation.need_key)
+            .or_default()
+            .push(observation);
     }
 
     let mut hypothesis_keys = BTreeSet::new();
@@ -248,7 +251,10 @@ pub fn preview_consumer_need_evidence(
         if !hypothesis_keys.insert(&hypothesis.need_key) {
             return Err(ConsumerNeedEvidenceError::DuplicateHypothesis);
         }
-        let mut relevant = by_need.get(hypothesis.need_key.as_str()).cloned().unwrap_or_default();
+        let mut relevant = by_need
+            .get(hypothesis.need_key.as_str())
+            .cloned()
+            .unwrap_or_default();
         relevant.sort_by(|first, second| first.observation_id.cmp(&second.observation_id));
         let primary: Vec<_> = relevant
             .iter()
@@ -274,7 +280,10 @@ pub fn preview_consumer_need_evidence(
             } else {
                 ConsumerNeedEvidenceStatusV1::InsufficientEvidence
             },
-            observations: relevant.iter().map(|observation| pointer(observation)).collect(),
+            observations: relevant
+                .iter()
+                .map(|observation| pointer(observation))
+                .collect(),
             structurally_independent_observation_ids: independent_pair.unwrap_or_default(),
             source_authentication: "not_checked",
             owner_receipt_attestation: "not_checked",
