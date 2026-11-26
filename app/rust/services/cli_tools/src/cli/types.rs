@@ -63,8 +63,33 @@ struct Cli {
     command: Command,
 }
 
+/// A native, offline authoring surface. This subcommand never starts a
+/// workflow, opens a provider connection or grants owner admission.
+#[derive(Subcommand, Debug)]
+enum SiteLabCommand {
+    /// Show the trusted, installed operation catalog and declared contracts.
+    Tools,
+    /// Validate a versioned recipe without running or authenticating sources.
+    Check {
+        #[arg(long)]
+        recipe_file: String,
+    },
+    /// Compare two plans structurally; does not measure SEO outcomes.
+    Diff {
+        #[arg(long)]
+        first_file: String,
+        #[arg(long)]
+        second_file: String,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Compose and inspect site hypotheses without rebuilding the application.
+    SiteLab {
+        #[command(subcommand)]
+        action: SiteLabCommand,
+    },
     /// Retrieve the next pending typed LLM request for manual execution.
     LlmNext {
         #[arg(long)]

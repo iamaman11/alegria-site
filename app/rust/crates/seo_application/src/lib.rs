@@ -8,3 +8,4 @@ pub mod rebuild_detect;
 pub mod review_publish;
 pub mod scenario;
 pub mod seo_runtime;
+pub mod site_lab;

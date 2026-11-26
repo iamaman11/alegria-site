@@ -3,6 +3,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let code = match cli.command {
+        Command::SiteLab { action } => site_lab_command(action)?,
         Command::LlmNext { database_url } => llm_next(database_url).await?,
         Command::LlmSubmit {
             database_url,
