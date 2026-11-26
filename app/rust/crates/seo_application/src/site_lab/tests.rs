@@ -481,7 +481,10 @@ fn pure_operations_reject_extra_settings_and_untrusted_schema_replacement() {
     recipe.steps[0].parameters = json!({"top_k": 10}).into();
     let extra_problem = preview_recipe(&recipe, &registry).unwrap_err().problem();
     assert_eq!(extra_problem.code, "operation_parameters_invalid");
-    assert_eq!(extra_problem.step, Some(OperationInstanceId::from("extract")));
+    assert_eq!(
+        extra_problem.step,
+        Some(OperationInstanceId::from("extract"))
+    );
     let mut registry = catalog();
     let operation = op("semantic.entity_spans");
     let fingerprint = registry
@@ -530,7 +533,10 @@ fn missing_schema_fails_closed_and_schema_changes_invalidate_recipe_identity() {
         .unwrap_err()
         .problem();
     assert_eq!(missing_problem.code, "operation_parameter_schema_missing");
-    assert_eq!(missing_problem.step, Some(OperationInstanceId::from("remote")));
+    assert_eq!(
+        missing_problem.step,
+        Some(OperationInstanceId::from("remote"))
+    );
     let tool = describe_tools(&first_catalog).unwrap();
     assert_eq!(
         tool.iter()

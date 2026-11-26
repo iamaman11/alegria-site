@@ -160,7 +160,9 @@ impl SiteLabCatalog {
                     let normalized = serde_json::to_value(&decoded)
                         .map_err(|_| "parameter normalization failed".to_owned())?;
                     if !preserves_authored_fields(value, &normalized) {
-                        return Err("typed parameters dropped or changed authored settings".to_owned());
+                        return Err(
+                            "typed parameters dropped or changed authored settings".to_owned()
+                        );
                     }
                     serde_json::to_vec(&decoded).map_err(|_| "parameter encoding failed".to_owned())
                 })),

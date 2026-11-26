@@ -44,9 +44,8 @@ pub use owner_validation::{
 
 mod site_lab_preflight;
 pub use site_lab_preflight::{
-    preflight_unadmitted_site_lab_v2_start, SiteLabExpectedStartV1,
-    SiteLabStartPreflightError, SiteLabUnadmittedPreflightV1,
-    SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    preflight_unadmitted_site_lab_v2_start, SiteLabExpectedStartV1, SiteLabStartPreflightError,
+    SiteLabUnadmittedPreflightV1, SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
 };
 
 /// Strongly typed identities prevent accidentally exchanging a node, port,

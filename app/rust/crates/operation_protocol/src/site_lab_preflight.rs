@@ -79,7 +79,10 @@ pub fn preflight_unadmitted_site_lab_v2_start(
         || node_ids.len() != run.plan.nodes.len()
         || expected.command_hashes.keys().collect::<BTreeSet<_>>()
             != node_ids.iter().collect::<BTreeSet<_>>()
-        || expected.source_payload_hashes.keys().collect::<BTreeSet<_>>()
+        || expected
+            .source_payload_hashes
+            .keys()
+            .collect::<BTreeSet<_>>()
             != run.plan.external_artifacts.keys().collect::<BTreeSet<_>>()
         || expected
             .command_hashes

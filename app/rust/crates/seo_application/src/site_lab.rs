@@ -135,9 +135,7 @@ pub enum SiteLabError {
     TooManySteps(usize),
     #[error("operation {0:?} is not registered by an installed owner")]
     UnavailableOperation(OperationRef),
-    #[error(
-        "step {step:?} ({operation:?}) has invalid or unavailable typed parameters: {source}"
-    )]
+    #[error("step {step:?} ({operation:?}) has invalid or unavailable typed parameters: {source}")]
     StepParameters {
         step: OperationInstanceId,
         operation: OperationRef,
