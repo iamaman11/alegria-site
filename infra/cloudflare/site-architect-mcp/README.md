@@ -99,6 +99,6 @@ not exist in this PR. Do not set the release switch just to see MCP tools.
    evidence. Arbitrary groups have an additional dependency/partial-failure
    acceptance and are **not** enabled by this resource server.
 
-The existing Rust 13-tool stdio MCP catalog and 5 installed contract owners
+The existing Rust 12-tool stdio MCP catalog and 5 installed contract owners
 remain the only authoring/source-of-truth implementations. This Worker does
 not fork that catalog, create another scheduler, or claim 52 operations ready.

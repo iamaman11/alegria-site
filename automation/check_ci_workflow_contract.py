@@ -420,12 +420,30 @@ def check() -> None:
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-legacy-binaries.result == 'success'" in qdrant_runner
-    assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' in qdrant_runner
-    assert 'name: rust-e2e-v3-${{ github.sha }}' in qdrant_runner
-    assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
-    assert '--kind v3 --source-sha "$GITHUB_SHA"' in qdrant_runner
-    assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in qdrant_runner
-    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
+    # A Qdrant/Temporal runner used to fetch all seven independent artifact
+    # bundles even when one live shard uses only two. GitHub artifact download
+    # stalls then dominated the PR critical path. Every shard must continue
+    # installing the exact source-bound binaries it actually executes.
+    mandatory_shards = (
+        "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+        "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+    )
+    assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"] == mandatory_shards
+    download_gates = {
+        "qdrant-effects": 'contains(fromJSON(\'["temporal_qdrant","temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]\'), matrix.shard)',
+        "v3": 'contains(fromJSON(\'["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2","temporal_dataforseo","temporal_acquisition"]\'), matrix.shard)',
+        "dataforseo-effects": "matrix.shard == 'temporal_dataforseo'",
+        "acquisition-pure": "matrix.shard == 'temporal_acquisition'",
+        "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
+        "legacy-qdrant-parent": "matrix.shard == 'temporal_qdrant'",
+    }
+    for artifact, condition in download_gates.items():
+        assert (
+            f"- uses: actions/download-artifact@v7\n"
+            f"        if: {condition}\n"
+            f"        with:\n"
+            f"          name: rust-e2e-{artifact}-${{{{ github.sha }}}}"
+        ) in qdrant_runner, artifact
     # The separately compiled DataForSEO provider artifact is published once
     # from an already-required parallel owner. No second Cargo pass may be
     # appended to the generic parent/PG binary chain on the slowest PR path.
@@ -437,19 +455,24 @@ def check() -> None:
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' not in v3_job
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' not in v3_job
     assert 'needs.architecture-and-rust.result == \'success\'' in qdrant_runner
-    assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in qdrant_runner
-    assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert '--kind acquisition_pure --source-sha "$GITHUB_SHA"' in architecture
-    assert '--kind acquisition_pure --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in architecture
-    assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in qdrant_runner
     # Separate SQL identity boundary, separately compiled and digest-checked;
     # never smuggle grant issuance into a Temporal effect-owner binary.
     assert '--kind one_step_request_issuer --source-sha "$GITHUB_SHA"' in architecture
-    assert '--kind one_step_request_issuer --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert 'name: rust-e2e-one-step-request-issuer-${{ github.sha }}' in architecture
-    assert 'name: rust-e2e-one-step-request-issuer-${{ github.sha }}' in qdrant_runner
-    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 7
+    expected_installs = (
+        "temporal_qdrant) kinds=(qdrant_effects legacy_qdrant_parent)",
+        "temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3)",
+        "temporal_dataforseo) kinds=(v3 dataforseo_effects)",
+        "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer)",
+    )
+    for entry in expected_installs:
+        assert entry in qdrant_runner, entry
+    assert '*) echo "Unknown mandatory Temporal shard" >&2; exit 1' in qdrant_runner
+    assert 'for kind in "${kinds[@]}"; do' in qdrant_runner
+    assert '--kind "$kind" --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 2
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]

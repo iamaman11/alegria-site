@@ -194,11 +194,12 @@ fn site_architect_launch_readiness(
             "execution_order":"not_verified"
         },
         "one_step_launch_request":{
-            "tool":"site_architect_run_one",
+            "tool":"site_architect_one_step",
             "status":"blocked_authenticated_start_gateway_not_configured",
             "scope":"one_typed_recipe_step",
             "mutating_temporal_start":false,
-            "authenticated_oauth_resource_server":"not_installed_in_stdio_adapter"
+            "authenticated_oauth_resource_server":"not_installed_in_stdio_adapter",
+            "remote_run_one":"separate_oauth_protected_request_id_contract"
         },
         "launch_gates":{
             "authenticated_chatgpt_principal_and_tenant_acl":"not_proven_here",

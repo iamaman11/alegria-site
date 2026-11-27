@@ -4,13 +4,12 @@
 import {
   OAuthResourceServer,
   insufficientScope,
-  type AuthorizationServerBinding,
 } from "@cloudflare/workers-oauth-provider";
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler, getMcpAuthContext } from "agents/mcp/server";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
-import { admitOneStep, validVerifiedSubject, type AdmissionService } from "./admission.js";
+import { admitOneStep, validVerifiedSubject } from "./admission.js";
 
 const WRITE_SCOPE = "site_architect.run_one";
 
@@ -18,18 +17,10 @@ const WRITE_SCOPE = "site_architect.run_one";
 // issuer must establish its provenance from an actual human IdP session.
 type AuthProps = { userId: string };
 
-interface Env {
-  AUTH_SERVER: AuthorizationServerBinding<AuthProps>;
-  AUTH_SERVER_URL: string;
-  MCP_SERVER_URL: string;
-  ONE_STEP_ADMISSION?: AdmissionService;
-  ADMISSION_SIGNING_KEY_HEX?: string;
-}
-
 // These opt-in bindings are intentionally omitted from the default (offline,
 // non-public) config. The release gate must provision them before deployment;
-// the type assertion cannot provision an OAuth issuer or an admission service.
-const releaseEnv = env as unknown as Env;
+// generated Env is inferred from cloudflare.config.ts by `cf workers types`.
+const releaseEnv = env;
 
 function createServer() {
   const server = new McpServer({ name: "siteArchitect", version: "0.1.0" });

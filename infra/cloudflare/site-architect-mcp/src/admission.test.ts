@@ -22,7 +22,7 @@ const subject: VerifiedSubject = {
 
 test("reject malformed, nil or caller-shaped request IDs", () => {
   assert.equal(validRequestId(requestId), true);
-  for (const input of ["", "00000000-0000-0000-0000-000000000000", "foo", "/etc/passwd", 22, null]) {
+  for (const input of ["", "00000000-0000-0000-0000-000000000000", "foo", "/etc/passwd", requestId.toUpperCase(), 22, null]) {
     assert.equal(validRequestId(input), false);
   }
 });
@@ -104,6 +104,7 @@ test("transport failures, non-2xx and malformed replies never become success or 
     { fetch: async () => Response.json({ schema_revision: 1, request_id: "different", status: "request_reserved", code: "wrong" }) },
     { fetch: async () => Response.json({ schema_revision: 1, request_id: requestId, status: "request_reserved", code: "ok", provider_token: "secret" }) },
     { fetch: async () => Response.json({ schema_revision: 1, request_id: requestId, status: ["request_reserved"], code: "ok" }) },
+    { fetch: async () => new Response("x".repeat(4096), { headers: { "content-type": "application/json" } }) },
   ];
   for (const service of cases) {
     assert.equal((await admitOneStep(service, subject, requestId, signingKeyHex)).status, "start_outcome_unknown");

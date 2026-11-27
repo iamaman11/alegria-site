@@ -1,11 +1,14 @@
 // Pure admission transport boundary. Only an authenticated resource handler
 // may call this, with identity taken from verified OAuth props, never JSON.
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Native Rust verifies canonical lowercase UUID bytes before consuming a
+// single-use SQL grant. Reject alternative spellings at the public edge too.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SAFE_ID = /^[\w.:-]{1,256}$/;
 const SIGNING_KEY_HEX = /^[0-9a-f]{64}$/;
 const EXACT_SCOPE = "site_architect.run_one";
 const ATTESTATION_TTL_SECONDS = 30;
+const MAX_ADMISSION_REPLY_BYTES = 2048;
 
 export type StartReply = {
   status: "launch_blocked" | "request_reserved" | "start_outcome_unknown";
@@ -119,6 +122,26 @@ export function parseAdmissionReply(raw: unknown, requestId: string): StartReply
   return reply(requestId, row.status as StartReply["status"], row.code);
 }
 
+// A private service can fail or be misconfigured. Never buffer an unbounded
+// response in a public-facing Worker, even when Content-Length is missing.
+async function readBoundedAdmissionReply(response: Response): Promise<string | undefined> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let total = 0;
+  let body = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) return body + decoder.decode();
+    total += value.byteLength;
+    if (total > MAX_ADMISSION_REPLY_BYTES) {
+      await reader.cancel();
+      return undefined;
+    }
+    body += decoder.decode(value, { stream: true });
+  }
+}
+
 /** No temporal client, grant issuance, SQL connection or direct network URL. */
 export async function admitOneStep(
   service: AdmissionService | undefined,
@@ -157,11 +180,11 @@ export async function admitOneStep(
       body,
       signal: AbortSignal.timeout(10_000),
     }));
-    if (!response.ok || Number(response.headers.get("content-length") ?? "0") > 2048) {
+    if (!response.ok || Number(response.headers.get("content-length") ?? "0") > MAX_ADMISSION_REPLY_BYTES) {
       return reply(requestId, "start_outcome_unknown", "admission_outcome_unconfirmed");
     }
-    const text = await response.text();
-    if (text.length > 2048) return reply(requestId, "start_outcome_unknown", "unattested_admission_reply");
+    const text = await readBoundedAdmissionReply(response);
+    if (text === undefined) return reply(requestId, "start_outcome_unknown", "unattested_admission_reply");
     return parseAdmissionReply(JSON.parse(text) as unknown, requestId);
   } catch {
     return reply(requestId, "start_outcome_unknown", "admission_outcome_unconfirmed");

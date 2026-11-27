@@ -12,9 +12,11 @@ The existing `siteArchitect` **stdio MCP** is an authoring and inspection
 adapter. It has no independently authenticated ChatGPT human identity. A
 recipe's `scope.tenant_id`, a UUID locator, Unix peer UID, PostgreSQL
 `session_user`, or a model-provided `principal_id` is **not** a ChatGPT OAuth
-subject. The read-only `site_architect_run_one` diagnostic may preflight one
-recipe, but must report `authenticated_start_gateway_not_configured`, with no
-grant reservation, owner execution, or Temporal Start.
+subject. The read-only `site_architect_one_step` tool may inspect a single
+recipe, but it never reserves a grant or starts Temporal. The name
+`site_architect_run_one` is reserved exclusively for the OAuth-protected
+remote request-ID Start tool, which remains unavailable without the private
+admission service and an independently authenticated user.
 
 The native `--operator-start-granted-single-v1` route already supports a
 separately authorized, **local operator** pilot through SQL one-use grants and

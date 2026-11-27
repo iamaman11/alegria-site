@@ -1351,26 +1351,32 @@ jobs:
           name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
       - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_qdrant","temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
         with:
           name: rust-e2e-qdrant-effects-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
       - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2","temporal_dataforseo","temporal_acquisition"]'), matrix.shard)
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
       - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_dataforseo'
         with:
           name: rust-e2e-dataforseo-effects-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/dataforseo_effects
       - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_acquisition'
         with:
           name: rust-e2e-acquisition-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/acquisition_pure
       - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_acquisition'
         with:
           name: rust-e2e-one-step-request-issuer-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/one_step_request_issuer
       - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_qdrant'
         with:
           name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
@@ -1380,24 +1386,21 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind qdrant_temporal_harness --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_temporal_harness"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind qdrant_effects --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_effects"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind v3 --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind dataforseo_effects --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/dataforseo_effects"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind acquisition_pure --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/acquisition_pure"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind one_step_request_issuer --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/one_step_request_issuer"
-          python3 automation/rust_ci_artifacts.py install \
-            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
+          # A shard installs only the provider binaries it actually runs. The
+          # base harness remains mandatory and every selected bundle is still
+          # checked against its exact source SHA before any native test starts.
+          case '${{ matrix.shard }}' in
+            temporal_qdrant) kinds=(qdrant_effects legacy_qdrant_parent) ;;
+            temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3) ;;
+            temporal_dataforseo) kinds=(v3 dataforseo_effects) ;;
+            temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer) ;;
+            *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
+          esac
+          for kind in "${kinds[@]}"; do
+            python3 automation/rust_ci_artifacts.py install \
+              --kind "$kind" --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
+          done
       # Generic Temporal DAG routing is executable deployment authority.
       # Preserve the exact production /etc/alegria root-ownership fence even
       # on this disposable runner; the native test installs its typed catalog

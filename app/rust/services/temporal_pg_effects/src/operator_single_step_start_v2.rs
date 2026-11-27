@@ -7,6 +7,7 @@
 //! root, authorize owner effects or attest a completed provider result.
 
 use std::{
+    borrow::Cow,
     env,
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -217,6 +218,28 @@ struct GrantedSingleOperationStartIntentV1 {
 enum StartMode {
     PrivateOperator,
     IndependentlyGranted,
+}
+
+/// Authorization pins these bytes once. A private path must never be opened
+/// again after its request ID was compared to the signed MCP proof: even a
+/// privileged file replacement between checks must not change what starts.
+struct AuthorizedSignedIntent(Vec<u8>);
+
+enum PrivateStartSource<'a> {
+    OperatorFile(&'a Path),
+    AuthorizedSigned(&'a AuthorizedSignedIntent),
+}
+
+fn private_start_bytes<'a>(source: PrivateStartSource<'a>) -> Result<Cow<'a, [u8]>> {
+    match source {
+        PrivateStartSource::OperatorFile(path) => Ok(Cow::Owned(
+            operator_dag_governance::read_private_operator_file(
+                path,
+                "single-step V2 immutable operator intent",
+            )?,
+        )),
+        PrivateStartSource::AuthorizedSigned(intent) => Ok(Cow::Borrowed(&intent.0)),
+    }
 }
 
 struct CheckedGrantPolicy {
@@ -1331,24 +1354,34 @@ pub(super) async fn start_from_signed_granted_private_request(
     signed_path: &Path,
     private_intent_path: &Path,
 ) -> Result<()> {
-    if authorize_signed_one_step_request(signed_path, private_intent_path).is_err() {
-        println!(
-            "{}",
-            serde_json::json!({
-                "schema_revision":1,
-                "operation":"site_architect_start_signed_granted_single_v1",
-                "status":"launch_blocked",
-                "code":"signed_remote_admission_not_verified",
-                "execution":"not_started",
-                "next_action":"Check independently configured OAuth subject, short-lived signature and private intent; no Temporal Start was attempted."
-            })
-        );
-        anyhow::bail!("remote MCP signed admission refused before SQL or Temporal Start");
-    }
-    start_from_granted_private_request(private_intent_path).await
+    let authorized = match authorize_signed_one_step_request(signed_path, private_intent_path) {
+        Ok(authorized) => authorized,
+        Err(_) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "schema_revision":1,
+                    "operation":"site_architect_start_signed_granted_single_v1",
+                    "status":"launch_blocked",
+                    "code":"signed_remote_admission_not_verified",
+                    "execution":"not_started",
+                    "next_action":"Check independently configured OAuth subject, short-lived signature and private intent; no Temporal Start was attempted."
+                })
+            );
+            anyhow::bail!("remote MCP signed admission refused before SQL or Temporal Start");
+        }
+    };
+    start_private_request_from_source(
+        PrivateStartSource::AuthorizedSigned(&authorized),
+        StartMode::IndependentlyGranted,
+    )
+    .await
 }
 
-fn authorize_signed_one_step_request(signed_path: &Path, private_intent_path: &Path) -> Result<()> {
+fn authorize_signed_one_step_request(
+    signed_path: &Path,
+    private_intent_path: &Path,
+) -> Result<AuthorizedSignedIntent> {
     let issuer = env::var(SIGNED_ADMISSION_ISSUER_ENV).context("missing installed OAuth issuer")?;
     let audience =
         env::var(SIGNED_ADMISSION_RESOURCE_ENV).context("missing installed MCP resource")?;
@@ -1390,15 +1423,22 @@ fn authorize_signed_one_step_request(signed_path: &Path, private_intent_path: &P
         now,
     )
     .context("remote MCP ingress signature, identity or one-use request invalid")?;
-    Ok(())
+    Ok(AuthorizedSignedIntent(intent_bytes))
 }
 
 async fn start_private_request_in_mode(path: &Path, mode: StartMode) -> Result<()> {
+    start_private_request_from_source(PrivateStartSource::OperatorFile(path), mode).await
+}
+
+async fn start_private_request_from_source(
+    source: PrivateStartSource<'_>,
+    mode: StartMode,
+) -> Result<()> {
     let mut stage = SingleStartStage::OperatorConfiguration;
     let mut run_id = None;
     let mut parent_workflow_id = None;
     match try_start_from_private_request(
-        path,
+        source,
         mode,
         &mut stage,
         &mut run_id,
@@ -1425,7 +1465,7 @@ async fn start_private_request_in_mode(path: &Path, mode: StartMode) -> Result<(
 }
 
 async fn try_start_from_private_request(
-    path: &Path,
+    source: PrivateStartSource<'_>,
     mode: StartMode,
     stage: &mut SingleStartStage,
     run_id: &mut Option<String>,
@@ -1436,10 +1476,7 @@ async fn try_start_from_private_request(
     // Temporal endpoint, and its process identity must already be privileged.
     let config = checked_operator_config(|key| env::var(key).ok())?;
     *stage = SingleStartStage::PrivateIntent;
-    let bytes = operator_dag_governance::read_private_operator_file(
-        path,
-        "single-step V2 immutable operator intent",
-    )?;
+    let bytes = private_start_bytes(source)?;
     let catalog = operator_dag_governance::read_operator_owned_catalog(Path::new(&config.catalog))?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2258,6 +2295,52 @@ mod tests {
         );
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_file(&link).unwrap();
+        fs::remove_file(&private_file).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signed_start_keeps_exact_authorized_bytes_after_private_path_is_replaced() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = env::current_dir().unwrap().join(format!(
+            ".ci-single-v2-signed-snapshot-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let private_file = root.join("granted-intent.json");
+        let approved_bytes = b"approved immutable request A";
+        fs::write(&private_file, approved_bytes).unwrap();
+        fs::set_permissions(&private_file, fs::Permissions::from_mode(0o600)).unwrap();
+
+        // The signed authorization path returns owned, already checked
+        // bytes. A later path replacement cannot switch its request ID or
+        // run to a different granted SQL request before Temporal Start.
+        let authorized = AuthorizedSignedIntent(
+            private_start_bytes(PrivateStartSource::OperatorFile(&private_file))
+                .unwrap()
+                .into_owned(),
+        );
+        let replacement = root.join("replacement.json");
+        fs::write(&replacement, b"swapped request B").unwrap();
+        fs::set_permissions(&replacement, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::rename(&replacement, &private_file).unwrap();
+        assert_eq!(
+            private_start_bytes(PrivateStartSource::AuthorizedSigned(&authorized))
+                .unwrap()
+                .as_ref(),
+            approved_bytes
+        );
+        assert_ne!(
+            private_start_bytes(PrivateStartSource::OperatorFile(&private_file))
+                .unwrap()
+                .as_ref(),
+            approved_bytes
+        );
+
         fs::remove_file(&private_file).unwrap();
         fs::remove_dir(&root).unwrap();
     }
