@@ -746,6 +746,14 @@ async fn main() -> Result<()> {
             operator_dag_read_v2::read_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-serve-dag-read-v2") {
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected V2 read-only socket operator arguments"
+            );
+            operator_dag_read_v2::serve_socket().await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-start-single-v2") {
             let path = args
                 .next()

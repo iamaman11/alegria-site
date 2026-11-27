@@ -426,8 +426,16 @@ def check() -> None:
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in qdrant_runner
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
-    assert 'cargo build --locked -p temporal_dataforseo --bin temporal_dataforseo' in v3_job
-    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in v3_job
+    # The separately compiled DataForSEO provider artifact is published once
+    # from an already-required parallel owner. No second Cargo pass may be
+    # appended to the generic parent/PG binary chain on the slowest PR path.
+    assert 'cargo build --locked -p temporal_dataforseo --bin temporal_dataforseo' in architecture
+    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in architecture
+    assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in architecture
+    assert 'cargo build --locked -p temporal_dataforseo --bin temporal_dataforseo' not in v3_job
+    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' not in v3_job
+    assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' not in v3_job
+    assert 'needs.architecture-and-rust.result == \'success\'' in qdrant_runner
     assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in qdrant_runner
     assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 5
@@ -445,7 +453,7 @@ def check() -> None:
     assert "E2E_RUNNER_PARTITIONS" in workflow
     for name in ("graph", "qdrant", "qdrant_temporal", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
         assert f"{name}_e2e_shards" in workflow
-    assert len(E2E_ARCH_SHARDS) == 7 and len(E2E_VERIFY_SHARDS) == 9
+    assert len(E2E_ARCH_SHARDS) == 11 and len(E2E_VERIFY_SHARDS) == 9
     assert set(E2E_PG_SHARDS) == {"pg_temporal", "verify_d"}
     assert set(E2E_OUTBOX_SHARDS) == {"outbox"}
     assert set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values())) == set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)

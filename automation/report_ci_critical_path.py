@@ -19,6 +19,13 @@ import urllib.request
 
 # Every row is an existing source-attested runner and its actual predecessors.
 # No invented build/test durations and no change to the workflow's `needs`.
+NATIVE_QDRANT_COMPILERS = (
+    "architecture-and-rust",
+    "rust-e2e-qdrant-temporal-harness",
+    "rust-e2e-qdrant-effects-binaries",
+    "rust-e2e-v3-binaries",
+    "rust-e2e-legacy-binaries",
+)
 E2E_PATHS = {
     "manual-temporal": (
         "rust-temporal-legacy-e2e (temporal_manual)",
@@ -26,12 +33,19 @@ E2E_PATHS = {
     ),
     "native-qdrant": (
         "rust-qdrant-temporal-e2e (temporal_qdrant)",
-        (
-            "rust-e2e-qdrant-temporal-harness",
-            "rust-e2e-qdrant-effects-binaries",
-            "rust-e2e-v3-binaries",
-            "rust-e2e-legacy-binaries",
-        ),
+        NATIVE_QDRANT_COMPILERS,
+    ),
+    "native-mixed-v6": (
+        "rust-qdrant-temporal-e2e (temporal_mixed_v6)", NATIVE_QDRANT_COMPILERS,
+    ),
+    "native-mixed-v7": (
+        "rust-qdrant-temporal-e2e (temporal_mixed_v7)", NATIVE_QDRANT_COMPILERS,
+    ),
+    "native-mixed-v2": (
+        "rust-qdrant-temporal-e2e (temporal_mixed_v2)", NATIVE_QDRANT_COMPILERS,
+    ),
+    "native-dataforseo": (
+        "rust-qdrant-temporal-e2e (temporal_dataforseo)", NATIVE_QDRANT_COMPILERS,
     ),
     "outbox": (
         "rust-outbox-e2e (outbox)",
@@ -42,6 +56,7 @@ E2E_PATHS = {
 # Actual YAML step labels, deliberately not regex-based guesses about whether
 # Cargo ran. These are observable GitHub step durations, NOT per-rustc CPU time.
 COMPILER_STEPS = {
+    "architecture-and-rust": "Compile isolated DataForSEO Temporal owner executable",
     "rust-e2e-temporal-harness": "Compile real Temporal/full-infra owner E2E test executable",
     "rust-e2e-legacy-binaries": "Compile canonical Worker, Outbox and historical Temporal in one Cargo pass",
     "rust-e2e-qdrant-temporal-harness": "Compile distinct live Temporal/PG/Qdrant E2E test executable",
@@ -55,6 +70,10 @@ COMPILER_FINAL_STEPS = {}
 LIVE_E2E_STEPS = {
     "manual-temporal": "Execute exact selected temporal legacy real E2E shard",
     "native-qdrant": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "native-mixed-v6": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "native-mixed-v7": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "native-mixed-v2": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "native-dataforseo": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
     "outbox": "Execute nine exact A14 PostgreSQL/Worker E2E checks",
 }
 

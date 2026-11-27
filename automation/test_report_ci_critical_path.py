@@ -121,6 +121,8 @@ class CriticalPathEvidence(unittest.TestCase):
     def test_all_three_physical_runners_keep_every_compiler_and_real_step(self) -> None:
         complete = [
             *JOBS,
+            job("architecture-and-rust", "2026-11-25T14:00:24Z",
+                "2026-11-25T14:02:38Z", step=COMPILER_STEPS["architecture-and-rust"]),
             job("rust-e2e-qdrant-temporal-harness", "2026-11-25T14:00:22Z",
                 "2026-11-25T14:02:30Z", step=COMPILER_STEPS["rust-e2e-qdrant-temporal-harness"]),
             job("rust-e2e-qdrant-effects-binaries", "2026-11-25T14:00:23Z",
@@ -137,7 +139,7 @@ class CriticalPathEvidence(unittest.TestCase):
         report = analyze(RUN, complete, NOW, checkout_sha="f" * 40, expected_attempt=1)
         routes = {path["route"]: path for path in report["measured_paths"]}
         self.assertEqual(set(routes), {"manual-temporal", "native-qdrant", "outbox"})
-        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 4)
+        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 5)
         self.assertEqual(routes["native-qdrant"]["last_compiler"],
                          "rust-e2e-legacy-binaries")
         self.assertEqual(routes["outbox"]["last_compiler"], "rust-e2e-legacy-binaries")

@@ -28,36 +28,110 @@ pub(super) fn read_private_operator_file(path: &Path, purpose: &str) -> Result<V
         )),
         "{purpose} path cannot traverse untrusted relative components"
     );
-    let meta = fs::symlink_metadata(path)
-        .with_context(|| format!("stat private {purpose} {}", path.display()))?;
-    ensure!(
-        meta.file_type().is_file(),
-        "{purpose} must be regular, never symlink"
-    );
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        ensure!(
-            meta.permissions().mode() & 0o077 == 0,
-            "{purpose} file must be private (0600/0400)"
-        );
-        let file_owner = meta.uid();
-        for ancestor in path.ancestors().skip(1) {
-            let parent_meta = fs::symlink_metadata(ancestor)
-                .with_context(|| format!("stat private {purpose} parent {}", ancestor.display()))?;
+        use std::{
+            ffi::CString,
+            io::Read,
+            os::{
+                fd::{AsRawFd, FromRawFd},
+                unix::{
+                    ffi::OsStrExt,
+                    fs::{MetadataExt, PermissionsExt},
+                },
+            },
+            path::Component,
+        };
+
+        // Traversing with openat under pinned directory FDs prevents a
+        // rename/symlink race between metadata checks and file reads.
+        // Every component is independently opened with O_NOFOLLOW.
+        let root = CString::new("/")?;
+        // SAFETY: root is valid C string, opened fd transferred to File once.
+        let fd = unsafe {
+            libc::open(
+                root.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        ensure!(fd >= 0, "cannot open {purpose} filesystem root");
+        // SAFETY: open succeeded; File uniquely owns and closes fd.
+        let mut directory = unsafe { fs::File::from_raw_fd(fd) };
+        let mut parents = vec![directory.metadata()?];
+        let components: Vec<_> = path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        ensure!(!components.is_empty(), "{purpose} must be a file path");
+        let mut file = None;
+        for (index, name) in components.iter().enumerate() {
+            let final_component = index + 1 == components.len();
+            let name = CString::new(name.as_bytes())?;
+            let flags = if final_component {
+                // Non-blocking open avoids hanging on a malicious FIFO.
+                libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC
+            } else {
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC
+            };
+            // SAFETY: directory fd and C string are valid; on success fd is
+            // uniquely transferred to File, which closes it on drop.
+            let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags) };
             ensure!(
-                parent_meta.file_type().is_dir()
-                    && parent_meta.permissions().mode() & 0o022 == 0
-                    && (parent_meta.uid() == 0 || parent_meta.uid() == file_owner),
-                "{purpose} parent is symlinked, writable by group/world or unowned"
+                fd >= 0,
+                "{purpose} path contains unsafe or inaccessible components"
             );
+            // SAFETY: openat succeeded and this is the only owner of fd.
+            let opened = unsafe { fs::File::from_raw_fd(fd) };
+            let meta = opened.metadata()?;
+            if final_component {
+                ensure!(
+                    meta.file_type().is_file(),
+                    "{purpose} must be regular, never symlink"
+                );
+                ensure!(
+                    meta.permissions().mode() & 0o077 == 0,
+                    "{purpose} file must be private (0600/0400)"
+                );
+                ensure!(
+                    meta.len() <= 2 * 1024 * 1024,
+                    "{purpose} private file exceeds limit"
+                );
+                file = Some((opened, meta.uid()));
+            } else {
+                ensure!(
+                    meta.file_type().is_dir(),
+                    "{purpose} parent is not a directory"
+                );
+                parents.push(meta);
+                directory = opened;
+            }
         }
+        let (mut file, file_owner) = file.context("private file descriptor missing")?;
+        ensure!(
+            parents.iter().all(|meta| {
+                meta.file_type().is_dir()
+                    && meta.permissions().mode() & 0o022 == 0
+                    && (meta.uid() == 0 || meta.uid() == file_owner)
+            }),
+            "{purpose} parent is writable by group/world or unowned"
+        );
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take(2 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() <= 2 * 1024 * 1024,
+            "{purpose} private file grew past limit"
+        );
+        return Ok(bytes);
     }
-    ensure!(
-        meta.len() <= 2 * 1024 * 1024,
-        "{purpose} private file exceeds limit"
-    );
-    fs::read(path).with_context(|| format!("read private {purpose} {}", path.display()))
+    #[cfg(not(unix))]
+    {
+        bail!("private operator file access requires Unix no-follow directory support")
+    }
 }
 
 pub(super) fn validate_local_temporal_endpoint(value: &str) -> Result<()> {
@@ -425,5 +499,64 @@ mod tests {
                 "endpoint must fail closed: {spoof}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_operator_reader_pins_directory_inodes_and_refuses_unsafe_file_types() {
+        use std::{
+            ffi::CString,
+            os::unix::{
+                ffi::OsStrExt,
+                fs::{symlink, PermissionsExt},
+            },
+        };
+
+        let dir = env::current_dir()
+            .unwrap()
+            .join(format!(".ci-private-openat-{}", Uuid::new_v4()));
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        let nested = dir.join("owned");
+        fs::create_dir(&nested).unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+        let exact = nested.join("intent.json");
+        fs::write(&exact, b"private typed bytes").unwrap();
+        fs::set_permissions(&exact, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_private_operator_file(&exact, "test intent").unwrap(),
+            b"private typed bytes"
+        );
+
+        let symlinked_parent = dir.join("redirected");
+        symlink(&nested, &symlinked_parent).unwrap();
+        assert!(
+            read_private_operator_file(&symlinked_parent.join("intent.json"), "test intent")
+                .is_err()
+        );
+        let symlinked_file = nested.join("alias.json");
+        symlink(&exact, &symlinked_file).unwrap();
+        assert!(read_private_operator_file(&symlinked_file, "test intent").is_err());
+
+        fs::set_permissions(&exact, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read_private_operator_file(&exact, "test intent").is_err());
+        fs::set_permissions(&exact, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(read_private_operator_file(&exact, "test intent").is_err());
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+
+        fs::write(&exact, vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap();
+        assert!(read_private_operator_file(&exact, "test intent").is_err());
+        let pipe = nested.join("untrusted.pipe");
+        let pipe_name = CString::new(pipe.as_os_str().as_bytes()).unwrap();
+        // SAFETY: pipe_name is a valid NUL-terminated pathname in our test dir.
+        assert_eq!(unsafe { libc::mkfifo(pipe_name.as_ptr(), 0o600) }, 0);
+        assert!(read_private_operator_file(&pipe, "test intent").is_err());
+        fs::remove_file(&pipe).unwrap();
+        fs::remove_file(&symlinked_file).unwrap();
+        fs::remove_file(&symlinked_parent).unwrap();
+        fs::remove_file(&exact).unwrap();
+        fs::remove_dir(&nested).unwrap();
+        fs::remove_dir(&dir).unwrap();
     }
 }

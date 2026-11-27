@@ -1,7 +1,7 @@
-// Native stdio MCP adapter for stateless authoring and offline receipt
-// inspection. It uses the same trusted catalog and checks as `site-lab`;
-// no provider calls, Temporal Start, arbitrary file reads, dynamic manifest
-// loading, or independent DAG runner.
+// Native stdio MCP adapter for stateless authoring, offline receipt
+// inspection and a strictly read-only, separately credentialed native V2
+// operator status bridge. No provider calls, Temporal Start, arbitrary file
+// reads, dynamic manifest loading or second DAG runner are reachable here.
 
 const SITE_LAB_MCP_PROTOCOL: &str = "2025-11-25";
 // Two sealed plans and two V2 receipts may each reach the existing 512 KiB
@@ -13,6 +13,49 @@ const SITE_LAB_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
 const SITE_LAB_MCP_AUTHORING_MAX_BYTES: usize = 2 * SITE_LAB_RECIPE_MAX_BYTES as usize + 4096;
 const SITE_LAB_MCP_MAX_RECIPE_EDITS: usize = 128;
 const SITE_LAB_MCP_MAX_SCOPE_ID_BYTES: usize = 128;
+const SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES: u64 = 4096;
+const SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES: usize = 256;
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct McpRunStatus {
+    canonical_run_id: uuid::Uuid,
+}
+
+/// The private reader sends a redacted, bounded status—not a provider receipt.
+/// Keep a strict wire DTO: a compromised transport must not smuggle arbitrary
+/// strings or fields into the model's conversation.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpOwnerRunReport {
+    operation: String,
+    status: String,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    canonical_run_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    parent_workflow_run_id: Option<String>,
+    #[serde(default)]
+    plan_hash: Option<String>,
+    #[serde(default)]
+    parent_start_sha256: Option<String>,
+    #[serde(default)]
+    step_count: Option<usize>,
+    #[serde(default)]
+    owner_result_count: Option<usize>,
+    #[serde(default)]
+    result_blake3: Option<String>,
+    #[serde(default)]
+    governance_currently_active: Option<bool>,
+    #[serde(default)]
+    temporal_history_attestation: Option<String>,
+    #[serde(default)]
+    owner_receipt_attestation: Option<String>,
+    #[serde(default)]
+    source_authentication: Option<String>,
+    next_action: String,
+}
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -103,32 +146,41 @@ fn mcp_input_schema() -> Value {
 }
 
 fn mcp_source_schema() -> Value {
-    mcp_object_schema(json!({
-        "schema": mcp_operation_schema(),
-        "provenance":{"type":"string"}
-    }), &["schema", "provenance"])
+    mcp_object_schema(
+        json!({
+            "schema": mcp_operation_schema(),
+            "provenance":{"type":"string"}
+        }),
+        &["schema", "provenance"],
+    )
 }
 
 fn mcp_step_schema() -> Value {
-    mcp_object_schema(json!({
-        "id":{"type":"string","minLength":1},
-        "operation":mcp_operation_schema(),
-        "inputs":{"type":"object","additionalProperties":mcp_input_schema()},
-        "parameters":{"type":"object","description":"Owner-specific settings; see operation parameters.json_schema in site_lab_tools"},
-        "after":{"type":"array","uniqueItems":true,"items":{"type":"string"}}
-    }), &["id","operation","inputs"])
+    mcp_object_schema(
+        json!({
+            "id":{"type":"string","minLength":1},
+            "operation":mcp_operation_schema(),
+            "inputs":{"type":"object","additionalProperties":mcp_input_schema()},
+            "parameters":{"type":"object","description":"Owner-specific settings; see operation parameters.json_schema in site_lab_tools"},
+            "after":{"type":"array","uniqueItems":true,"items":{"type":"string"}}
+        }),
+        &["id", "operation", "inputs"],
+    )
 }
 
 fn mcp_recipe_schema() -> Value {
-    mcp_object_schema(json!({
-        "schema_revision":{"const":2},
-        "scope":mcp_object_schema(json!({
-            "tenant_id":{"type":"string","minLength":1},
-            "run_id":{"type":"string","minLength":1}
-        }), &["tenant_id","run_id"]),
-        "sources":{"type":"object","additionalProperties":mcp_source_schema()},
-        "steps":{"type":"array","items":mcp_step_schema()}
-    }), &["schema_revision","scope","steps"])
+    mcp_object_schema(
+        json!({
+            "schema_revision":{"const":2},
+            "scope":mcp_object_schema(json!({
+                "tenant_id":{"type":"string","minLength":1},
+                "run_id":{"type":"string","minLength":1}
+            }), &["tenant_id","run_id"]),
+            "sources":{"type":"object","additionalProperties":mcp_source_schema()},
+            "steps":{"type":"array","items":mcp_step_schema()}
+        }),
+        &["schema_revision", "scope", "steps"],
+    )
 }
 
 fn mcp_edit_schema() -> Value {
@@ -149,51 +201,84 @@ fn mcp_saved_execution_schema() -> Value {
     // Short introspection schema, with the exact deeply nested Rust DTO
     // enforced after deserialization. Only complete typed JSON values work;
     // there is deliberately no path, URL, provider ID or receipt loader.
-    mcp_object_schema(json!({
-        "plan":mcp_object_schema(json!({
-            "schema_revision":{"type":"integer"},
-            "scope":{"type":"object"},
-            "allowed_effects":{"type":"array"},
-            "external_artifacts":{"type":"object"},
-            "pinned_contracts":{"type":"array"},
-            "nodes":{"type":"array"},
-            "hash":{"type":"string"}
-        }), &["schema_revision","scope","allowed_effects","external_artifacts","pinned_contracts","nodes","hash"]),
-        "receipt":mcp_object_schema(json!({
-            "plan_hash":{"type":"string"},
-            "order":{"type":"array"},
-            "artifacts":{"type":"object"},
-            "produced_evidence":{"type":"object"},
-            "owner_results":{"type":"object"}
-        }), &["plan_hash","order","artifacts","produced_evidence","owner_results"])
-    }), &["plan","receipt"])
+    mcp_object_schema(
+        json!({
+            "plan":mcp_object_schema(json!({
+                "schema_revision":{"type":"integer"},
+                "scope":{"type":"object"},
+                "allowed_effects":{"type":"array"},
+                "external_artifacts":{"type":"object"},
+                "pinned_contracts":{"type":"array"},
+                "nodes":{"type":"array"},
+                "hash":{"type":"string"}
+            }), &["schema_revision","scope","allowed_effects","external_artifacts","pinned_contracts","nodes","hash"]),
+            "receipt":mcp_object_schema(json!({
+                "plan_hash":{"type":"string"},
+                "order":{"type":"array"},
+                "artifacts":{"type":"object"},
+                "produced_evidence":{"type":"object"},
+                "owner_results":{"type":"object"}
+            }), &["plan_hash","order","artifacts","produced_evidence","owner_results"])
+        }),
+        &["plan", "receipt"],
+    )
 }
 
 fn mcp_need_evidence_schema() -> Value {
     // This schema is for MCP discovery; strongly typed, deny-unknown-fields
     // Rust DTOs and strict size/hash/scope checks remain authoritative.
-    let source = mcp_object_schema(json!({
-        "source_id":{"type":"string"}, "tenant_id":{"type":"string"},
-        "source_run_id":{"type":"string"}, "retrieval_channel":{"type":"string"},
-        "representation":{"enum":["primary_document","search_snippet","derived_summary","mirrored_document"]},
-        "primary_origin_id":{"type":"string"}, "primary_document_id":{"type":"string"},
-        "provenance_locator":{"type":"string"}, "document_payload_hash":{"type":"string"}
-    }), &["source_id","tenant_id","source_run_id","retrieval_channel","representation","primary_origin_id","primary_document_id","provenance_locator","document_payload_hash"]);
-    let observation = mcp_object_schema(json!({
-        "observation_id":{"type":"string"}, "need_key":{"type":"string"},
-        "asserted_need":{"type":"string"}, "context":{"type":"string"},
-        "excerpt":{"type":"string"}, "excerpt_hash":{"type":"string"}, "source":source
-    }), &["observation_id","need_key","asserted_need","context","excerpt","excerpt_hash","source"]);
-    let hypothesis = mcp_object_schema(json!({
-        "need_key":{"type":"string"}, "proposed_site_change":{"type":"string"},
-        "expected_benefit":{"type":"string"}
-    }), &["need_key","proposed_site_change","expected_benefit"]);
-    mcp_object_schema(json!({"batch":mcp_object_schema(json!({
+    let source = mcp_object_schema(
+        json!({
+            "source_id":{"type":"string"}, "tenant_id":{"type":"string"},
+            "source_run_id":{"type":"string"}, "retrieval_channel":{"type":"string"},
+            "representation":{"enum":["primary_document","search_snippet","derived_summary","mirrored_document"]},
+            "primary_origin_id":{"type":"string"}, "primary_document_id":{"type":"string"},
+            "provenance_locator":{"type":"string"}, "document_payload_hash":{"type":"string"}
+        }),
+        &[
+            "source_id",
+            "tenant_id",
+            "source_run_id",
+            "retrieval_channel",
+            "representation",
+            "primary_origin_id",
+            "primary_document_id",
+            "provenance_locator",
+            "document_payload_hash",
+        ],
+    );
+    let observation = mcp_object_schema(
+        json!({
+            "observation_id":{"type":"string"}, "need_key":{"type":"string"},
+            "asserted_need":{"type":"string"}, "context":{"type":"string"},
+            "excerpt":{"type":"string"}, "excerpt_hash":{"type":"string"}, "source":source
+        }),
+        &[
+            "observation_id",
+            "need_key",
+            "asserted_need",
+            "context",
+            "excerpt",
+            "excerpt_hash",
+            "source",
+        ],
+    );
+    let hypothesis = mcp_object_schema(
+        json!({
+            "need_key":{"type":"string"}, "proposed_site_change":{"type":"string"},
+            "expected_benefit":{"type":"string"}
+        }),
+        &["need_key", "proposed_site_change", "expected_benefit"],
+    );
+    mcp_object_schema(
+        json!({"batch":mcp_object_schema(json!({
         "schema_revision":{"const":1},
         "scope":mcp_object_schema(json!({"tenant_id":{"type":"string"},"run_id":{"type":"string"}}), &["tenant_id","run_id"]),
         "observations":{"type":"array","maxItems":128,"items":observation},
         "hypotheses":{"type":"array","minItems":1,"maxItems":32,"items":hypothesis}
-    }), &["schema_revision","scope","observations","hypotheses"])}), &["batch"])
+    }), &["schema_revision","scope","observations","hypotheses"])}),
+        &["batch"],
+    )
 }
 
 fn mcp_site_lab_tools() -> Value {
@@ -217,6 +302,14 @@ fn mcp_site_lab_tools() -> Value {
             "name":"site_lab_one_step", "title":"Check one operation as a Temporal recipe",
             "description":"Check a recipe with exactly one step using the existing typed DAG plan validator, and show exact installed owner settings and input dependencies. Authoring preview only, NOT the native Temporal Start preflight: exact source bytes, owner ValidateOnly, admission and History remain unverified.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_run_status", "title":"Read an independently authorized Temporal operation status",
+            "description":"Inspect exactly one native V2 operation by canonical business run UUID through an independently installed read-only tenant-bound Unix operator. No caller-supplied tenant, file, socket, SQL, Temporal endpoint or provider authority. Requires a preconfigured separate Unix UID and private operator bridge. Server Temporal History is checked; provider receipt and source authentication are NOT independently attested. Never starts, retries or signals a Workflow.",
+            "inputSchema":mcp_object_schema(json!({
+                "canonical_run_id":{"type":"string","format":"uuid","minLength":36,"maxLength":36}
+            }), &["canonical_run_id"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
@@ -282,13 +375,13 @@ fn mcp_bad_arguments(_error: impl std::fmt::Display) -> Value {
 }
 
 fn mcp_site_lab_authoring_payload_too_large(payload: &impl serde::Serialize) -> bool {
-    serde_json::to_vec(payload)
-        .map_or(true, |bytes| bytes.len() > SITE_LAB_RECIPE_MAX_BYTES as usize)
+    serde_json::to_vec(payload).map_or(true, |bytes| {
+        bytes.len() > SITE_LAB_RECIPE_MAX_BYTES as usize
+    })
 }
 
 fn mcp_site_lab_authoring_envelope_too_large(payload: &impl serde::Serialize) -> bool {
-    serde_json::to_vec(payload)
-        .map_or(true, |bytes| bytes.len() > SITE_LAB_MCP_AUTHORING_MAX_BYTES)
+    serde_json::to_vec(payload).map_or(true, |bytes| bytes.len() > SITE_LAB_MCP_AUTHORING_MAX_BYTES)
 }
 
 fn mcp_site_lab_authoring_problem() -> Value {
@@ -315,21 +408,260 @@ fn mcp_edit_preview_status(preview_status: &str) -> &'static str {
     }
 }
 
-fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_lab::SiteLabCatalog) -> (Value, bool) {
+fn mcp_operator_read_unavailable() -> Value {
+    site_lab_problem(
+        "operator_read_unavailable_or_untrusted",
+        "The separately credentialed read-only Temporal operator is unavailable or rejected the request.",
+        "Ask the operator to check the private Unix bridge, tenant-scoped read role, independent governance and actual server Histories. A refused read does not prove a Workflow has not started.",
+    )
+}
+
+fn mcp_operator_read_result(
+    response: &[u8],
+    canonical_run_id: uuid::Uuid,
+) -> Option<(Value, bool)> {
+    if response.is_empty() || response.len() > SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES as usize {
+        return None;
+    }
+    let report: McpOwnerRunReport = serde_json::from_slice(response).ok()?;
+    if report.operation != "read_operation_dag_run_v2" || report.next_action.len() > 512 {
+        return None;
+    }
+    if report.status == "refused" {
+        if report.code.as_deref() != Some("run_unavailable_or_untrusted")
+            || report.canonical_run_id.is_some()
+        {
+            return None;
+        }
+        return Some((mcp_operator_read_unavailable(), true));
+    }
+    if report.code.is_some()
+        || report.canonical_run_id != Some(canonical_run_id)
+        || report.step_count != Some(1)
+        || report.owner_result_count.is_none_or(|count| count > 1)
+        || report.governance_currently_active.is_none()
+        || report.source_authentication.as_deref() != Some("not_independently_attested")
+        || report.owner_receipt_attestation.as_deref() != Some("not_independently_verified")
+    {
+        return None;
+    }
+    let workflow_run_id = report.parent_workflow_run_id.as_deref()?;
+    let parsed_workflow_run_id = uuid::Uuid::parse_str(workflow_run_id).ok()?;
+    if parsed_workflow_run_id.is_nil() || parsed_workflow_run_id.to_string() != workflow_run_id {
+        return None;
+    }
+    let is_sha = |sha: &str| {
+        sha.len() == 64
+            && sha
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    let plan_hash = report.plan_hash.as_deref()?;
+    let start_hash = report.parent_start_sha256.as_deref()?;
+    if !is_sha(plan_hash)
+        || !is_sha(start_hash)
+        || report
+            .result_blake3
+            .as_deref()
+            .is_some_and(|hash| !is_sha(hash))
+    {
+        return None;
+    }
+    let (next_action, valid_count, requires_result, expected_history_proof) = match report.status.as_str() {
+        "temporal_running" => (
+            "Wait for the same native Temporal Workflow; read this business run again after completion.",
+            0,
+            false,
+            "exact_server_parent_start_only",
+        ),
+        "temporal_completed_owner_unverified" => (
+            "Obtain independently attested owner SQL/provider receipt and source evidence before using the result as SEO evidence.",
+            1,
+            true,
+            "exact_server_parent_validation_and_effect_child_histories",
+        ),
+        "temporal_failed" | "temporal_canceled" | "temporal_timed_out"
+        | "temporal_terminated" | "temporal_continued_as_new" => (
+            "Inspect the exact native Temporal terminal History with the installed operator; never blindly retry an uncertain external effect.",
+            0,
+            false,
+            "exact_server_parent_start_and_terminal_event",
+        ),
+        _ => return None,
+    };
+    if report.owner_result_count != Some(valid_count)
+        || requires_result != report.result_blake3.is_some()
+        || report.temporal_history_attestation.as_deref() != Some(expected_history_proof)
+    {
+        return None;
+    }
+    Some((
+        json!({
+            "status": report.status,
+            "operation":"read_operation_dag_run_v2",
+            "canonical_run_id":canonical_run_id,
+            "parent_workflow_run_id":workflow_run_id,
+            "plan_hash":plan_hash,
+            "parent_start_sha256":start_hash,
+            "step_count":1,
+            "owner_result_count":valid_count,
+            "result_blake3":report.result_blake3,
+            "governance_currently_active":report.governance_currently_active,
+            "temporal_history_attestation":report.temporal_history_attestation,
+            "owner_receipt_attestation":"not_independently_verified",
+            "source_authentication":"not_independently_attested",
+            "execution_control":"read_only_no_start_or_retry",
+            "next_action":next_action,
+        }),
+        false,
+    ))
+}
+
+#[cfg(unix)]
+fn mcp_operator_socket_read(locator: &McpRunStatus) -> Option<Vec<u8>> {
+    use std::io::{Read, Write};
+    use std::os::unix::{
+        fs::{FileTypeExt, MetadataExt},
+        net::UnixStream,
+    };
+    use std::time::Duration;
+
+    // Both names belong exclusively to the installed MCP process. The model
+    // supplies only canonical_run_id. An empty or user-settable socket path in
+    // tool arguments must never be converted into privileged owner authority.
+    let configured_path = std::env::var("OPERATION_DAG_READ_V2_SOCKET_PATH").ok()?;
+    let expected_uid_text = std::env::var("OPERATION_DAG_READ_V2_OPERATOR_UID").ok()?;
+    let expected_uid = expected_uid_text.parse::<u32>().ok()?;
+    if expected_uid.to_string() != expected_uid_text
+        || configured_path.len() > 100
+        || !configured_path.starts_with('/')
+    {
+        return None;
+    }
+    let path = std::path::Path::new(&configured_path);
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return None;
+    }
+    let parent = path.parent()?;
+    let parent_info = std::fs::symlink_metadata(parent).ok()?;
+    let socket_info = std::fs::symlink_metadata(path).ok()?;
+    if !parent_info.file_type().is_dir()
+        || parent_info.uid() != expected_uid
+        || parent_info.mode() & 0o7777 != 0o2710
+        || !socket_info.file_type().is_socket()
+        || socket_info.uid() != expected_uid
+        || socket_info.gid() != parent_info.gid()
+        || socket_info.mode() & 0o777 != 0o660
+    {
+        return None;
+    }
+    // No symlink, group/world-writeable parent or attacker-replaced ancestor.
+    // The leaf directory and socket are owned by a separate, trusted Unix UID;
+    // this unprivileged MCP client cannot alter the operator's private DSN.
+    for ancestor in parent.ancestors().skip(1) {
+        let metadata = std::fs::symlink_metadata(ancestor).ok()?;
+        if !metadata.file_type().is_dir() || metadata.mode() & 0o022 != 0 {
+            return None;
+        }
+    }
+    let mut socket = UnixStream::connect(path).ok()?;
+    socket
+        .set_read_timeout(Some(Duration::from_secs(37)))
+        .ok()?;
+    socket
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .ok()?;
+    let mut request = serde_json::to_vec(locator).ok()?;
+    request.push(b'\n');
+    if request.len() > SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES {
+        return None;
+    }
+    socket.write_all(&request).ok()?;
+    socket.shutdown(std::net::Shutdown::Write).ok()?;
+    let mut result = Vec::new();
+    socket
+        .take(SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES + 1)
+        .read_to_end(&mut result)
+        .ok()?;
+    if result.len() > SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES as usize
+        || result.last() != Some(&b'\n')
+        || result[..result.len() - 1].contains(&b'\n')
+    {
+        return None;
+    }
+    result.pop();
+    Some(result)
+}
+
+fn mcp_site_lab_run_status(args: Value) -> (Value, bool) {
+    if serde_json::to_vec(&args).map_or(true, |bytes| {
+        bytes.len() > SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES
+    }) {
+        return (
+            mcp_bad_arguments("bounded UUID-only locator required"),
+            true,
+        );
+    }
+    let request: McpRunStatus = match serde_json::from_value(args.clone()) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return (
+                mcp_bad_arguments("canonical UUID-only locator required"),
+                true,
+            )
+        }
+    };
+    if request.canonical_run_id.is_nil()
+        || args.get("canonical_run_id").and_then(Value::as_str)
+            != Some(request.canonical_run_id.to_string().as_str())
+    {
+        return (mcp_bad_arguments("noncanonical business UUID"), true);
+    }
+    #[cfg(unix)]
+    if let Some(response) = mcp_operator_socket_read(&request) {
+        if let Some((result, is_error)) =
+            mcp_operator_read_result(&response, request.canonical_run_id)
+        {
+            return (result, is_error);
+        }
+    }
+    (mcp_operator_read_unavailable(), true)
+}
+
+fn mcp_site_lab_call(
+    name: &str,
+    args: Value,
+    catalog: &seo_application::site_lab::SiteLabCatalog,
+) -> (Value, bool) {
     use seo_application::site_lab::{
-        compare_executions, describe_tools, diff_recipes, inspect_execution, preview_recipe,
-        preview_consumer_need_evidence, revise_recipe, suggest_compatible_inputs, SiteRecipe,
+        compare_executions, describe_tools, diff_recipes, inspect_execution,
+        preview_consumer_need_evidence, preview_recipe, revise_recipe, suggest_compatible_inputs,
+        SiteRecipe,
     };
 
     // `tools/list` declares limits for model convenience, but the MCP caller
     // is untrusted and can bypass every JSON Schema annotation. This protects
     // the edit/diff/evidence paths without changing the larger saved-result
     // envelope or granting any path/Temporal/provider capability.
-    if matches!(name,
-        "site_lab_operation" | "site_lab_one_step" | "site_lab_new" |
-        "site_lab_edit" | "site_lab_check" | "site_lab_diff" |
-        "site_lab_connections" | "site_lab_evidence"
-    ) && mcp_site_lab_authoring_envelope_too_large(&args) {
+    if matches!(
+        name,
+        "site_lab_operation"
+            | "site_lab_one_step"
+            | "site_lab_new"
+            | "site_lab_edit"
+            | "site_lab_check"
+            | "site_lab_diff"
+            | "site_lab_connections"
+            | "site_lab_evidence"
+    ) && mcp_site_lab_authoring_envelope_too_large(&args)
+    {
         return (mcp_site_lab_authoring_problem(), true);
     }
     // RecipeChange deliberately has no Serialize implementation. Bound the
@@ -382,6 +714,7 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
+        "site_lab_run_status" => mcp_site_lab_run_status(args),
         "site_lab_new" => match serde_json::from_value::<McpNewRecipe>(args) {
             Ok(input) if mcp_site_lab_scope_id_is_valid(&input.tenant_id)
                 && mcp_site_lab_scope_id_is_valid(&input.run_id) => {
@@ -495,11 +828,18 @@ fn mcp_reply(id: Value, result: Value) -> Value {
 
 /// One JSON-RPC message in, optionally one message out. Notifications produce
 /// no response. No network/file IO is reachable through this dispatcher.
-fn mcp_site_lab_message(request: Value, catalog: &seo_application::site_lab::SiteLabCatalog) -> Option<Value> {
+fn mcp_site_lab_message(
+    request: Value,
+    catalog: &seo_application::site_lab::SiteLabCatalog,
+) -> Option<Value> {
     let id = request.get("id").cloned();
     let method = request.get("method").and_then(Value::as_str);
     if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || method.is_none() {
-        return Some(mcp_error(id.unwrap_or(Value::Null), -32600, "Invalid JSON-RPC request"));
+        return Some(mcp_error(
+            id.unwrap_or(Value::Null),
+            -32600,
+            "Invalid JSON-RPC request",
+        ));
     }
     // Clients send initialization and other notifications without an id.
     let id = id?;
@@ -537,7 +877,10 @@ fn mcp_bounded_line<R: std::io::BufRead>(input: &mut R) -> std::io::Result<Optio
         let end = available.iter().position(|byte| *byte == b'\n');
         let take = end.map_or(available.len(), |position| position + 1);
         if line.len().saturating_add(take) > SITE_LAB_MCP_MAX_MESSAGE_BYTES {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "MCP message exceeds 3 MiB boundary"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "MCP message exceeds 3 MiB boundary",
+            ));
         }
         line.extend_from_slice(&available[..take]);
         input.consume(take);
@@ -581,14 +924,19 @@ mod site_lab_mcp_tests {
 
     fn catalog() -> seo_application::site_lab::SiteLabCatalog {
         let registry = seo_application::operation_adapter::semantic_extraction_registry().unwrap();
-        seo_application::site_lab::installed_semantic_lab_catalog(registry.catalog().clone()).unwrap()
+        seo_application::site_lab::installed_semantic_lab_catalog(registry.catalog().clone())
+            .unwrap()
     }
 
     fn tool_call(name: &str, arguments: Value) -> Value {
-        mcp_site_lab_message(json!({
-            "jsonrpc":"2.0", "id":9, "method":"tools/call",
-            "params":{"name":name,"arguments":arguments}
-        }), &catalog()).unwrap()
+        mcp_site_lab_message(
+            json!({
+                "jsonrpc":"2.0", "id":9, "method":"tools/call",
+                "params":{"name":name,"arguments":arguments}
+            }),
+            &catalog(),
+        )
+        .unwrap()
     }
 
     fn forged_saved_execution() -> Value {
@@ -622,61 +970,93 @@ mod site_lab_mcp_tests {
         );
         let mut output = Vec::new();
         serve_site_lab_mcp(std::io::Cursor::new(lines), &mut output, &catalog()).unwrap();
-        let replies: Vec<Value> = output.split(|byte| *byte == b'\n').filter(|line| !line.is_empty())
-            .map(|line| serde_json::from_slice(line).unwrap()).collect();
+        let replies: Vec<Value> = output
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
         assert_eq!(replies.len(), 3);
-        assert_eq!(replies[0]["result"]["capabilities"]["tools"]["listChanged"], false);
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 11);
-        assert!(replies[1]["result"].to_string().len() < 24_576, "tools/list should fit a compact model context");
+        assert_eq!(
+            replies[0]["result"]["capabilities"]["tools"]["listChanged"],
+            false
+        );
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 12);
+        assert!(
+            replies[1]["result"].to_string().len() < 24_576,
+            "tools/list should fit a compact model context"
+        );
         for name in [
             "site_lab_operation",
             "site_lab_one_step",
+            "site_lab_run_status",
             "site_lab_connections",
             "site_lab_inspect",
             "site_lab_compare_results",
             "site_lab_evidence",
         ] {
-            assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().any(|tool| tool["name"] == name));
+            assert!(replies[1]["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == name));
         }
-        assert_eq!(replies[2]["result"]["structuredContent"]["operations"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            replies[2]["result"]["structuredContent"]["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            5
+        );
         assert_eq!(replies[2]["result"]["isError"], false);
     }
 
     #[test]
     fn mcp_connections_stays_a_non_executable_hint() {
-        let draft = tool_call("site_lab_new", json!({"tenant_id":"tenant","run_id":"draft"}));
+        let draft = tool_call(
+            "site_lab_new",
+            json!({"tenant_id":"tenant","run_id":"draft"}),
+        );
         let recipe = draft["result"]["structuredContent"]["recipe"].clone();
         let hint = tool_call("site_lab_connections", json!({"recipe":recipe}));
         assert_eq!(hint["result"]["isError"], false);
-        assert_eq!(hint["result"]["structuredContent"]["status"], "schema_candidates_only");
-        assert_eq!(hint["result"]["structuredContent"]["execution"], "not_started");
-        assert!(hint["result"]["structuredContent"]["ports"].as_array().unwrap().is_empty());
+        assert_eq!(
+            hint["result"]["structuredContent"]["status"],
+            "schema_candidates_only"
+        );
+        assert_eq!(
+            hint["result"]["structuredContent"]["execution"],
+            "not_started"
+        );
+        assert!(hint["result"]["structuredContent"]["ports"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn mcp_operation_reports_exact_installed_metadata_without_execution() {
-        let response = tool_call("site_lab_operation", json!({
-            "operation":{"id":"semantic.entity_spans","revision":1},
-            "parameters":{}
-        }));
+        let response = tool_call(
+            "site_lab_operation",
+            json!({
+                "operation":{"id":"semantic.entity_spans","revision":1},
+                "parameters":{}
+            }),
+        );
         let result = &response["result"]["structuredContent"];
         assert_eq!(response["result"]["isError"], false);
         assert_eq!(result["status"], "registered_operation_inspection_only");
-        assert_eq!(
-            result["tool"]["operation"]["id"],
-            "semantic.entity_spans"
-        );
+        assert_eq!(result["tool"]["operation"]["id"], "semantic.entity_spans");
         assert_eq!(result["execution"], "not_started");
         assert_eq!(result["provider_connectivity"], "not_checked");
-        assert_eq!(
-            result["checked_parameters"]["verification"],
-            "typed_local"
-        );
+        assert_eq!(result["checked_parameters"]["verification"], "typed_local");
 
-        let unknown = tool_call("site_lab_operation", json!({
-            "operation":{"id":"unregistered_secret-SENTINEL","revision":99},
-            "parameters":{}
-        }));
+        let unknown = tool_call(
+            "site_lab_operation",
+            json!({
+                "operation":{"id":"unregistered_secret-SENTINEL","revision":99},
+                "parameters":{}
+            }),
+        );
         assert_eq!(
             unknown["result"]["structuredContent"]["code"],
             "operation_unavailable"
@@ -713,18 +1093,120 @@ mod site_lab_mcp_tests {
         );
 
         let mut secret_settings = recipe;
-        secret_settings["steps"][0]["parameters"] = json!({"provider_token":"SENTINEL-PRIVATE-KEY"});
+        secret_settings["steps"][0]["parameters"] =
+            json!({"provider_token":"SENTINEL-PRIVATE-KEY"});
         let bad = tool_call("site_lab_one_step", json!({"recipe":secret_settings}));
         assert_eq!(bad["result"]["isError"], true);
         assert!(!bad.to_string().contains("SENTINEL-PRIVATE-KEY"));
     }
 
+    fn safe_owner_report(canonical_run_id: uuid::Uuid) -> Value {
+        json!({
+            "operation":"read_operation_dag_run_v2",
+            "status":"temporal_completed_owner_unverified",
+            "canonical_run_id":canonical_run_id,
+            "parent_workflow_run_id":"134ad0e9-4673-4d94-9ff7-0d2f999ad8c9",
+            "plan_hash":"a".repeat(64),
+            "parent_start_sha256":"b".repeat(64),
+            "step_count":1,
+            "owner_result_count":1,
+            "result_blake3":"c".repeat(64),
+            "governance_currently_active":true,
+            "temporal_history_attestation":"exact_server_parent_validation_and_effect_child_histories",
+            "owner_receipt_attestation":"not_independently_verified",
+            "source_authentication":"not_independently_attested",
+            "next_action":"Ask separately credentialed operator for provider attestations."
+        })
+    }
+
+    #[test]
+    fn mcp_read_status_requires_canonical_business_uuid_and_never_accepts_paths() {
+        for invalid in [
+            json!({"canonical_run_id":"not-a-uuid"}),
+            json!({"canonical_run_id":"00000000-0000-0000-0000-000000000000"}),
+            json!({"canonical_run_id":"134AD0E9-4673-4D94-9FF7-0D2F999AD8C9"}),
+            json!({"canonical_run_id":"134ad0e9-4673-4d94-9ff7-0d2f999ad8c9","socket_path":"/private/SENTINEL"}),
+            json!({"canonical_run_id":"134ad0e9-4673-4d94-9ff7-0d2f999ad8c9","tenant_id":"other"}),
+            json!({"run_id":"134ad0e9-4673-4d94-9ff7-0d2f999ad8c9"}),
+        ] {
+            let report = tool_call("site_lab_run_status", invalid);
+            assert_eq!(report["result"]["isError"], true);
+            assert_eq!(
+                report["result"]["structuredContent"]["code"],
+                "invalid_tool_arguments"
+            );
+            assert!(!report.to_string().contains("/private/SENTINEL"));
+        }
+    }
+
+    #[test]
+    fn mcp_read_status_only_accepts_verified_one_step_history_summary() {
+        let run_id = uuid::Uuid::parse_str("c37c2193-e0ed-4d79-96c7-c097a64f81e5").unwrap();
+        let good = serde_json::to_vec(&safe_owner_report(run_id)).unwrap();
+        let (status, is_error) = mcp_operator_read_result(&good, run_id).unwrap();
+        assert!(!is_error);
+        assert_eq!(status["status"], "temporal_completed_owner_unverified");
+        assert_eq!(status["owner_result_count"], 1);
+        assert_eq!(status["execution_control"], "read_only_no_start_or_retry");
+        assert_eq!(
+            status["owner_receipt_attestation"],
+            "not_independently_verified"
+        );
+        assert_eq!(
+            status["source_authentication"],
+            "not_independently_attested"
+        );
+
+        let mut report = safe_owner_report(run_id);
+        report["code"] = json!("success");
+        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        report = safe_owner_report(run_id);
+        report["status"] = json!("provider_receipt_attested");
+        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        report = safe_owner_report(run_id);
+        report["source_authentication"] = json!("authenticated");
+        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        report = safe_owner_report(run_id);
+        report["canonical_run_id"] = json!("92f02cf7-a725-4209-8247-24295cc1e303");
+        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        report = safe_owner_report(run_id);
+        report["untrusted_secret"] = json!("SENTINEL-PRIVATE-API-KEY");
+        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+    }
+
+    #[test]
+    fn mcp_read_status_collapses_refused_missing_and_foreign_tenant() {
+        let run_id = uuid::Uuid::new_v4();
+        let refused = json!({
+            "operation":"read_operation_dag_run_v2",
+            "status":"refused",
+            "code":"run_unavailable_or_untrusted",
+            "next_action":"Unknown private SQL/Temporal diagnostic"
+        });
+        let (status, is_error) =
+            mcp_operator_read_result(&serde_json::to_vec(&refused).unwrap(), run_id).unwrap();
+        assert!(is_error);
+        assert_eq!(status["code"], "operator_read_unavailable_or_untrusted");
+        assert!(!status.to_string().contains("Unknown private SQL"));
+
+        let (result, failure) = mcp_site_lab_run_status(json!({
+            "canonical_run_id":run_id,
+        }));
+        assert!(failure);
+        assert_eq!(result["code"], "operator_read_unavailable_or_untrusted");
+        assert!(!result.to_string().contains(&run_id.to_string()));
+        assert!(!result.to_string().contains("tenant_id"));
+    }
+
     #[test]
     fn mcp_individual_operation_limits_authored_parameters_to_256_kib() {
-        let too_large = tool_call("site_lab_operation", json!({
-            "operation":{"id":"semantic.entity_spans","revision":1},
-            "parameters":{"untrusted_value":"x".repeat(256 * 1024)}
-        }));
+        let too_large = tool_call(
+            "site_lab_operation",
+            json!({
+                "operation":{"id":"semantic.entity_spans","revision":1},
+                "parameters":{"untrusted_value":"x".repeat(256 * 1024)}
+            }),
+        );
         assert_eq!(too_large["result"]["isError"], true);
         assert_eq!(
             too_large["result"]["structuredContent"]["code"],
@@ -737,17 +1219,25 @@ mod site_lab_mcp_tests {
     fn mcp_all_authoring_paths_enforce_bounded_inputs_before_processing() {
         let huge = "SENTINEL-PRIVATE-JSON".repeat(28 * 1024);
         for (name, arguments) in [
-            ("site_lab_new", json!({"tenant_id":"lab","run_id":huge.clone()})),
+            (
+                "site_lab_new",
+                json!({"tenant_id":"lab","run_id":huge.clone()}),
+            ),
             ("site_lab_check", json!({"recipe":{"extra":huge.clone()}})),
-            ("site_lab_diff", json!({"first":{"extra":huge.clone()},"second":{}})),
-            ("site_lab_connections", json!({"recipe":{"extra":huge.clone()}})),
+            (
+                "site_lab_diff",
+                json!({"first":{"extra":huge.clone()},"second":{}}),
+            ),
+            (
+                "site_lab_connections",
+                json!({"recipe":{"extra":huge.clone()}}),
+            ),
             ("site_lab_evidence", json!({"batch":{"extra":huge}})),
         ] {
             let response = tool_call(name, arguments);
             assert_eq!(response["result"]["isError"], true, "{name}");
             assert_eq!(
-                response["result"]["structuredContent"]["code"],
-                "authoring_payload_too_large",
+                response["result"]["structuredContent"]["code"], "authoring_payload_too_large",
                 "{name}"
             );
             assert!(!response.to_string().contains("SENTINEL-PRIVATE-JSON"));
@@ -761,15 +1251,27 @@ mod site_lab_mcp_tests {
         let changes: Vec<Value> = (0..129)
             .map(|_| json!({"action":"remove_step","step":"absent"}))
             .collect();
-        let oversized = tool_call("site_lab_edit", json!({"recipe":recipe.clone(),"changes":changes}));
+        let oversized = tool_call(
+            "site_lab_edit",
+            json!({"recipe":recipe.clone(),"changes":changes}),
+        );
         assert_eq!(oversized["result"]["isError"], true);
-        assert_eq!(oversized["result"]["structuredContent"]["code"], "authoring_payload_too_large");
+        assert_eq!(
+            oversized["result"]["structuredContent"]["code"],
+            "authoring_payload_too_large"
+        );
 
         let sensitive = "SENTINEL-PRIVATE-STEP-VALUE";
-        let failed = tool_call("site_lab_edit", json!({"recipe":recipe,"changes":[
-            {"action":"remove_step","step":sensitive}
-        ]}));
-        assert_eq!(failed["result"]["structuredContent"]["code"], "recipe_edit_rejected");
+        let failed = tool_call(
+            "site_lab_edit",
+            json!({"recipe":recipe,"changes":[
+                {"action":"remove_step","step":sensitive}
+            ]}),
+        );
+        assert_eq!(
+            failed["result"]["structuredContent"]["code"],
+            "recipe_edit_rejected"
+        );
         assert!(!failed.to_string().contains(sensitive));
     }
 
@@ -788,7 +1290,10 @@ mod site_lab_mcp_tests {
         ] {
             let response = tool_call(name, arguments);
             assert_eq!(response["result"]["isError"], true);
-            assert_eq!(response["result"]["structuredContent"]["code"], "operation_unavailable");
+            assert_eq!(
+                response["result"]["structuredContent"]["code"],
+                "operation_unavailable"
+            );
             assert!(!response.to_string().contains(sensitive));
         }
     }
@@ -796,9 +1301,15 @@ mod site_lab_mcp_tests {
     #[test]
     fn mcp_scope_identifiers_are_bounded_and_do_not_echo_invalid_inputs() {
         let sensitive = "SENTINEL-PRIVATE-SCOPE".repeat(12);
-        let invalid = tool_call("site_lab_new", json!({"tenant_id":sensitive,"run_id":"draft"}));
+        let invalid = tool_call(
+            "site_lab_new",
+            json!({"tenant_id":sensitive,"run_id":"draft"}),
+        );
         assert_eq!(invalid["result"]["isError"], true);
-        assert_eq!(invalid["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+        assert_eq!(
+            invalid["result"]["structuredContent"]["code"],
+            "invalid_tool_arguments"
+        );
         assert!(!invalid.to_string().contains("SENTINEL-PRIVATE-SCOPE"));
     }
 
@@ -831,20 +1342,37 @@ mod site_lab_mcp_tests {
         });
         let preview = tool_call("site_lab_evidence", json!({"batch":batch}));
         assert_eq!(preview["result"]["isError"], false);
-        assert_eq!(preview["result"]["structuredContent"]["status"], "structural_only_unattested");
-        assert_eq!(preview["result"]["structuredContent"]["assessments"][0]["status"], "insufficient_evidence");
-        assert_eq!(preview["result"]["structuredContent"]["assessments"][0]["source_authentication"], "not_checked");
-        assert!(!preview.to_string().contains("synthetic evidence for page-a"));
+        assert_eq!(
+            preview["result"]["structuredContent"]["status"],
+            "structural_only_unattested"
+        );
+        assert_eq!(
+            preview["result"]["structuredContent"]["assessments"][0]["status"],
+            "insufficient_evidence"
+        );
+        assert_eq!(
+            preview["result"]["structuredContent"]["assessments"][0]["source_authentication"],
+            "not_checked"
+        );
+        assert!(!preview
+            .to_string()
+            .contains("synthetic evidence for page-a"));
     }
 
     #[test]
     fn mcp_edit_never_marks_pending_remote_owner_validation_as_validated() {
-        assert_eq!(mcp_edit_preview_status("valid_preview_only"), "draft_validated");
+        assert_eq!(
+            mcp_edit_preview_status("valid_preview_only"),
+            "draft_validated"
+        );
         assert_eq!(
             mcp_edit_preview_status("pending_owner_parameter_validation"),
             "draft_pending_owner_parameter_validation"
         );
-        assert_eq!(mcp_edit_preview_status("unknown_future_owner_state"), "draft_unverified");
+        assert_eq!(
+            mcp_edit_preview_status("unknown_future_owner_state"),
+            "draft_unverified"
+        );
     }
 
     #[test]
@@ -852,19 +1380,36 @@ mod site_lab_mcp_tests {
         let saved = forged_saved_execution();
         let inspected = tool_call("site_lab_inspect", saved.clone());
         assert_eq!(inspected["result"]["isError"], true);
-        assert_eq!(inspected["result"]["structuredContent"]["code"], "saved_plan_invalid");
+        assert_eq!(
+            inspected["result"]["structuredContent"]["code"],
+            "saved_plan_invalid"
+        );
 
-        let compared = tool_call("site_lab_compare_results", json!({"first":saved,"second":forged_saved_execution()}));
+        let compared = tool_call(
+            "site_lab_compare_results",
+            json!({"first":saved,"second":forged_saved_execution()}),
+        );
         assert_eq!(compared["result"]["isError"], true);
-        assert_eq!(compared["result"]["structuredContent"]["code"], "saved_plan_invalid");
-        assert!(!compared.to_string().contains("same_source_bytes_structural_result_comparison"));
+        assert_eq!(
+            compared["result"]["structuredContent"]["code"],
+            "saved_plan_invalid"
+        );
+        assert!(!compared
+            .to_string()
+            .contains("same_source_bytes_structural_result_comparison"));
     }
 
     #[test]
     fn mcp_receipt_arguments_reject_paths_unknown_fields_and_secret_reflection() {
         for name in ["site_lab_inspect", "site_lab_compare_results"] {
-            let path = tool_call(name, json!({"plan_file":"/etc/shadow","receipt_file":"/private/input"}));
-            assert_eq!(path["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+            let path = tool_call(
+                name,
+                json!({"plan_file":"/etc/shadow","receipt_file":"/private/input"}),
+            );
+            assert_eq!(
+                path["result"]["structuredContent"]["code"],
+                "invalid_tool_arguments"
+            );
             assert!(!path.to_string().contains("/etc/shadow"));
 
             let mut forged = forged_saved_execution();
@@ -872,38 +1417,63 @@ mod site_lab_mcp_tests {
             let invalid = if name == "site_lab_inspect" {
                 tool_call(name, forged)
             } else {
-                tool_call(name, json!({"first":forged,"second":forged_saved_execution()}))
+                tool_call(
+                    name,
+                    json!({"first":forged,"second":forged_saved_execution()}),
+                )
             };
             assert_eq!(invalid["result"]["isError"], true);
-            assert_eq!(invalid["result"]["structuredContent"]["code"], "invalid_tool_arguments");
-            assert!(!invalid.to_string().contains("SENTINEL-CREDENTIAL-DO-NOT-LOG"));
+            assert_eq!(
+                invalid["result"]["structuredContent"]["code"],
+                "invalid_tool_arguments"
+            );
+            assert!(!invalid
+                .to_string()
+                .contains("SENTINEL-CREDENTIAL-DO-NOT-LOG"));
         }
     }
 
     #[test]
     fn mcp_edit_returns_draft_and_real_validation_errors() {
-        let new = mcp_site_lab_message(json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
-            "name":"site_lab_new","arguments":{"tenant_id":"lab","run_id":"test"}}}), &catalog()).unwrap();
+        let new = mcp_site_lab_message(
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{
+            "name":"site_lab_new","arguments":{"tenant_id":"lab","run_id":"test"}}}),
+            &catalog(),
+        )
+        .unwrap();
         let recipe = new["result"]["structuredContent"]["recipe"].clone();
         assert_eq!(recipe["steps"].as_array().unwrap().len(), 0);
         let edit = mcp_site_lab_message(json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{
             "name":"site_lab_edit","arguments":{"recipe":recipe,"changes":[
                 {"action":"add_step","step":{"id":"extract","operation":{"id":"semantic.entity_spans","revision":1},"inputs":{}}}
             ]}}}), &catalog()).unwrap();
-        assert_eq!(edit["result"]["structuredContent"]["status"], "draft_needs_changes");
-        assert_eq!(edit["result"]["structuredContent"]["recipe"]["steps"][0]["id"], "extract");
+        assert_eq!(
+            edit["result"]["structuredContent"]["status"],
+            "draft_needs_changes"
+        );
+        assert_eq!(
+            edit["result"]["structuredContent"]["recipe"]["steps"][0]["id"],
+            "extract"
+        );
         assert_eq!(edit["result"]["isError"], false);
         let invalid = mcp_site_lab_message(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{
             "name":"site_lab_edit","arguments":{"recipe":edit["result"]["structuredContent"]["recipe"],"changes":[
                 {"action":"add_step","step":{"id":"extract","operation":{"id":"semantic.entity_spans","revision":1},"inputs":{}}}
             ]}}}), &catalog()).unwrap();
-        assert_eq!(invalid["result"]["structuredContent"]["code"], "recipe_edit_rejected");
+        assert_eq!(
+            invalid["result"]["structuredContent"]["code"],
+            "recipe_edit_rejected"
+        );
         assert_eq!(invalid["result"]["isError"], true);
     }
 
     #[test]
     fn mcp_rejects_unknown_methods_and_oversized_lines() {
-        let unavailable = mcp_site_lab_message(json!({"jsonrpc":"2.0","id":8,"method":"execution/start"}), &catalog()).unwrap();
+        let unavailable = mcp_site_lab_message(
+            json!({"jsonrpc":"2.0","id":8,"method":"execution/start"}),
+            &catalog(),
+        )
+        .unwrap();
         assert_eq!(unavailable["error"]["code"], -32601);
         let oversized = vec![b'a'; SITE_LAB_MCP_MAX_MESSAGE_BYTES + 1];
         assert!(mcp_bounded_line(&mut std::io::Cursor::new(oversized)).is_err());

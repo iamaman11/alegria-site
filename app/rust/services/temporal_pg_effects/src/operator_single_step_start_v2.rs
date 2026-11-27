@@ -38,6 +38,107 @@ const TEMPORAL_NAMESPACE_ENV: &str = "SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE";
 const CATALOG_ENV: &str = "SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE";
 const ROOT_READER_DSN_ENV: &str = "SITE_LAB_SINGLE_V2_DATABASE_URL_FILE";
 const MAX_REQUEST_FUTURE_SECONDS: u64 = 600;
+const MAX_CONTEXT_KEY_BYTES: usize = 512;
+const MAX_POLICY_ID_BYTES: usize = 128;
+
+/// Only the Start RPC has an ambiguous outcome: Temporal may persist the
+/// Workflow even when the caller loses the response. All earlier stages can
+/// fail without submitting an execution command. These states are part of the
+/// operator's diagnostic protocol, never a client-controlled admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SingleStartStage {
+    OperatorConfiguration,
+    PrivateIntent,
+    IndependentBusinessRoot,
+    TemporalConnection,
+    FinalPreflight,
+    StartSubmitted,
+}
+
+impl SingleStartStage {
+    fn status(self) -> &'static str {
+        match self {
+            Self::StartSubmitted => "start_outcome_unknown",
+            _ => "refused_before_temporal_start",
+        }
+    }
+
+    fn code(self) -> &'static str {
+        match self {
+            Self::OperatorConfiguration => "operator_configuration_unavailable",
+            Self::PrivateIntent => "private_intent_invalid_or_untrusted",
+            Self::IndependentBusinessRoot => "independent_business_root_unavailable",
+            Self::TemporalConnection => "temporal_connection_unavailable",
+            Self::FinalPreflight => "authorization_expired_or_revoked",
+            Self::StartSubmitted => "temporal_start_result_unknown",
+        }
+    }
+
+    fn next_action(self) -> &'static str {
+        match self {
+            Self::StartSubmitted => {
+                "Inspect the exact Workflow ID in Temporal and the tenant-bound SQL root; never retry a Start merely because its response was lost."
+            }
+            Self::OperatorConfiguration => {
+                "Ask the operator to check separately provisioned tenant, catalog and loopback Temporal settings."
+            }
+            Self::PrivateIntent => {
+                "Supply a fresh, canonical, independently pinned private V2 intent."
+            }
+            Self::IndependentBusinessRoot | Self::FinalPreflight => {
+                "Check independent tenant business-root issuance and the finite request validity window."
+            }
+            Self::TemporalConnection => {
+                "Restore the independently configured loopback Temporal endpoint before requesting a fresh intent."
+            }
+        }
+    }
+}
+
+fn bounded_policy_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_POLICY_ID_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn bounded_context_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_CONTEXT_KEY_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+#[derive(Serialize)]
+struct SingleStartFailureReport<'a> {
+    schema_revision: u16,
+    operation: &'static str,
+    status: &'static str,
+    code: &'static str,
+    canonical_run_id: Option<&'a str>,
+    parent_workflow_id: Option<&'a str>,
+    execution: &'static str,
+    owner_admission: &'static str,
+    next_action: &'static str,
+}
+
+fn start_failure_report<'a>(
+    stage: SingleStartStage,
+    canonical_run_id: Option<&'a str>,
+    parent_workflow_id: Option<&'a str>,
+) -> SingleStartFailureReport<'a> {
+    SingleStartFailureReport {
+        schema_revision: 1,
+        operation: "site_lab_start_single_v2",
+        status: stage.status(),
+        code: stage.code(),
+        canonical_run_id,
+        parent_workflow_id,
+        execution: "not_confirmed",
+        owner_admission: "not_issued_by_start",
+        next_action: stage.next_action(),
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +180,7 @@ fn checked_operator_config(read: impl Fn(&str) -> Option<String>) -> Result<Oper
     );
     let tenant = read(TENANT_ENV).context("missing independently configured operator tenant")?;
     ensure!(
-        !tenant.is_empty() && tenant == tenant.trim(),
+        bounded_policy_identifier(&tenant),
         "invalid operator-scoped tenant"
     );
     let url = checked_local_temporal_url(
@@ -88,7 +189,7 @@ fn checked_operator_config(read: impl Fn(&str) -> Option<String>) -> Result<Oper
     let namespace =
         read(TEMPORAL_NAMESPACE_ENV).context("missing operator-only Temporal namespace")?;
     ensure!(
-        !namespace.is_empty() && namespace == namespace.trim(),
+        bounded_policy_identifier(&namespace),
         "invalid operator Temporal namespace"
     );
     let catalog = read(CATALOG_ENV).context("missing installed trusted owner catalog")?;
@@ -134,7 +235,7 @@ fn decode_checked_intent(
         "single-step operator intent tenant differs from authenticated operator policy"
     );
     ensure!(
-        !intent.context_key.is_empty() && intent.context_key == intent.context_key.trim(),
+        bounded_context_key(&intent.context_key),
         "single-step operator requires exact nonblank business-root context"
     );
     let run_id = &intent.run.plan.scope.run_id;
@@ -190,10 +291,43 @@ fn one_step_start_options(workflow_id: String) -> WorkflowStartOptions {
 }
 
 pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
+    let mut stage = SingleStartStage::OperatorConfiguration;
+    let mut run_id = None;
+    let mut parent_workflow_id = None;
+    match try_start_from_private_request(path, &mut stage, &mut run_id, &mut parent_workflow_id)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Never echo private source bytes, provider commands, SQL errors,
+            // credentials or an unverified caller-provided tenant identity.
+            // In particular, an RPC failure after submission does NOT prove
+            // that Temporal rejected the Start. Its deterministic Workflow ID
+            // is the only safe place to reconcile the unknown outcome.
+            println!(
+                "{}",
+                serde_json::to_string(&start_failure_report(
+                    stage,
+                    run_id.as_deref(),
+                    parent_workflow_id.as_deref(),
+                ))?
+            );
+            anyhow::bail!("single-step V2 operator refused or could not confirm Temporal Start; see redacted JSON diagnostic")
+        }
+    }
+}
+
+async fn try_start_from_private_request(
+    path: &Path,
+    stage: &mut SingleStartStage,
+    run_id: &mut Option<String>,
+    parent_workflow_id: &mut Option<String>,
+) -> Result<()> {
     // The operator-only process does not load the worker's execution mode or
     // launch a DAG runner. It connects only to an explicitly configured local
     // Temporal endpoint, and its process identity must already be privileged.
     let config = checked_operator_config(|key| env::var(key).ok())?;
+    *stage = SingleStartStage::PrivateIntent;
     let bytes = operator_dag_governance::read_private_operator_file(
         path,
         "single-step V2 immutable operator intent",
@@ -204,11 +338,23 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
         .context("system clock before Unix epoch")?
         .as_secs();
     let intent = decode_checked_intent(&bytes, &config.tenant, &catalog, now)?;
-    let pool =
-        operator_dag_read_v2::tenant_read_only_pool(&config.tenant, ROOT_READER_DSN_ENV, false)
-            .await?;
-    assert_active_independent_business_root(&pool, &config.tenant, &intent).await?;
+    *run_id = Some(intent.run.plan.scope.run_id.clone());
+    *stage = SingleStartStage::IndependentBusinessRoot;
+    let pool = timeout(
+        Duration::from_secs(15),
+        operator_dag_read_v2::tenant_read_only_pool(&config.tenant, ROOT_READER_DSN_ENV, false),
+    )
+    .await
+    .context("tenant-root reader connection timed out before Temporal Start")??;
+    timeout(
+        Duration::from_secs(15),
+        assert_active_independent_business_root(&pool, &config.tenant, &intent),
+    )
+    .await
+    .context("business-root proof timed out before Temporal Start")??;
     let workflow_id = operation_dag_parent_workflow_id_v2(&intent.run.plan.scope.run_id);
+    *parent_workflow_id = Some(workflow_id.clone());
+    *stage = SingleStartStage::TemporalConnection;
     let connection = timeout(
         Duration::from_secs(15),
         Connection::connect(
@@ -221,6 +367,7 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
     .context("single-step Temporal connection timed out before Start")??;
     let client = Client::new(connection, ClientOptions::new(&config.namespace).build())
         .map_err(|error| anyhow::anyhow!("initialize single-step Temporal client: {error}"))?;
+    *stage = SingleStartStage::FinalPreflight;
     // An endpoint connection may have stalled after the initial file check.
     // Do not dispatch an operator intent after its own finite validity window.
     let dispatch_time = SystemTime::now()
@@ -228,7 +375,21 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
         .context("system clock before Unix epoch")?
         .as_secs();
     checked_request_ttl(intent.expires_at_unix_seconds, dispatch_time)?;
-    assert_active_independent_business_root(&pool, &config.tenant, &intent).await?;
+    timeout(
+        Duration::from_secs(15),
+        assert_active_independent_business_root(&pool, &config.tenant, &intent),
+    )
+    .await
+    .context("final business-root proof timed out before Temporal Start")??;
+    // Root SELECT is an await point. The operator intent could expire while
+    // PostgreSQL responds, even though it was valid when the query began.
+    // Check its validity again at the *last* synchronous point before RPC.
+    let final_dispatch_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock before Unix epoch")?
+        .as_secs();
+    checked_request_ttl(intent.expires_at_unix_seconds, final_dispatch_time)?;
+    *stage = SingleStartStage::StartSubmitted;
     let handle = timeout(
         Duration::from_secs(20),
         client.start_workflow(
@@ -320,6 +481,66 @@ mod tests {
         assert!(checked_request_ttl(701, 100).is_err());
         assert!(checked_request_ttl(101, 100).is_ok());
         assert!(checked_request_ttl(700, 100).is_ok());
+    }
+
+    #[test]
+    fn single_step_start_rejects_unbounded_or_control_bearing_scope_fields() {
+        assert!(!bounded_policy_identifier(""));
+        assert!(!bounded_policy_identifier("tenant\nother"));
+        assert!(!bounded_policy_identifier(" tenant"));
+        assert!(!bounded_policy_identifier(
+            &"t".repeat(MAX_POLICY_ID_BYTES + 1)
+        ));
+        assert!(bounded_policy_identifier(&"t".repeat(MAX_POLICY_ID_BYTES)));
+        assert!(!bounded_context_key("context\r\nforged"));
+        assert!(!bounded_context_key(" context"));
+        assert!(!bounded_context_key(&"x".repeat(MAX_CONTEXT_KEY_BYTES + 1)));
+        assert!(bounded_context_key(&"x".repeat(MAX_CONTEXT_KEY_BYTES)));
+
+        let configured = |key: &str| match key {
+            ENABLE_ENV => Some("true".to_owned()),
+            TENANT_ENV => Some("tenant\nforged".to_owned()),
+            TEMPORAL_URL_ENV => Some("http://127.0.0.1:7233/".to_owned()),
+            TEMPORAL_NAMESPACE_ENV => Some("namespace".to_owned()),
+            CATALOG_ENV => Some("/etc/alegria/owner-routes-v1.json".to_owned()),
+            _ => None,
+        };
+        assert!(checked_operator_config(configured).is_err());
+    }
+
+    #[test]
+    fn single_step_start_diagnostics_preserve_precise_unknown_outcome_boundary() {
+        for stage in [
+            SingleStartStage::OperatorConfiguration,
+            SingleStartStage::PrivateIntent,
+            SingleStartStage::IndependentBusinessRoot,
+            SingleStartStage::TemporalConnection,
+            SingleStartStage::FinalPreflight,
+        ] {
+            let report = serde_json::to_value(start_failure_report(stage, None, None)).unwrap();
+            assert_eq!(report["status"], "refused_before_temporal_start");
+            assert_eq!(report["execution"], "not_confirmed");
+            assert!(report["canonical_run_id"].is_null());
+            assert!(report["parent_workflow_id"].is_null());
+            assert_ne!(report["code"], "temporal_start_result_unknown");
+        }
+        let report = serde_json::to_value(start_failure_report(
+            SingleStartStage::StartSubmitted,
+            Some("29b23f2a-f6ea-4571-b2dc-2630cdbf3aef"),
+            Some("alegria-operation-dag-v2-29b23f2a-f6ea-4571-b2dc-2630cdbf3aef"),
+        ))
+        .unwrap();
+        assert_eq!(report["status"], "start_outcome_unknown");
+        assert_eq!(report["code"], "temporal_start_result_unknown");
+        assert_eq!(report["owner_admission"], "not_issued_by_start");
+        assert!(report["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("never retry a Start"));
+        let serialized = report.to_string();
+        assert!(!serialized.contains("password"));
+        assert!(!serialized.contains("source_bytes"));
+        assert!(!serialized.contains("command_bytes"));
     }
 
     #[test]

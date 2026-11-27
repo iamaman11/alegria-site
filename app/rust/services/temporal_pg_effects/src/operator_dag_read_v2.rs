@@ -6,6 +6,12 @@
 
 use std::{env, path::Path};
 
+#[cfg(unix)]
+use std::{
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    time::Duration,
+};
+
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
     enforce_json_budget, operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2,
@@ -20,6 +26,14 @@ use sqlx::{PgPool, Row};
 use temporalio_client::Client;
 use temporalio_common::protos::temporal::api::history::v1::{history_event::Attributes, History};
 use uuid::Uuid;
+
+#[cfg(unix)]
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{UnixListener, UnixStream},
+    sync::Semaphore,
+    time::timeout,
+};
 
 use super::operator_dag_governance::{
     read_operator_owned_catalog, read_private_operator_file, validate_local_temporal_endpoint,
@@ -53,6 +67,209 @@ struct SafeRunInspection {
 
 const OPERATION: &str = "read_operation_dag_run_v2";
 
+// A separately privileged, opt-in *read-only* Unix endpoint is the sole
+// transport available to an untrusted local MCP authoring process. The
+// operator account retains the private tenant-bound SELECT-only SQL login;
+// MCP never receives the database URL, Temporal credentials or raw receipts.
+// A dedicated 02710 directory lets an explicitly configured peer group
+// traverse a known path, without revealing directory entries. A 0660 socket
+// requires group membership, and SO_PEERCRED restricts admission to one exact
+// *different* OS user even if that group has several members.
+#[cfg(unix)]
+const SOCKET_PARENT_MODE: u32 = 0o2710;
+#[cfg(unix)]
+const SOCKET_MODE: u32 = 0o660;
+#[cfg(unix)]
+const MAX_SOCKET_REQUEST_BYTES: usize = 256;
+#[cfg(unix)]
+const MAX_SOCKET_RESPONSE_BYTES: usize = 2 * 1024;
+
+#[derive(Serialize)]
+struct SafeRunRefusal {
+    operation: &'static str,
+    status: &'static str,
+    code: &'static str,
+    next_action: &'static str,
+}
+
+fn refusal_diagnostic() -> SafeRunRefusal {
+    SafeRunRefusal {
+        operation: OPERATION,
+        status: "refused",
+        code: "run_unavailable_or_untrusted",
+        next_action: "Check the tenant-bound read-only role, installed catalog and exact Temporal/SQL run records with the operator.",
+    }
+}
+
+/// A dedicated, local-only status bridge. There is deliberately no TCP
+/// listener, user-supplied tenant, DSN, Workflow Run ID, provider credential,
+/// arbitrary file path or write/Start/Signal capability here. A same-UID MCP
+/// and operator is refused because it would not isolate operator credentials.
+#[cfg(unix)]
+pub(super) async fn serve_socket() -> Result<()> {
+    ensure!(
+        env::var("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2")
+            .ok()
+            .as_deref()
+            == Some("true"),
+        "native V2 read-only operator disabled"
+    );
+    let path = env::var("OPERATION_DAG_READ_V2_SOCKET_PATH")?;
+    let socket_path = Path::new(&path);
+    ensure!(
+        socket_path.is_absolute(),
+        "V2 status socket path must be absolute"
+    );
+    let parent = socket_path
+        .parent()
+        .context("V2 status socket has no parent")?;
+    ensure!(
+        socket_path.file_name().is_some()
+            && !socket_path.as_os_str().is_empty()
+            && path.as_bytes().len() <= 100
+            && socket_path.components().all(|component| {
+                !matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::CurDir
+                )
+            }),
+        "invalid or unbounded V2 status socket path"
+    );
+    let parent_meta = std::fs::symlink_metadata(parent)?;
+    ensure!(
+        parent_meta.file_type().is_dir()
+            && parent_meta.permissions().mode() & 0o7777 == SOCKET_PARENT_MODE,
+        "V2 status socket parent must be a private setgid 02710 directory"
+    );
+    // No unlink/replacement of an existing socket: a stale or ambiguous
+    // endpoint is an operator intervention, never automatic authority.
+    ensure!(
+        std::fs::symlink_metadata(socket_path)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound),
+        "V2 status socket path already exists or cannot be inspected"
+    );
+    let client_uid_text = env::var("OPERATION_DAG_READ_V2_ALLOWED_CLIENT_UID")?;
+    let allowed_client_uid: u32 = client_uid_text.parse()?;
+    ensure!(
+        allowed_client_uid > 0
+            && allowed_client_uid != parent_meta.uid()
+            && client_uid_text == allowed_client_uid.to_string(),
+        "V2 status client UID must be a canonical nonroot distinct OS user"
+    );
+    // Establish that the configured operator can read only its own tenant and
+    // that the installed catalog and Temporal destination are trusted BEFORE
+    // exposing the socket. Every request rechecks the SQL boundary as well.
+    let tenant = env::var("OPERATION_DAG_READ_V2_TENANT_ID")?;
+    ensure!(
+        !tenant.is_empty() && tenant.trim() == tenant,
+        "invalid reader tenant"
+    );
+    let preflight_pool = read_only_pool(&tenant).await?;
+    preflight_pool.close().await;
+    let catalog_file = env::var("OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE")?;
+    let _catalog = read_operator_owned_catalog(Path::new(&catalog_file))?;
+    let temporal_url = env::var("OPERATION_DAG_READ_V2_TEMPORAL_URL")?;
+    validate_local_temporal_endpoint(&temporal_url)?;
+    let namespace = env::var("OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE")?;
+    ensure!(
+        !namespace.is_empty() && namespace.trim() == namespace,
+        "invalid reader Temporal namespace"
+    );
+    let listener = UnixListener::bind(socket_path)?;
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
+    let socket_meta = std::fs::symlink_metadata(socket_path)?;
+    ensure!(
+        socket_meta.file_type().is_socket()
+            && socket_meta.permissions().mode() & 0o777 == SOCKET_MODE
+            && socket_meta.uid() == parent_meta.uid()
+            && socket_meta.gid() == parent_meta.gid()
+            && socket_meta.uid() != allowed_client_uid,
+        "V2 socket owner/group must match private parent, with distinct authorized MCP UID"
+    );
+    let permits = std::sync::Arc::new(Semaphore::new(8));
+    loop {
+        let (mut stream, _) = listener.accept().await?;
+        let peer = stream.peer_cred();
+        if !peer.is_ok_and(|identity| {
+            authorized_client_uid(allowed_client_uid, identity.uid(), socket_meta.uid())
+        }) {
+            // Do not reveal existence of a run or enumerate allowed UIDs.
+            continue;
+        }
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            write_socket_diagnostic(&mut stream, &refusal_diagnostic()).await;
+            continue;
+        };
+        tokio::spawn(async move {
+            let _permit = permit;
+            match timeout(Duration::from_secs(3), read_socket_locator(&mut stream)).await {
+                Ok(Ok(locator)) => {
+                    match timeout(Duration::from_secs(30), read_verified_run_locator(locator)).await
+                    {
+                        Ok(Ok(inspection)) => {
+                            write_socket_diagnostic(&mut stream, &inspection).await;
+                        }
+                        _ => write_socket_diagnostic(&mut stream, &refusal_diagnostic()).await,
+                    }
+                }
+                _ => write_socket_diagnostic(&mut stream, &refusal_diagnostic()).await,
+            }
+        });
+    }
+}
+
+#[cfg(unix)]
+fn authorized_client_uid(expected_uid: u32, peer_uid: u32, operator_uid: u32) -> bool {
+    expected_uid > 0 && expected_uid != operator_uid && peer_uid == expected_uid
+}
+
+#[cfg(not(unix))]
+pub(super) async fn serve_socket() -> Result<()> {
+    bail!("read-only V2 operator socket requires Unix SO_PEERCRED and filesystem ACLs")
+}
+
+#[cfg(unix)]
+async fn read_socket_locator(stream: &mut UnixStream) -> Result<RunLocator> {
+    let mut request = Vec::with_capacity(80);
+    let mut chunk = [0_u8; 64];
+    loop {
+        let count = stream.read(&mut chunk).await?;
+        if count == 0 {
+            break;
+        }
+        ensure!(
+            request.len().saturating_add(count) <= MAX_SOCKET_REQUEST_BYTES,
+            "unbounded V2 status request"
+        );
+        request.extend_from_slice(&chunk[..count]);
+    }
+    decode_socket_locator_line(&request)
+}
+
+#[cfg(unix)]
+fn decode_socket_locator_line(request: &[u8]) -> Result<RunLocator> {
+    ensure!(
+        request.len() >= 2
+            && request.len() <= MAX_SOCKET_REQUEST_BYTES
+            && request.last() == Some(&b'\n'),
+        "one complete bounded canonical V2 status line required"
+    );
+    decode_canonical_run_locator(&request[..request.len() - 1])
+}
+
+#[cfg(unix)]
+async fn write_socket_diagnostic<T: Serialize>(stream: &mut UnixStream, response: &T) {
+    let Ok(mut payload) = serde_json::to_vec(&response) else {
+        return;
+    };
+    if payload.len() > MAX_SOCKET_RESPONSE_BYTES {
+        return;
+    }
+    payload.push(b'\n');
+    let _ = timeout(Duration::from_secs(3), stream.write_all(&payload)).await;
+    let _ = stream.shutdown().await;
+}
+
 fn decode_canonical_run_locator(bytes: &[u8]) -> Result<RunLocator> {
     ensure!(
         bytes.len() <= 256,
@@ -75,21 +292,14 @@ pub(super) async fn read_from_file(path: &Path) -> Result<()> {
             Ok(())
         }
         Err(_) => {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "operation":OPERATION,
-                    "status":"refused",
-                    "code":"run_unavailable_or_untrusted",
-                    "next_action":"Check the tenant-bound read-only role, installed catalog and exact Temporal/SQL run records with the operator."
-                })
-            );
+            println!("{}", serde_json::to_string(&refusal_diagnostic())?);
             bail!("read-only V2 run proof refused; see redacted JSON diagnostic")
         }
     }
 }
 
 async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
+    // File transport has exactly the same opt-in boundary as the socket.
     ensure!(
         env::var("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2")
             .ok()
@@ -98,7 +308,17 @@ async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
         "native V2 read-only operator disabled"
     );
     let bytes = read_private_operator_file(path, "V2 read-only run locator")?;
-    let locator = decode_canonical_run_locator(&bytes)?;
+    read_verified_run_locator(decode_canonical_run_locator(&bytes)?).await
+}
+
+async fn read_verified_run_locator(locator: RunLocator) -> Result<SafeRunInspection> {
+    ensure!(
+        env::var("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2")
+            .ok()
+            .as_deref()
+            == Some("true"),
+        "native V2 read-only operator disabled"
+    );
     let tenant = env::var("OPERATION_DAG_READ_V2_TENANT_ID")?;
     ensure!(
         !tenant.is_empty() && tenant.trim() == tenant,
@@ -338,6 +558,15 @@ fn classify_server_result(
                     == run.plan.external_artifacts.len() + run.plan.nodes[0].outputs.len(),
             "native V2 result does not match one exact operation and its sealed plan"
         );
+        // The parent may be complete while a malicious/stale receipt swaps
+        // externally admitted source bytes. A metadata-only comparison is
+        // insufficient: exact source bytes were sealed in the parent Start.
+        for (artifact_id, source) in &run.admitted {
+            ensure!(
+                receipt.artifacts.get(artifact_id) == Some(source),
+                "native V2 receipt altered the original admitted source bytes"
+            );
+        }
         return Ok((
             "temporal_completed_owner_unverified",
             Some(owner_content_hash(bytes)),
@@ -642,8 +871,10 @@ async fn attest_one_owner_child(
         })
         .collect::<Vec<_>>();
     ensure!(
-        started.len() == 1 && validated[0].0.event_id < started[0].0.event_id,
-        "owner effect started before typed ValidateOnly completed"
+        started.len() == 1
+            && validated[0].0.event_id < initiated.event_id
+            && validated[0].0.event_id < started[0].0.event_id,
+        "owner effect was scheduled or started before typed ValidateOnly completed"
     );
     let child_run = started[0]
         .1
@@ -968,5 +1199,66 @@ mod tests {
         assert!(!json.contains("payload"));
         assert!(!json.contains("provider_success"));
         assert!(!json.contains("command_bytes"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_requires_one_bounded_canonical_uuid_line_and_exact_eof() {
+        let id = Uuid::new_v4();
+        let wire = format!("{{\"canonical_run_id\":\"{id}\"}}\n");
+        assert_eq!(
+            decode_socket_locator_line(wire.as_bytes())
+                .unwrap()
+                .canonical_run_id,
+            id
+        );
+        for bad in [
+            wire.trim_end_matches('\n').to_owned(),
+            format!("{wire}\n"),
+            format!("{wire}{{}}\n"),
+            format!("{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"other\"}}\n"),
+            format!(" {{\"canonical_run_id\":\"{id}\"}}\n"),
+            format!(
+                "{{\"canonical_run_id\":\"{}\"}}\n",
+                id.to_string().to_uppercase()
+            ),
+            "x".repeat(MAX_SOCKET_REQUEST_BYTES + 1),
+        ] {
+            assert!(
+                decode_socket_locator_line(bad.as_bytes()).is_err(),
+                "unexpectedly accepted: {bad}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refusal_diagnostic_is_constant_without_tenant_or_history_data() {
+        let report = serde_json::to_value(refusal_diagnostic()).unwrap();
+        let wire = report.to_string();
+        assert_eq!(report["status"], "refused");
+        assert_eq!(report["code"], "run_unavailable_or_untrusted");
+        for forbidden in [
+            "tenant_id",
+            "run_id",
+            "workflow_run_id",
+            "sql",
+            "dsn",
+            "receipt_bytes",
+            "provider_payload",
+        ] {
+            assert!(!wire.contains(forbidden), "refusal leaked {forbidden}");
+        }
+        assert!(wire.len() <= MAX_SOCKET_RESPONSE_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_status_peer_must_be_exact_distinct_nonroot_uid() {
+        assert!(authorized_client_uid(1042, 1042, 1017));
+        assert!(!authorized_client_uid(1042, 1043, 1017));
+        assert!(!authorized_client_uid(1042, 1042, 1042));
+        assert!(!authorized_client_uid(0, 0, 1017));
+        assert!(!authorized_client_uid(0, 1000, 0));
     }
 }

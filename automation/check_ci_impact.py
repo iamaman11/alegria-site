@@ -286,9 +286,17 @@ class ImpactFixtures(unittest.TestCase):
         ))
         self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
             ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v6"], (
             ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v7"], (
             ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v2"], (
             ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_dataforseo"], (
             ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
         ))
         self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["runtime_binaries"], {
@@ -407,13 +415,24 @@ class ImpactFixtures(unittest.TestCase):
             self.assertIn(proof, test_source)
         self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
             ("temporal_qdrant_v8", name, 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v6"], (
             ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v7"], (
             ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v2"], (
             ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_dataforseo"], (
             ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
         ))
         self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
-        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], ("temporal_qdrant",))
+        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], (
+            "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+            "temporal_mixed_v2", "temporal_dataforseo",
+        ))
 
     def test_full_real_e2e_shards_cover_all_58_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical

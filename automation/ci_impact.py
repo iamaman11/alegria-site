@@ -1234,7 +1234,8 @@ FULL_VERIFY_E2E_SUITES = frozenset({
 # guessed from a successful subprocess exit status.
 E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
-    "vector", "temporal_qdrant", "truth_certification",
+    "vector", "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+    "temporal_mixed_v2", "temporal_dataforseo", "truth_certification",
 )
 E2E_VERIFY_SHARDS = (
     "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
@@ -1245,7 +1246,10 @@ E2E_VERIFY_SHARDS = (
 # to exactly one runtime job: none may wait for a broad harness dependency.
 E2E_GRAPH_SHARDS = ("graph",)
 E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
-E2E_QDRANT_TEMPORAL_SHARDS = ("temporal_qdrant",)
+E2E_QDRANT_TEMPORAL_SHARDS = (
+    "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+    "temporal_mixed_v2", "temporal_dataforseo",
+)
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
 E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
 E2E_TEMPORAL_V3_SHARDS = ("temporal_pure",)
@@ -1283,11 +1287,19 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_qdrant": (
         ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+    ),
+    "temporal_mixed_v6": (
         ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+    ),
+    "temporal_mixed_v7": (
         ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+    ),
+    "temporal_mixed_v2": (
         # One live Temporal/PG/Qdrant V2 proof plus one isolated test of
         # the exact trusted Site Lab provider catalog on real owner contracts.
         ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+    ),
+    "temporal_dataforseo": (
         ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
     ),
     "truth_certification": (
