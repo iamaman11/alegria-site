@@ -62,6 +62,19 @@ POST/GET лишь к локальному фиктивному серверу н
 имеет `StubFixtureOnly` и не может считаться SEO-свидетельством. Платных
 запросов, доверенного удалённого ChatGPT Start или production cutover нет.
 
+Обязательный CI-сценарий `dataforseo_native_v2_temporal_sql_http_restart_and_ambiguous_post`
+проверяет полный **тестовый** путь: реальный Temporal V2 Parent и ValidateOnly/
+effect Child Histories → разные PostgreSQL LOGIN для business/governance/
+issuer/worker → SQL-допуск → физический локальный POST/GET → неизменяемый
+receipt, байты которого сравниваются с Temporal output. Тест останавливает
+Worker между записанным POST и GET, затем проверяет GET-only восстановление.
+Отдельная ветка теряет ответ POST и требует состояния `uncertain` с нулём
+повторных POST. Поддельный Child Run ID и чужой tenant не получают допуск.
+Сценарий включён в существующий `temporal_qdrant` CI shard и использует
+отдельно упакованный SHA-проверяемый исполняемый файл owner.
+Это **не** проверка настоящего DataForSEO, стоимости, подлинности SERP,
+деплойного Worker Build ID или входа ChatGPT в production Temporal.
+
 Для ChatGPT/скриптов допустим **один ограниченный JSON из stdin** без промежуточного файла:
 
 ```bash
@@ -117,7 +130,7 @@ MCP предоставляет одиннадцать инструментов �
 
 Добавлены независимые типизированные операции-предшественники владельцев:
 
-- `dataforseo.google_organic.search@1`: типизированный Google Organic Standard (запрос, регион/язык, глубина, предельный бюджет), источник `serp_discovery_only`, `AtMostOnce`. Отдельный `temporal_dataforseo` реализует native Temporal `ValidateOnly` и owner-child Workflow с ожиданием **независимого PostgreSQL допуска**. Первое исполнение только `StubFixtureOnly`: отдельная tenant/run/History-привязанная таблица, запись попытки до эффекта и неизменяемая квитанция. В исходном коде этого owner **нет платного HTTP POST**; запуск требует явного флага тестового режима и отдельной роли PostgreSQL. Наличие owner-кода не означает, что оператор уже выпустил допуск или что сценарий проверен физическим E2E.
+- `dataforseo.google_organic.search@1`: типизированный Google Organic Standard (запрос, регион/язык, глубина, предельный бюджет), источник `serp_discovery_only`, `AtMostOnce`. Отдельный `temporal_dataforseo` реализует native Temporal `ValidateOnly` и owner-child Workflow с ожиданием **независимого PostgreSQL допуска**. Первое исполнение только `StubFixtureOnly`: отдельная tenant/run/History-привязанная таблица, запись попытки до эффекта и неизменяемая квитанция. В исходном коде этого owner **нет платного HTTP POST**; запуск требует явного флага тестового режима и отдельной роли PostgreSQL. Отдельный физический E2E удостоверяет только локальный stub и отказоустойчивость; наличие owner-кода и теста само по себе не выдаёт production-допуск.
 - `web.public_page.fetch@1`: строгая статическая и runtime-политика HTTPS, точных хостов, операторского allowlist, публичных DNS/IP и pinning соединения, per-hop TLS/robots, лимитов ответа, redirect и времени. Проверяемый цикл `drive_owner_web_fetch_v1` работает с предоставленным transport; тесты моделируют двухшаговый redirect и атаки. **Реальных HTTPS/robots-адаптера, долговечного снимка и Temporal web owner пока нет**, поэтому нельзя выставлять операцию как исполняемый crawler.
 
 Ни один из этих контрактов **не установлен автоматически в доверенный каталог как готовый production-инструмент**. Тестовый DataForSEO owner, даже если его самостоятельно развернули, не открывает API списаний. Для настоящего DataForSEO нужен отдельно аттестующий Temporal History оператор, платёжный эффект с точно ограниченным бюджетом и физический тест с настоящими Temporal/PostgreSQL и безопасным HTTP-стендом. Ни один новый DTO не содержит provider API credentials.

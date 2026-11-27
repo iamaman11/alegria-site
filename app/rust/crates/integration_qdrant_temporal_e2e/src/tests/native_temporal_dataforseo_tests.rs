@@ -1,7 +1,7 @@
-//! Physical DataForSEO **stub-only** owner proof. The generic V2 parent, a
-//! separate operator LOGIN, the child Activity LOGIN, PostgreSQL's immutable
-//! attempt ledger and a real TCP POST/GET server all run in this test. No
-//! credential or public/paid provider endpoint is available to the worker.
+// Physical DataForSEO **stub-only** owner proof. The generic V2 parent, a
+// separate operator LOGIN, the child Activity LOGIN, PostgreSQL's immutable
+// attempt ledger and a real TCP POST/GET server all run in this test. No
+// credential or public/paid provider endpoint is available to the worker.
 
 #[cfg(feature = "e2e")]
 fn dataforseo_v2_fixture(
