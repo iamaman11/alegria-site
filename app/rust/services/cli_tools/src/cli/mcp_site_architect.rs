@@ -161,7 +161,7 @@ fn mcp_step_schema() -> Value {
             "id":{"type":"string","minLength":1},
             "operation":mcp_operation_schema(),
             "inputs":{"type":"object","additionalProperties":mcp_input_schema()},
-            "parameters":{"type":"object","description":"Owner-specific settings; see operation parameters.json_schema in site_architect_tools"},
+            "parameters":{"type":"object","description":"Owner schema in site_architect_tools"},
             "after":{"type":"array","uniqueItems":true,"items":{"type":"string"}}
         }),
         &["id", "operation", "inputs"],
@@ -285,34 +285,34 @@ fn mcp_site_architect_tools() -> Value {
     json!({"tools":[
         {
             "name":"site_architect_tools", "title":"Available siteArchitect operations",
-            "description":"Discover only trusted installed operations, owner, typed ports, version, effects and exact provider parameter schema. Includes independently gated user-Start readiness counts: catalog presence never proves provider connectivity or permission to execute.",
+            "description":"Installed owner contracts, typed ports, parameter schemas and per-gate readiness. Catalog membership is not execution permission.",
             "inputSchema":mcp_object_schema(json!({}), &[]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_operation", "title":"Inspect one installed operation",
-            "description":"Inspect exact versioned owner ports, advanced parameter schema and admission status. Optional parameters get local typed validation or explicitly pending remote ValidateOnly. No provider connection, actual inputs or execution; settings never echoed.",
+            "description":"Versioned ports, settings schema and local/owner-only validation status. No provider call or execution; settings never echoed.",
             "inputSchema":mcp_object_schema(json!({
                 "operation":mcp_operation_schema(),
-                "parameters":{"type":"object","description":"Optional owner-specific settings; omitted settings mean inspect only"}
+                "parameters":{"type":"object","description":"Owner settings; omit to inspect only"}
             }), &["operation"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_one_step", "title":"Check one operation as a Temporal recipe",
-            "description":"Check exactly one step using the native typed DAG plan validator; report blocked launch gates. Authoring preview only, NOT the Temporal Start preflight: authenticated user/tenant ACL, one-use grant, exact sources, owner ValidateOnly, admission and History remain unverified.",
+            "description":"Typed single-step DAG preview, not admission. User ACL, one-use grant, sources, owner ValidateOnly and History unverified.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_run_one", "title":"Check a single-operation launch request",
-            "description":"Fail-closed launch handoff for one typed operation. Checks the recipe locally and reports that the authenticated ChatGPT OAuth resource server is NOT configured for this stdio adapter. This read-only tool never reserves a grant, authenticates a caller, runs owner ValidateOnly or starts Temporal; no caller-provided principal, bearer, grant or transport authority is accepted.",
+            "description":"Read-only one-step launch check, always blocked: no authenticated ChatGPT OAuth gateway in stdio. No grant or Temporal Start; caller-supplied authority rejected.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_run_status", "title":"Read an independently authorized Temporal operation status",
-            "description":"Inspect exactly one native V2 operation by canonical business run UUID through an independently installed read-only tenant-bound Unix operator. No caller-supplied tenant, file, socket, SQL, Temporal endpoint or provider authority. Requires a preconfigured separate Unix UID and private operator bridge. Server Temporal History is checked; provider receipt and source authentication are NOT independently attested. Never starts, retries or signals a Workflow.",
+            "description":"Canonical UUID read-only status via preconfigured tenant-bound Unix operator. Checks server Temporal History, not provider receipt/source; no start/retry.",
             "inputSchema":mcp_object_schema(json!({
                 "canonical_run_id":{"type":"string","format":"uuid","minLength":36,"maxLength":36}
             }), &["canonical_run_id"]),
@@ -320,13 +320,13 @@ fn mcp_site_architect_tools() -> Value {
         },
         {
             "name":"site_architect_new", "title":"Create a blank research recipe",
-            "description":"Create an empty versioned SiteRecipe draft with a run scope. Add sources and steps with site_architect_edit; an empty draft cannot run.",
+            "description":"Create a blank scoped recipe; drafts cannot run.",
             "inputSchema":mcp_object_schema(json!({"tenant_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1}}), &["tenant_id","run_id"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_edit", "title":"Edit typed research steps",
-            "description":"Apply atomic stateless step/source/port/parameter changes and return the full new recipe plus preview or actionable validation problem. No auto-connections; provider parameters retain their exact owner schema. A draft is never an executable grant.",
+            "description":"Atomically edit typed recipe and preview; no auto-connections or executable grant.",
             "inputSchema":mcp_object_schema(json!({
                 "recipe":mcp_recipe_schema(),
                 "changes":{"type":"array","minItems":1,"maxItems":128,"items":mcp_edit_schema()}
@@ -335,37 +335,37 @@ fn mcp_site_architect_tools() -> Value {
         },
         {
             "name":"site_architect_check", "title":"Validate a research recipe",
-            "description":"Check the exact installed owner contracts, typed ports, graph dependencies and local parameter DTOs via the existing V2 DAG validator. Produces only a non-admitted preview.",
+            "description":"Validate installed contracts, typed DAG ports/dependencies/settings locally; non-admitted preview.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_diff", "title":"Compare research recipe hypotheses",
-            "description":"Compare two validated recipes by pinned graph and typed parameter hashes; no live provider data or measured SEO outcomes.",
+            "description":"Hash-only typed recipe comparison; no live provider data or measured SEO outcomes.",
             "inputSchema":mcp_object_schema(json!({"first":mcp_recipe_schema(),"second":mcp_recipe_schema()}), &["first","second"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_connections", "title":"Find compatible typed step connections",
-            "description":"Suggest candidate source and upstream output bindings for every step input port by exact schema, excluding immediate dependency cycles. Suggestions are not a validated recipe or an execution grant.",
+            "description":"Exact-schema source/upstream binding hints, excluding immediate cycles. Not validated or granted.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_inspect", "title":"Inspect a saved typed execution receipt",
-            "description":"Locally check a complete sealed V2 plan and receipt against trusted contracts. Input typed JSON objects directly, never filesystem paths. Returns hashes, step diagnostics and explicit unverified Temporal/provider/source attestation; no payloads.",
+            "description":"Locally inspect sealed V2 plan/receipt JSON, never file paths. Hash diagnostics; no external attestation.",
             "inputSchema":mcp_saved_execution_schema(),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_compare_results", "title":"Compare two saved execution receipts",
-            "description":"Locally inspect and compare two distinct typed V2 plan/receipt pairs, only with equal tenant and exact original source bytes. Hash-only structural differences, not measured SEO or Temporal History attestation. No file paths.",
+            "description":"Compare two sealed V2 receipts, same tenant and exact sources. Hash-only; History unverified. No paths.",
             "inputSchema":mcp_object_schema(json!({"first":mcp_saved_execution_schema(),"second":mcp_saved_execution_schema()}), &["first","second"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
             "name":"site_architect_evidence", "title":"Assess independent consumer needs evidence",
-            "description":"Group typed consumer-need observations and site hypotheses; count only distinct claimed primary publisher/document/content sources, never SERP snippets or mirrors. Structural candidate only: no provider, source or Temporal attestation.",
+            "description":"Group independent claimed primary consumer sources, excluding snippets/mirrors. No source/provider attestation.",
             "inputSchema":mcp_need_evidence_schema(),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         }
