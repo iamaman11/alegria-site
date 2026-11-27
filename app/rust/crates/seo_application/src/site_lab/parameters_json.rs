@@ -13,48 +13,13 @@ use operation_protocol::{
 use seo_domain::extraction::operations::{
     CanonicalizeMentions, EditorialTopics, EntitySpans, LayerRoute, OperationalEntities,
 };
-use serde::{
-    de::{DeserializeOwned, Error as _, MapAccess, SeqAccess, Visitor},
-    Deserialize, Deserializer, Serialize,
-};
+use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 
+use crate::typed_json::{normalized_wire_json_value, preserves_authored_fields, UniqueJsonValue};
+
 type DecodeParameters = Box<dyn Fn(&Value) -> Result<Vec<u8>, String> + Send + Sync>;
-
-/// A provider DTO may not use `deny_unknown_fields`, or a nested serde DTO
-/// may silently drop a newly added provider option. Fail closed if any value
-/// supplied by the author disappears or changes on typed round-trip. Fields
-/// added by DTO defaults are permitted; author-provided settings are never
-/// silently ignored by the generic composer.
-pub(crate) fn preserves_authored_fields(authored: &Value, normalized: &Value) -> bool {
-    match (authored, normalized) {
-        (Value::Object(given), Value::Object(typed)) => given.iter().all(|(key, value)| {
-            typed
-                .get(key)
-                .is_some_and(|typed_value| preserves_authored_fields(value, typed_value))
-        }),
-        (Value::Array(given), Value::Array(typed)) => {
-            given.len() == typed.len()
-                && given
-                    .iter()
-                    .zip(typed)
-                    .all(|(given, typed)| preserves_authored_fields(given, typed))
-        }
-        _ => authored == normalized,
-    }
-}
-
-/// Compare with the JSON that the owner would actually put on the wire.
-/// `serde_json::to_value` can widen an f32 to a precise f64 (e.g. 0.95f32),
-/// even though `to_vec` emits its shortest round-trippable decimal `0.95`.
-/// Comparing the widened Value rejects legitimate typed downstream artifacts.
-pub(crate) fn normalized_wire_json_value<T: Serialize>(
-    value: &T,
-) -> Result<Value, serde_json::Error> {
-    let wire = serde_json::to_vec(value)?;
-    serde_json::from_slice(&wire)
-}
 
 struct ParameterDescriptor {
     contract_hash: ContractHash,
@@ -69,104 +34,12 @@ struct ParameterDescriptor {
 #[serde(transparent)]
 pub struct RecipeParameters(Value);
 
-/// Serde's normal `Value` map accepts duplicate JSON object keys and keeps
-/// the last one. That would silently change what the author supplied before
-/// the installed typed owner sees or fingerprints the parameter value.
-/// Reject duplicates at *every* depth in this one JSON authoring adapter;
-/// never change historical protobuf/Temporal DTO decoding.
-struct UniqueParameterValue(Value);
-
-/// The same no-duplicate-key parser is shared with the pure DAG artifact
-/// ingress. It checks raw bytes before serde can overwrite duplicate fields.
-pub(crate) fn parse_unique_json_bytes(bytes: &[u8]) -> Result<Value, serde_json::Error> {
-    serde_json::from_slice::<UniqueParameterValue>(bytes).map(|parsed| parsed.0)
-}
-
-impl<'de> Deserialize<'de> for UniqueParameterValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct UniqueParameterVisitor;
-
-        impl<'de> Visitor<'de> for UniqueParameterVisitor {
-            type Value = Value;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a JSON value without duplicate object fields")
-            }
-
-            fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Value, E> {
-                Ok(Value::Bool(value))
-            }
-
-            fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Value, E> {
-                Ok(Value::from(value))
-            }
-
-            fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Value, E> {
-                Ok(Value::from(value))
-            }
-
-            fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Value, E> {
-                serde_json::Number::from_f64(value)
-                    .map(Value::Number)
-                    .ok_or_else(|| E::custom("non-finite parameter number"))
-            }
-
-            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Value, E> {
-                Ok(Value::String(value.to_owned()))
-            }
-
-            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Value, E> {
-                Ok(Value::String(value))
-            }
-
-            fn visit_none<E: serde::de::Error>(self) -> Result<Value, E> {
-                Ok(Value::Null)
-            }
-
-            fn visit_unit<E: serde::de::Error>(self) -> Result<Value, E> {
-                Ok(Value::Null)
-            }
-
-            fn visit_some<D: Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
-                UniqueParameterValue::deserialize(deserializer).map(|value| value.0)
-            }
-
-            fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Value, A::Error> {
-                let mut values = Vec::new();
-                while let Some(value) = sequence.next_element::<UniqueParameterValue>()? {
-                    values.push(value.0);
-                }
-                Ok(Value::Array(values))
-            }
-
-            fn visit_map<A: MapAccess<'de>>(self, mut object: A) -> Result<Value, A::Error> {
-                let mut values = serde_json::Map::new();
-                while let Some(key) = object.next_key::<String>()? {
-                    if values.contains_key(&key) {
-                        return Err(A::Error::custom("duplicate operation parameter field"));
-                    }
-                    let value = object.next_value::<UniqueParameterValue>()?;
-                    values.insert(key, value.0);
-                }
-                Ok(Value::Object(values))
-            }
-        }
-
-        deserializer
-            .deserialize_any(UniqueParameterVisitor)
-            .map(UniqueParameterValue)
-    }
-}
-
 impl<'de> Deserialize<'de> for RecipeParameters {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        UniqueParameterValue::deserialize(deserializer).map(|value| Self(value.0))
+        UniqueJsonValue::deserialize(deserializer).map(|value| Self(value.0))
     }
 }
 

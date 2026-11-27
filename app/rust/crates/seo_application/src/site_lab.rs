@@ -19,9 +19,6 @@ use thiserror::Error;
 mod evidence;
 mod operation_inspection;
 mod parameters_json;
-pub(crate) use parameters_json::{
-    normalized_wire_json_value, parse_unique_json_bytes, preserves_authored_fields,
-};
 mod source_bridge;
 pub use evidence::{
     preview_consumer_need_evidence, ConsumerNeedAssessmentV1, ConsumerNeedEvidenceBatchV1,

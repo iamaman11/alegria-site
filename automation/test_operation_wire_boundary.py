@@ -58,8 +58,16 @@ class OperationWireBoundaryTests(unittest.TestCase):
         self.assertIn("pure adapter decodes exactly owner Input", failures)
 
     def test_site_lab_cannot_silently_drop_provider_parameters(self) -> None:
-        failures = self.mutated("site_lab_authoring", "fn preserves_authored_fields(", "fn forget_authored_fields(")
+        failures = self.mutated("site_lab_authoring", "preserves_authored_fields(value, &normalized)", "true")
         self.assertIn("Site Lab rejects silent parameter loss", failures)
+
+    def test_pure_adapter_cannot_skip_strict_raw_input_check(self) -> None:
+        failures = self.mutated("typed_pure_adapter", "typed_json::parse_unique_json_bytes(bytes)", "serde_json::from_slice(bytes)")
+        self.assertIn("pure adapter rejects duplicate authored JSON keys", failures)
+
+    def test_shared_boundary_cannot_restore_last_wins_dto_serialization(self) -> None:
+        failures = self.mutated("typed_json_boundary", "parse_unique_json_bytes(&wire)", "serde_json::from_slice(&wire)")
+        self.assertIn("shared typed JSON boundary rejects duplicate serialized owner keys", failures)
 
 
 if __name__ == "__main__":

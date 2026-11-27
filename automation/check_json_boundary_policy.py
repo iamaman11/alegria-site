@@ -180,6 +180,14 @@ SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/seo_application/src/site_lab/operation_inspection/tests.rs",
 })
 
+# Exact Serde wire normalizer shared by Site Lab parameter authoring and the
+# pure DAG executor. It only rejects ambiguous or silently changed fields;
+# domain Operation DTOs, the provider-neutral protocol, and future sibling
+# modules do not inherit permission to interpret raw JSON.
+TYPED_OPERATION_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/seo_application/src/typed_json.rs",
+})
+
 # Only the acquisition V1 replay-compatibility *unit fixture* may serialize
 # the new strict owner-only DTOs. Production `acquisition::operations` and
 # legacy `source_relevance` stay JSON-boundary-free; no crate-wide waiver.
@@ -226,6 +234,7 @@ def is_allowed_json_boundary(path: Path) -> bool:
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
                | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES
                | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES
+               | TYPED_OPERATION_JSON_BOUNDARIES
                | ACQUISITION_OWNER_JSON_TEST_BOUNDARIES
                | SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES
                | DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES):

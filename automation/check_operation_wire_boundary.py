@@ -30,6 +30,7 @@ SOURCES = {
     "operation_protocol_cargo": "app/rust/crates/operation_protocol/Cargo.toml",
     "typed_pure_adapter": "app/rust/crates/seo_application/src/operation_adapter.rs",
     "site_lab_authoring": "app/rust/crates/seo_application/src/site_lab/parameters_json.rs",
+    "typed_json_boundary": "app/rust/crates/seo_application/src/typed_json.rs",
 }
 
 
@@ -105,18 +106,38 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             "pure adapter executes typed owner Output", failures)
     require(adapter, r"registry\.register_pure::<",
             "pure executor installs trusted concrete Rust operations", failures)
+    require(adapter, r"typed_json::parse_unique_json_bytes\(bytes\)",
+            "pure adapter rejects duplicate authored JSON keys", failures)
+    require(adapter, r"typed_json::normalized_wire_json_value\(&typed\)",
+            "pure adapter compares actual typed wire serialization", failures)
+    require(adapter, r"typed_json::preserves_authored_fields\(&authored,\s*&normalized\)",
+            "pure adapter rejects unknown or discarded owner fields", failures)
     if "serde_json::Value" in adapter:
         failures.append("pure owner executor cannot interpret arbitrary JSON Value")
+    if "crate::site_lab::" in adapter:
+        failures.append("runtime owner adapter cannot depend on Site Lab authoring UI")
 
     authoring = sources["site_lab_authoring"]
     require(authoring, r"struct\s+RecipeParameters\(Value\)",
             "Site Lab JSON is authoring-only, not a domain operation DTO", failures)
-    require(authoring, r"fn\s+preserves_authored_fields\(",
+    require(authoring, r"preserves_authored_fields\(value,\s*&normalized\)",
             "Site Lab rejects silent parameter loss", failures)
+    require(authoring, r"UniqueJsonValue::deserialize\(deserializer\)",
+            "Site Lab rejects duplicate raw parameter keys", failures)
     require(authoring, r"let\s+decoded:\s*T\s*=\s*serde_json::from_value",
             "Site Lab locally validates owner concrete DTO", failures)
     require(authoring, r"fn\s+register_local<T>",
             "Site Lab local owner typed registration", failures)
+
+    boundary = sources["typed_json_boundary"]
+    require(boundary, r"fn\s+preserves_authored_fields\(",
+            "shared typed JSON boundary checks authored field preservation", failures)
+    require(boundary, r"fn\s+parse_unique_json_bytes\(",
+            "shared typed JSON boundary rejects duplicate raw keys", failures)
+    require(boundary, r"fn\s+normalized_wire_json_value<T:\s*Serialize>",
+            "shared typed JSON boundary normalizes concrete DTO", failures)
+    require(boundary, r"parse_unique_json_bytes\(&wire\)",
+            "shared typed JSON boundary rejects duplicate serialized owner keys", failures)
 
     return failures
 

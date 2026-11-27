@@ -1,5 +1,8 @@
 use super::*;
 use crate::operation_adapter::semantic_extraction_registry;
+use crate::typed_json::{
+    normalized_wire_json_value, parse_unique_json_bytes, preserves_authored_fields,
+};
 use operation_protocol::{
     ArtifactTypeId, OperationContract, OperationId, OperationOwnerId, PortId,
 };
@@ -517,6 +520,23 @@ fn typed_float_field_preserves_the_actual_serialized_json_decimal() {
     assert!(!preserves_authored_fields(&altered, &normalized));
     let with_unknown = parse_unique_json_bytes(br#"{"confidence":0.95,"option":true}"#).unwrap();
     assert!(!preserves_authored_fields(&with_unknown, &normalized));
+}
+
+#[test]
+fn typed_serializer_cannot_hide_duplicate_fields_during_wire_normalization() {
+    struct AmbiguousSerializer;
+
+    impl Serialize for AmbiguousSerializer {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeMap;
+            let mut map = serializer.serialize_map(Some(2))?;
+            map.serialize_entry("confidence", &0.95f32)?;
+            map.serialize_entry("confidence", &0.50f32)?;
+            map.end()
+        }
+    }
+
+    assert!(normalized_wire_json_value(&AmbiguousSerializer).is_err());
 }
 
 #[test]

@@ -97,6 +97,21 @@ cutover. Проверки raw duplicate JSON и typed round-trip в pure-исп�
 `python3 automation/test_operation_wire_boundary.py`; эти source-checks
 не доказывают E2E всех 52 кандидатов.
 
+Проверки authoring и pure artifact ingress используют один нейтральный
+`seo_application::typed_json`: отказ на дубли ключей, проверка сохранности
+авторских полей и нормализация через фактический Serde wire (включая `f32`,
+без ложного отказа при представлении `f32` как `f64`). Это **не** новая
+предметная IDL и не отдельный каталог операций. Консервативно отклоняются
+alias/skip-поля, которые не сохранили исходное JSON-представление.
+
+**Temporal V3 replay caveat:** проверка pure ingress применяется на
+существующем V3 workflow пути. Для старых V3 Histories, в которых раньше
+принимались лишние или неоднозначные поля, изменение результата проверки
+ещё не подтверждено реальным replay. До merge/deploy требуется проверить
+сохранённые Histories либо вывести версию поведения/новую очередь с
+совместимым Build ID. Отсутствие изменений в Protobuf V1 не доказывает
+совместимость всех V3 запусков.
+
 Verified static reachability at the baseline: 55 Activity methods referenced
 from canonical V1, 14 additional expert-only methods, two other operational
 workflows, two test-only methods; V2 source-only reuses five of the existing

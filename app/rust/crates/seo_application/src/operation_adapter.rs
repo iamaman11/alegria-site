@@ -214,7 +214,7 @@ impl OperationRegistry {
             // make that safe: reject duplicate raw keys and every field that
             // fails to survive the concrete owner's typed round-trip.
             // This changes only pure ingress checks, not historical V1 wire.
-            let authored = crate::site_lab::parse_unique_json_bytes(bytes).map_err(|error| {
+            let authored = crate::typed_json::parse_unique_json_bytes(bytes).map_err(|error| {
                 OperationRunError::InvalidInput {
                     operation: error_reference.clone(),
                     artifact: artifact.clone(),
@@ -228,14 +228,14 @@ impl OperationRegistry {
                     reason: error.to_string(),
                 })?;
             let normalized =
-                crate::site_lab::normalized_wire_json_value(&typed).map_err(|error| {
+                crate::typed_json::normalized_wire_json_value(&typed).map_err(|error| {
                     OperationRunError::InvalidInput {
                         operation: error_reference.clone(),
                         artifact: artifact.clone(),
                         reason: format!("typed JSON normalization failed: {error}"),
                     }
                 })?;
-            if !crate::site_lab::preserves_authored_fields(&authored, &normalized) {
+            if !crate::typed_json::preserves_authored_fields(&authored, &normalized) {
                 return Err(OperationRunError::InvalidInput {
                     operation: error_reference.clone(),
                     artifact: artifact.clone(),
