@@ -58,6 +58,15 @@ The current Cloudflare Static Assets deployment is *not* such a resource
 server. Deploying or configuring an OAuth issuer/IdP, per-user policy and a
 secured private operator handoff requires separate release authorization.
 
+An isolated, code-only Cloudflare remote MCP **resource Worker** now lives at
+`infra/cloudflare/site-architect-mcp/`. Its OAuth Resource Server and exact
+scope gate are real code; a separately authenticated OAuth Authorization
+Server, trusted subject→SQL ACL/admission Service Binding and secure path to
+the native operator are **not** deployed or accepted. The configured default
+has no public route. A bound request may report only SQL reservation or an
+ambiguous outcome, never a fabricated successful Temporal execution. This
+does not change the user-ready count below.
+
 ## Distinct statuses; never infer success
 
 | Evidence | Allowed conclusion | Forbidden conclusion |

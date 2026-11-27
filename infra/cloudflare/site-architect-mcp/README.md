@@ -1,0 +1,80 @@
+# siteArchitect remote OAuth MCP resource Worker — code-only release gate
+
+This isolated Cloudflare Worker is **not deployed or user Start-ready**. The
+canonical repository is `iamaman11/alegria-site`, Draft PR #95; `main` and
+`alegria-seo-staging` must remain untouched during this pilot.
+
+## Boundary
+
+- Native `createMcpHandler` supplies the stateless `/mcp` transport.
+- `OAuthResourceServer` publishes protected-resource metadata and delegates
+  token validation to a separately deployed OAuth 2.1 Authorization Server
+  over the `AUTH_SERVER` Service Binding. The authorization server must
+  authenticate a **real user** with PKCE S256 and consent, validate the exact
+  resource audience, and provision its `props.userId` from a real IdP.
+- Required exact scope `site_architect.run_one` is **also enforced** on each
+  handler request. Neither a tool argument nor a model-provided bearer,
+  tenant, principal, policy, operation, source, grant, endpoint or budget may
+  establish authority.
+- The only mutating tool accepts an opaque `request_id` UUID. `ONE_STEP_ADMISSION`
+  is an optional **private service binding**; no binding means no Start.
+  It receives only the OAuth issuer/resource and verified subject plus UUID.
+- The separate admission backend is **not implemented here**. It must validate
+  its trusted private caller; independently map `(issuer, subject)` to
+  current SQL tenant/principal/ACL; match the exact one-use grant, source,
+  plan, operation, context and budget; atomically reserve and record the
+  ambiguous-outcome state; and then hand off to the **existing native Temporal
+  operator**. Binding alone is not authorization. Never expose the backend as
+  a publicly callable proxy or trust unsigned identity headers.
+- `request_reserved` means only that a bounded request was reserved, **not**
+  that Temporal Start was accepted or work completed. Any transport error or
+  malformed admission reply is `start_outcome_unknown`; **never auto-retry**.
+  Only independent SQL and Temporal server History inspection can reconcile.
+
+## Build / tests (no Cloudflare release)
+
+```sh
+npm ci
+npm run check
+npm test
+npm run build
+```
+
+`npm run build` calls native `cf deploy --dry-run` and must not deploy. The
+Worker uses `cloudflare.config.ts` (no parallel Wrangler config).
+
+The default config has `workersDev: false`, no routes, no OAuth endpoint
+variables and no admission binding. Deploying that default **does not expose
+a public MCP endpoint**. To prepare a separate authorized deployment the
+operator must explicitly set:
+
+| Environment configuration | Trust requirement |
+| --- | --- |
+| `SITE_ARCHITECT_ENABLE_PUBLIC_MCP=yes` | Explicit public release switch, not a grant to Start |
+| `SITE_ARCHITECT_MCP_RESOURCE_URL` | Exact externally reachable HTTPS URL ending `/mcp` |
+| `SITE_ARCHITECT_OAUTH_ISSUER_URL` | HTTPS issuer that signed in and consented a real user |
+| `SITE_ARCHITECT_AUTH_WORKER` | Name of the separately verified auth server Worker providing `validateToken` |
+| `SITE_ARCHITECT_PRIVATE_ADMISSION_WORKER` | Separately vetted private admission Worker; required to enable the public route, otherwise Start blocked |
+
+These are not interchangeable with a tunnel, SQL connection string, raw token,
+or public HTTP URL. An operator on a private Windows host will need an
+independently secured private route (Tunnel, VPC or another approved bridge)
+**after** this resource Worker. That path and the real authorization server do
+not exist in this PR. Do not set the release switch just to see MCP tools.
+
+## Mandatory acceptance before user launch
+
+1. Provision and inspect IdP, real sign-in + consent, issuer, exact resource,
+   PKCE S256, token expiry, revocation, scope and per-user ACL.
+2. Implement a private only admission service and independently test a stolen,
+   forged, cross-tenant, revoked, repeated and expired subject/grant.
+3. Physical isolated PG18 + Temporal 1.32 trial: source + owner ValidateOnly,
+   real one-use grant, no duplicate Start, exact History, budget/receipts.
+4. Verify Chrome/ChatGPT remote MCP user connection, including a negative
+   access test; promote **individual** operations only with canonical CI
+   evidence. Arbitrary groups have an additional dependency/partial-failure
+   acceptance and are **not** enabled by this resource server.
+
+The existing Rust 13-tool stdio MCP catalog and 5 installed contract owners
+remain the only authoring/source-of-truth implementations. This Worker does
+not fork that catalog, create another scheduler, or claim 52 operations ready.
