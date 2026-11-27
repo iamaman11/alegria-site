@@ -23,7 +23,8 @@ OWNERS = (
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness", "rust-e2e-truth-harness",
     "rust-e2e-pg-harness", "rust-e2e-outbox-harness", "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries", "rust-e2e-qdrant-effects-binaries",
-    "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e", "rust-pg-app-e2e",
+    "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e",
+    "rust-qdrant-temporal-legacy-e2e", "rust-pg-app-e2e",
     "rust-temporal-legacy-e2e", "rust-temporal-v3-e2e", "rust-pg-e2e",
     "rust-outbox-e2e", "rust-truth-e2e", "product-truth",
     "rust-security", "cloudflare-static-build",
@@ -294,6 +295,7 @@ def check() -> None:
     assert "actual !== expected" in optional_pg_ab
     assert "head_sha: expected, event: 'pull_request'" in optional_pg_ab
     assert "fullRunMarkers.every(name => completedJobs.has(name))" in optional_pg_ab
+    assert "'rust-qdrant-temporal-legacy-e2e (temporal_qdrant)'" in optional_pg_ab
     assert "'CI', 'impact', 'verify'" in optional_pg_ab
     assert "result.total_count !== result.jobs.length" in optional_pg_ab
     # GH Actions job.head_sha identifies the *trigger* head, not the source
@@ -361,7 +363,8 @@ def check() -> None:
         assert "cargo test --workspace --locked" not in block
 
     runner_names = (
-        "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e", "rust-pg-app-e2e",
+        "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e",
+        "rust-qdrant-temporal-legacy-e2e", "rust-pg-app-e2e",
         "rust-temporal-legacy-e2e", "rust-temporal-v3-e2e",
         "rust-pg-e2e", "rust-outbox-e2e", "rust-truth-e2e",
     )
@@ -375,6 +378,7 @@ def check() -> None:
         "rust-graph-e2e": ("rust-e2e-graph-harness", "graph_harness"),
         "rust-qdrant-e2e": ("rust-e2e-qdrant-harness", "qdrant_harness"),
         "rust-qdrant-temporal-e2e": ("rust-e2e-qdrant-temporal-harness", "qdrant_temporal_harness"),
+        "rust-qdrant-temporal-legacy-e2e": ("rust-e2e-qdrant-temporal-harness", "qdrant_temporal_harness"),
         "rust-pg-app-e2e": ("rust-e2e-pg-app-harness", "pg_app_harness"),
         "rust-temporal-legacy-e2e": ("rust-e2e-temporal-harness", "temporal_harness"),
         "rust-temporal-v3-e2e": ("rust-e2e-temporal-harness", "temporal_harness"),
@@ -387,7 +391,11 @@ def check() -> None:
         assert f"name: {owner} (${{{{ matrix.shard }}}})" in runner
         assert f"needs.{compiler}.result == 'success'" in runner
         assert f"name: {compiler}-${{{{ github.sha }}}}" in runner
-        assert f'--kind {kind} --source-sha "$GITHUB_SHA"' in runner
+        if owner == "rust-qdrant-temporal-legacy-e2e":
+            assert f'for kind in {kind} qdrant_effects legacy_qdrant_parent; do' in runner
+            assert '--kind "$kind" --source-sha "$GITHUB_SHA"' in runner
+        else:
+            assert f'--kind {kind} --source-sha "$GITHUB_SHA"' in runner
         assert "name: ci-owner-impact" in runner
         assert "--execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'" in runner
         assert "fail-fast: false" in runner
@@ -417,26 +425,42 @@ def check() -> None:
     assert '--kind v3 --source-sha "$GITHUB_SHA"' not in pure_runner
     assert 'name: rust-e2e-v3-${{ github.sha }}' in runner_blocks["rust-pg-e2e"]
     qdrant_runner = runner_blocks["rust-qdrant-temporal-e2e"]
+    assert (
+        "needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, "
+        "rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries]"
+    ) in qdrant_runner
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
-    assert "needs.rust-e2e-legacy-binaries.result == 'success'" in qdrant_runner
+    assert "rust-e2e-legacy-binaries" not in qdrant_runner
+    legacy_qdrant_runner = runner_blocks["rust-qdrant-temporal-legacy-e2e"]
+    assert (
+        "needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, "
+        "rust-e2e-qdrant-effects-binaries, rust-e2e-legacy-binaries]"
+    ) in legacy_qdrant_runner
+    assert "needs.rust-e2e-legacy-binaries.result == 'success'" in legacy_qdrant_runner
+    assert "needs.rust-e2e-v3-binaries" not in legacy_qdrant_runner
+    assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in legacy_qdrant_runner
     # A Qdrant/Temporal runner used to fetch all seven independent artifact
     # bundles even when one live shard uses only two. GitHub artifact download
     # stalls then dominated the PR critical path. Every shard must continue
     # installing the exact source-bound binaries it actually executes.
     mandatory_shards = (
-        "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+        "temporal_mixed_v6", "temporal_mixed_v7",
         "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
     )
     assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"] == mandatory_shards
+    assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"] == ("temporal_qdrant",)
     download_gates = {
-        "qdrant-effects": 'contains(fromJSON(\'["temporal_qdrant","temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]\'), matrix.shard)',
-        "v3": 'contains(fromJSON(\'["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2","temporal_dataforseo","temporal_acquisition"]\'), matrix.shard)',
+        "qdrant-effects": 'contains(fromJSON(\'["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]\'), matrix.shard)',
         "dataforseo-effects": "matrix.shard == 'temporal_dataforseo'",
         "acquisition-pure": "matrix.shard == 'temporal_acquisition'",
         "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
-        "legacy-qdrant-parent": "matrix.shard == 'temporal_qdrant'",
     }
+    assert (
+        "- uses: actions/download-artifact@v7\n"
+        "        with:\n"
+        "          name: rust-e2e-v3-${{ github.sha }}"
+    ) in qdrant_runner
     for artifact, condition in download_gates.items():
         assert (
             f"- uses: actions/download-artifact@v7\n"
@@ -462,7 +486,6 @@ def check() -> None:
     assert '--kind one_step_request_issuer --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-one-step-request-issuer-${{ github.sha }}' in architecture
     expected_installs = (
-        "temporal_qdrant) kinds=(qdrant_effects legacy_qdrant_parent)",
         "temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3)",
         "temporal_dataforseo) kinds=(v3 dataforseo_effects)",
         "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer)",
@@ -473,6 +496,12 @@ def check() -> None:
     assert 'for kind in "${kinds[@]}"; do' in qdrant_runner
     assert '--kind "$kind" --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 2
+    for bundle in ("qdrant-temporal-harness", "qdrant-effects", "legacy-qdrant-parent"):
+        assert f'name: rust-e2e-{bundle}-${{{{ github.sha }}}}' in legacy_qdrant_runner
+    assert 'for kind in qdrant_temporal_harness qdrant_effects legacy_qdrant_parent; do' in legacy_qdrant_runner
+    assert '--kind "$kind" --source-sha "$GITHUB_SHA"' in legacy_qdrant_runner
+    assert 'sudo install -d -o root -g root -m 0755 /etc/alegria' in legacy_qdrant_runner
+    assert "name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt" in legacy_qdrant_runner
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]

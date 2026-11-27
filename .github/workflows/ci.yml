@@ -57,6 +57,7 @@ jobs:
       graph_e2e_shards: ${{ steps.decide.outputs.graph_e2e_shards }}
       qdrant_e2e_shards: ${{ steps.decide.outputs.qdrant_e2e_shards }}
       qdrant_temporal_e2e_shards: ${{ steps.decide.outputs.qdrant_temporal_e2e_shards }}
+      qdrant_temporal_legacy_e2e_shards: ${{ steps.decide.outputs.qdrant_temporal_legacy_e2e_shards }}
       pg_app_e2e_shards: ${{ steps.decide.outputs.pg_app_e2e_shards }}
       temporal_legacy_e2e_shards: ${{ steps.decide.outputs.temporal_legacy_e2e_shards }}
       temporal_v3_e2e_shards: ${{ steps.decide.outputs.temporal_v3_e2e_shards }}
@@ -108,6 +109,7 @@ jobs:
               'rust-graph-e2e': 'graph_e2e_shards',
               'rust-qdrant-e2e': 'qdrant_e2e_shards',
               'rust-qdrant-temporal-e2e': 'qdrant_temporal_e2e_shards',
+              'rust-qdrant-temporal-legacy-e2e': 'qdrant_temporal_legacy_e2e_shards',
               'rust-pg-app-e2e': 'pg_app_e2e_shards',
               'rust-temporal-legacy-e2e': 'temporal_legacy_e2e_shards',
               'rust-temporal-v3-e2e': 'temporal_v3_e2e_shards',
@@ -936,7 +938,7 @@ jobs:
             const fullRunMarkers = [
               'CI', 'impact', 'verify', 'rust-e2e-temporal-harness',
               'rust-temporal-legacy-e2e (temporal_manual)', 'rust-pg-e2e (verify_d)',
-              'rust-qdrant-temporal-e2e (temporal_qdrant)',
+              'rust-qdrant-temporal-legacy-e2e (temporal_qdrant)',
             ];
             let green = null;
             for (const run of accepted.slice(0, 5)) {
@@ -1324,14 +1326,13 @@ jobs:
             --report automation/reports/ci_impact.json --suite-job auto \
             --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
 
-  # Mandatory live Temporal/provider proofs. Five exact source-suite filters
-  # run on isolated matrix instances instead of serially restarting containers
-  # nine times on the critical path of one host. No test may be skipped: the
-  # one source-owned E2E registry assigns each filter/count exactly once.
+  # Provider-free and modern Temporal proofs start after their actual binary
+  # compilers. Only the historical Qdrant shard needs the slower legacy DAG.
+  # All six source-owned E2E shards still run and remain required by the gate.
   rust-qdrant-temporal-e2e:
     name: rust-qdrant-temporal-e2e (${{ matrix.shard }})
-    needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries, rust-e2e-legacy-binaries]
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.architecture-and-rust.result == 'success' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.architecture-and-rust.result == 'success' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1351,12 +1352,11 @@ jobs:
           name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
       - uses: actions/download-artifact@v7
-        if: contains(fromJSON('["temporal_qdrant","temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
+        if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
         with:
           name: rust-e2e-qdrant-effects-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
       - uses: actions/download-artifact@v7
-        if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2","temporal_dataforseo","temporal_acquisition"]'), matrix.shard)
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
@@ -1375,11 +1375,6 @@ jobs:
         with:
           name: rust-e2e-one-step-request-issuer-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/one_step_request_issuer
-      - uses: actions/download-artifact@v7
-        if: matrix.shard == 'temporal_qdrant'
-        with:
-          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
         run: |
           set -euo pipefail
@@ -1390,7 +1385,6 @@ jobs:
           # base harness remains mandatory and every selected bundle is still
           # checked against its exact source SHA before any native test starts.
           case '${{ matrix.shard }}' in
-            temporal_qdrant) kinds=(qdrant_effects legacy_qdrant_parent) ;;
             temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3) ;;
             temporal_dataforseo) kinds=(v3 dataforseo_effects) ;;
             temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer) ;;
@@ -1405,6 +1399,59 @@ jobs:
       # Preserve the exact production /etc/alegria root-ownership fence even
       # on this disposable runner; the native test installs its typed catalog
       # with sudo rather than enabling any worker-side trust bypass.
+      - name: Provision root-owned native DAG route directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -o root -g root -m 0755 /etc/alegria
+          test "$(stat -c '%u:%g:%a' /etc/alegria)" = '0:0:755'
+          echo ALEGRIA_CI_ROOT_CATALOG_INSTALL_OK=true >> "$GITHUB_ENV"
+      - name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Historical Qdrant replay alone needs the legacy parent. Its separate
+  # runner cannot delay the five independent modern Temporal matrix shards.
+  rust-qdrant-temporal-legacy-e2e:
+    name: rust-qdrant-temporal-legacy-e2e (${{ matrix.shard }})
+    needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-legacy-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.architecture-and-rust.result == 'success' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.qdrant_temporal_legacy_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
+      - name: Verify actual parent, child and native three-provider E2E binary from one SHA
+        run: |
+          set -euo pipefail
+          for kind in qdrant_temporal_harness qdrant_effects legacy_qdrant_parent; do
+            python3 automation/rust_ci_artifacts.py install \
+              --kind "$kind" --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
+          done
       - name: Provision root-owned native DAG route directory
         shell: bash
         run: |
@@ -2085,6 +2132,7 @@ jobs:
       - rust-graph-e2e
       - rust-qdrant-e2e
       - rust-qdrant-temporal-e2e
+      - rust-qdrant-temporal-legacy-e2e
       - rust-pg-app-e2e
       - rust-temporal-legacy-e2e
       - rust-temporal-v3-e2e

@@ -1139,6 +1139,7 @@ CI_PR_OWNERS = (
     "rust-graph-e2e",
     "rust-qdrant-e2e",
     "rust-qdrant-temporal-e2e",
+    "rust-qdrant-temporal-legacy-e2e",
     "rust-pg-app-e2e",
     "rust-temporal-legacy-e2e",
     "rust-temporal-v3-e2e",
@@ -1374,9 +1375,10 @@ E2E_VERIFY_SHARDS = (
 E2E_GRAPH_SHARDS = ("graph",)
 E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
 E2E_QDRANT_TEMPORAL_SHARDS = (
-    "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+    "temporal_mixed_v6", "temporal_mixed_v7",
     "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
 )
+E2E_QDRANT_TEMPORAL_LEGACY_SHARDS = ("temporal_qdrant",)
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
 E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
 E2E_TEMPORAL_V3_SHARDS = ("temporal_pure",)
@@ -1387,6 +1389,7 @@ E2E_RUNNER_PARTITIONS = {
     "rust-graph-e2e": E2E_GRAPH_SHARDS,
     "rust-qdrant-e2e": E2E_QDRANT_SHARDS,
     "rust-qdrant-temporal-e2e": E2E_QDRANT_TEMPORAL_SHARDS,
+    "rust-qdrant-temporal-legacy-e2e": E2E_QDRANT_TEMPORAL_LEGACY_SHARDS,
     "rust-pg-app-e2e": E2E_PG_APP_SHARDS,
     "rust-temporal-legacy-e2e": E2E_TEMPORAL_LEGACY_SHARDS,
     "rust-temporal-v3-e2e": E2E_TEMPORAL_V3_SHARDS,

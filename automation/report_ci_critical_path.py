@@ -24,7 +24,6 @@ NATIVE_QDRANT_COMPILERS = (
     "rust-e2e-qdrant-temporal-harness",
     "rust-e2e-qdrant-effects-binaries",
     "rust-e2e-v3-binaries",
-    "rust-e2e-legacy-binaries",
 )
 E2E_PATHS = {
     "manual-temporal": (
@@ -32,8 +31,9 @@ E2E_PATHS = {
         ("rust-e2e-temporal-harness", "rust-e2e-legacy-binaries"),
     ),
     "native-qdrant": (
-        "rust-qdrant-temporal-e2e (temporal_qdrant)",
-        NATIVE_QDRANT_COMPILERS,
+        "rust-qdrant-temporal-legacy-e2e (temporal_qdrant)",
+        ("architecture-and-rust", "rust-e2e-qdrant-temporal-harness",
+         "rust-e2e-qdrant-effects-binaries", "rust-e2e-legacy-binaries"),
     ),
     "native-mixed-v6": (
         "rust-qdrant-temporal-e2e (temporal_mixed_v6)", NATIVE_QDRANT_COMPILERS,

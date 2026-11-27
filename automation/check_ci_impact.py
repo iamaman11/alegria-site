@@ -148,6 +148,7 @@ class ImpactFixtures(unittest.TestCase):
             "rust-e2e-temporal-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
             "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
             "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e",
+            "rust-qdrant-temporal-legacy-e2e",
             "rust-pg-app-e2e", "rust-temporal-legacy-e2e",
             "rust-temporal-v3-e2e", "rust-outbox-e2e",
         } <= set(report["selected_ci_jobs"]))
@@ -447,9 +448,11 @@ class ImpactFixtures(unittest.TestCase):
         ))
         self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], (
-            "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+            "temporal_mixed_v6", "temporal_mixed_v7",
             "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
         ))
+        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"],
+                         ("temporal_qdrant",))
 
     def test_full_real_e2e_shards_cover_all_63_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical

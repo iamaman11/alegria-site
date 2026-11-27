@@ -129,7 +129,7 @@ class CriticalPathEvidence(unittest.TestCase):
                 "2026-11-25T14:02:35Z", step=COMPILER_STEPS["rust-e2e-qdrant-effects-binaries"]),
             job("rust-e2e-v3-binaries", "2026-11-25T14:00:25Z",
                 "2026-11-25T14:02:33Z", step=COMPILER_STEPS["rust-e2e-v3-binaries"]),
-            job("rust-qdrant-temporal-e2e (temporal_qdrant)", "2026-11-25T14:03:20Z",
+            job("rust-qdrant-temporal-legacy-e2e (temporal_qdrant)", "2026-11-25T14:03:20Z",
                 "2026-11-25T14:04:20Z", step=LIVE_E2E_STEPS["native-qdrant"]),
             job("rust-e2e-outbox-harness", "2026-11-25T14:00:22Z",
                 "2026-11-25T14:02:31Z", step=COMPILER_STEPS["rust-e2e-outbox-harness"]),
@@ -139,11 +139,28 @@ class CriticalPathEvidence(unittest.TestCase):
         report = analyze(RUN, complete, NOW, checkout_sha="f" * 40, expected_attempt=1)
         routes = {path["route"]: path for path in report["measured_paths"]}
         self.assertEqual(set(routes), {"manual-temporal", "native-qdrant", "outbox"})
-        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 5)
+        self.assertEqual(len(routes["native-qdrant"]["compiler_steps"]), 4)
         self.assertEqual(routes["native-qdrant"]["last_compiler"],
                          "rust-e2e-legacy-binaries")
         self.assertEqual(routes["outbox"]["last_compiler"], "rust-e2e-legacy-binaries")
         self.assertFalse(report["event_to_green_180_confirmed"])
+
+    def test_modern_temporal_shard_does_not_wait_for_legacy_compiler(self) -> None:
+        modern_jobs = [JOBS[0]] + [
+            job(owner, "2026-11-25T14:00:24Z", "2026-11-25T14:02:35Z",
+                step=COMPILER_STEPS[owner])
+            for owner in (
+                "architecture-and-rust", "rust-e2e-qdrant-temporal-harness",
+                "rust-e2e-qdrant-effects-binaries", "rust-e2e-v3-binaries",
+            )
+        ] + [job("rust-qdrant-temporal-e2e (temporal_mixed_v7)",
+                 "2026-11-25T14:02:40Z", "2026-11-25T14:03:20Z",
+                 step=LIVE_E2E_STEPS["native-mixed-v7"])]
+        report = analyze(RUN, modern_jobs, NOW)
+        route = next(path for path in report["measured_paths"]
+                     if path["route"] == "native-mixed-v7")
+        self.assertEqual(len(route["compiler_steps"]), 4)
+        self.assertNotEqual(route["last_compiler"], "rust-e2e-legacy-binaries")
 
 
 if __name__ == "__main__":
