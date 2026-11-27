@@ -204,6 +204,10 @@ ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES = frozenset({
     # SQL issuer, Temporal Start or authorization authority; all policy and
     # one-use checks remain JSON-free in one_step_request_grant_v1.rs.
     "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
+    # Exact bounded canonical OAuth MCP HMAC envelope at the private native
+    # admission boundary. This verifier has no SQL authority or Temporal
+    # execution access; no sibling operation_protocol module gains JSON rights.
+    "app/rust/crates/operation_protocol/src/signed_mcp_admission_v1.rs",
     # Only the independently credentialed issuer's strict private request
     # and protected catalog decoding; no JSON ingress in its SQL/ACL main.
     "app/rust/services/one_step_request_issuer/src/issue_json.rs",
