@@ -331,10 +331,13 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
 #[serial]
 async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_source_issuer() {
     use acquisition::operation_owner_schema_json::acquisition_owner_schemas;
-    use acquisition::operations::{ClassifySourcePage, ClassifySourcePageInput};
-    use acquisition::source_relevance::PageUtilityClassifierOutput;
+    use acquisition::operations::{
+        ClassifySourcePage, ClassifySourcePageInput, DomBlockRelevanceInput, EvaluateDomBlocks,
+    };
+    use acquisition::source_relevance::{DomBlockRelevanceOutput, PageUtilityClassifierOutput};
     use acquisition::trusted_source_transform_v1::{
-        classify_source_page_payload_from_pinned_html_v1, CapturedHtmlPageV1,
+        classify_source_page_payload_from_pinned_html_v1,
+        dom_block_relevance_payload_from_pinned_html_v1, CapturedHtmlPageV1,
     };
     use operation_protocol::{
         operation_dag_parent_workflow_id_v2, owner_content_hash, Operation,
@@ -431,7 +434,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     .fetch_one(&pg.pool)
     .await
     .unwrap();
-    let transformed = classify_source_page_payload_from_pinned_html_v1(&CapturedHtmlPageV1 {
+    let snapshot = CapturedHtmlPageV1 {
         page_id: source_page_id,
         url: source_url.into(),
         final_url: Some(source_url.into()),
@@ -440,7 +443,8 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         raw_html: Some(raw_html.into()),
         raw_html_bytes: Some(i32::try_from(raw_html.len()).unwrap()),
         content_hash: Some(raw_hash.clone()),
-    })
+    };
+    let transformed = classify_source_page_payload_from_pinned_html_v1(&snapshot)
     .expect("derive strict typed Acquisition payload from captured HTML bytes");
     assert_eq!(transformed.raw_content_hash, raw_hash);
     assert_eq!(transformed.payload_hash, owner_content_hash(&transformed.payload));
@@ -464,6 +468,30 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     routes.validate_run_routes(&run).unwrap();
     assert_eq!(run.plan.scope.tenant_id, tenant);
 
+    // ACQ-02 now has the same independent raw-HTML source proof as ACQ-01.
+    // It is still a separate one-node run and cannot override the ACQ-01
+    // page-level extraction gate merely by scoring a content block highly.
+    let dom_derived = dom_block_relevance_payload_from_pinned_html_v1(&snapshot).unwrap();
+    let dom_input: DomBlockRelevanceInput =
+        serde_json::from_slice(&dom_derived.payload).unwrap();
+    assert_eq!(dom_input.blocks.len(), 1);
+    assert_eq!(dom_derived.raw_content_hash, raw_hash);
+    let dom_payload = dom_derived.payload;
+    let dom_record_id = Uuid::new_v4();
+    let dom_provenance = format!("source-record-v1:{dom_record_id}");
+    let (mut dom_run, dom_routes) =
+        acquisition_native_v2_case(EvaluateDomBlocks::contract(), dom_payload.clone(), &build_id);
+    dom_run
+        .plan
+        .external_artifacts
+        .get_mut(&"source".into())
+        .unwrap()
+        .provenance = dom_provenance.clone();
+    dom_run.admitted.get_mut(&"source".into()).unwrap().provenance = dom_provenance;
+    dom_run.plan.hash = PlanHash(String::new());
+    dom_run.plan = dom_run.plan.clone().seal(dom_routes.catalog()).unwrap();
+    dom_routes.validate_run_routes(&dom_run).unwrap();
+
     // Exact root-owned structural catalog: no user-supplied schema or Task
     // Queue may acquire source-issuer/owner authority.
     let contract = routes
@@ -473,6 +501,12 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     let schemas = acquisition_owner_schemas().unwrap();
     let owner_pin = &schemas[&contract.reference];
     owner_pin.validate(contract).unwrap();
+    let dom_contract = dom_routes
+        .catalog()
+        .contract(&dom_run.pinned_routes[0].operation)
+        .unwrap();
+    let dom_owner_pin = &schemas[&dom_contract.reference];
+    dom_owner_pin.validate(dom_contract).unwrap();
     let catalog = SiteLabV2CiRootCatalog::new();
     catalog.install(&serde_json::json!({
         "schema_revision":3,
@@ -481,6 +515,11 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             "route":run.pinned_routes[0],
             "parameter_schema":{"type":"object","additionalProperties":false},
             "owner_schema":owner_pin
+        },{
+            "contract":dom_contract,
+            "route":dom_run.pinned_routes[0],
+            "parameter_schema":{"type":"object","additionalProperties":false},
+            "owner_schema":dom_owner_pin
         }]
     }));
     let installed = trusted_owner_catalog::load_trusted_owner_bundle(&catalog.0).unwrap();
@@ -607,7 +646,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             .unwrap(),
         )
     };
-    let invoke = |request: &std::path::Path| {
+    let invoke = |request: &std::path::Path, installed_catalog: &std::path::Path| {
         Command::new(&pg_operator_bin)
             .arg("--operator-start-single-v2")
             .arg(request)
@@ -616,7 +655,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &operator_catalog)
+            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", installed_catalog)
             .env_remove("DATABASE_URL")
             .output()
             .expect("native exact-source single-step operator Start")
@@ -644,7 +683,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     };
     let parent_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
     let intent_file = make_intent(&run, "acquisition-source-authorized-intent");
-    let without_business = invoke(&intent_file);
+    let without_business = invoke(&intent_file, &operator_catalog);
     assert!(!without_business.status.success());
     assert!(client
         .get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
@@ -665,7 +704,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     .execute(&business_pool)
     .await
     .expect("independent tenant business issuer");
-    let without_source = invoke(&intent_file);
+    let without_source = invoke(&intent_file, &operator_catalog);
     assert!(!without_source.status.success());
     let without_source_json: serde_json::Value =
         serde_json::from_slice(&without_source.stdout).unwrap();
@@ -759,7 +798,10 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         .unwrap()
         .payload
         .push(b' ');
-    let forged_response = invoke(&make_intent(&forged, "acquisition-source-forged-payload"));
+    let forged_response = invoke(
+        &make_intent(&forged, "acquisition-source-forged-payload"),
+        &operator_catalog,
+    );
     assert!(!forged_response.status.success());
     let forged_json: serde_json::Value =
         serde_json::from_slice(&forged_response.stdout).unwrap();
@@ -773,7 +815,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         .await
         .is_err());
 
-    let successful = invoke(&intent_file);
+    let successful = invoke(&intent_file, &operator_catalog);
     assert!(
         successful.status.success(),
         "trusted source operator Start failed: stdout={} stderr={}",
@@ -788,7 +830,10 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     );
     assert_eq!(started["parent_workflow_id"], parent_id);
     assert_eq!(started["owner_admission"], "not_issued_by_start");
-    assert!(!invoke(&intent_file).status.success(), "duplicate Start must fail");
+    assert!(
+        !invoke(&intent_file, &operator_catalog).status.success(),
+        "duplicate Start must fail"
+    );
 
     let parent = client.get_workflow_handle::<UntypedWorkflow>(parent_id);
     let done = timeout(
@@ -829,6 +874,139 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             ))
             .count(),
         1
+    );
+
+    // A second independent operation consumes a *different* typed DTO,
+    // record UUID, business root and Temporal History. The same restricted
+    // issuer proves its bytes come from the pinned raw HTML; ACQ-01's source
+    // record must not authorize ACQ-02 or an unapproved tenant.
+    let dom_operator_catalog = mixed_v6_governance_issuer_catalog(&dom_run, &dom_routes);
+    let dom_parent_id = operation_dag_parent_workflow_id_v2(&dom_run.plan.scope.run_id);
+    let dom_intent = make_intent(&dom_run, "acquisition-blocks-source-intent");
+    sqlx::query(
+        "INSERT INTO pipeline.operation_dag_business_runs_v1
+           (run_id,tenant_id,context_key,plan_hash,parent_workflow_id,expires_at)
+         VALUES ($1,$2,$3,$4,$5,clock_timestamp()+interval '1 hour')",
+    )
+    .bind(Uuid::parse_str(&dom_run.plan.scope.run_id).unwrap())
+    .bind(tenant)
+    .bind(&context)
+    .bind(dom_run.plan.hash.as_str())
+    .bind(&dom_parent_id)
+    .execute(&business_pool)
+    .await
+    .unwrap();
+    let missing_dom_source = invoke(&dom_intent, &dom_operator_catalog);
+    assert!(!missing_dom_source.status.success());
+    let missing_dom_json: serde_json::Value =
+        serde_json::from_slice(&missing_dom_source.stdout).unwrap();
+    assert_eq!(
+        missing_dom_json["code"],
+        "independent_external_source_attestation_unavailable"
+    );
+
+    let mut foreign_tenant = dom_run.clone();
+    foreign_tenant.plan.scope.tenant_id = "foreign-tenant".into();
+    foreign_tenant
+        .plan
+        .external_artifacts
+        .get_mut(&"source".into())
+        .unwrap()
+        .scope.tenant_id = "foreign-tenant".into();
+    foreign_tenant
+        .admitted
+        .get_mut(&"source".into())
+        .unwrap()
+        .scope.tenant_id = "foreign-tenant".into();
+    foreign_tenant.plan.hash = PlanHash(String::new());
+    foreign_tenant.plan = foreign_tenant.plan.clone().seal(dom_routes.catalog()).unwrap();
+    assert!(dom_routes.validate_run_routes(&foreign_tenant).is_ok());
+    assert!(
+        !issue_source(&foreign_tenant, "acquisition-blocks-foreign-tenant")
+            .status
+            .success()
+    );
+
+    let mut forged_dom = dom_run.clone();
+    forged_dom
+        .admitted
+        .get_mut(&"source".into())
+        .unwrap()
+        .payload
+        .push(b' ');
+    assert!(
+        !issue_source(&forged_dom, "acquisition-blocks-forged-dto")
+            .status
+            .success()
+    );
+    let no_dom_record: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.operation_dag_external_source_attestations_v1
+         WHERE run_id=$1",
+    )
+    .bind(Uuid::parse_str(&dom_run.plan.scope.run_id).unwrap())
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(no_dom_record, 0);
+
+    let issued_dom = issue_source(&dom_run, "acquisition-blocks-authentic-html");
+    assert!(
+        issued_dom.status.success(),
+        "independent ACQ-02 source issuance failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&issued_dom.stdout),
+        String::from_utf8_lossy(&issued_dom.stderr),
+    );
+    let dom_source_receipt: serde_json::Value =
+        serde_json::from_slice(&issued_dom.stdout).unwrap();
+    assert_eq!(dom_source_receipt["record_id"], dom_record_id.to_string());
+    assert_eq!(
+        dom_source_receipt["payload_hash"],
+        owner_content_hash(&dom_payload)
+    );
+    let started_dom = invoke(&dom_intent, &dom_operator_catalog);
+    assert!(
+        started_dom.status.success(),
+        "independent ACQ-02 Start failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&started_dom.stdout),
+        String::from_utf8_lossy(&started_dom.stderr),
+    );
+    let dom_parent = client.get_workflow_handle::<UntypedWorkflow>(dom_parent_id);
+    let dom_done = timeout(
+        Duration::from_secs(90),
+        dom_parent.get_result(WorkflowGetResultOptions::default()),
+    )
+    .await
+    .expect("native source-verified ACQ-02 timed out")
+    .expect("native source-verified ACQ-02 failed");
+    let dom_receipt: OperationDagReceiptV1 = dom_done.to_value(&PayloadConverter::serde_json());
+    assert_eq!(dom_receipt.order, vec!["one_step".into()]);
+    let dom_decisions: DomBlockRelevanceOutput =
+        serde_json::from_slice(&dom_receipt.artifacts[&"result".into()].payload).unwrap();
+    assert_eq!(dom_decisions.blocks.len(), 1);
+    assert!(dom_decisions.blocks[0].allow_extraction);
+    assert!(!classified.allow_structural_extraction);
+    let dom_history = dom_parent
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .into_events()
+        .await
+        .unwrap();
+    for child_prefix in ["alegria-owner-validate-v1-", "alegria-owner-operation-v2-"] {
+        assert_eq!(
+            dom_history
+                .iter()
+                .filter(|event| matches!(
+                    &event.attributes,
+                    Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(child))
+                        if child.workflow_id.starts_with(child_prefix)
+                ))
+                .count(),
+            1,
+            "ACQ-02 must have one real server History for each owner Child"
+        );
+    }
+    assert!(
+        !invoke(&dom_intent, &dom_operator_catalog).status.success(),
+        "independent ACQ-02 duplicate Start must fail"
     );
     business_pool.close().await;
     source_pool.close().await;

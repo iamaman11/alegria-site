@@ -6,20 +6,24 @@
 //! persist the exact returned payload digest alongside the captured raw hash;
 //! Temporal orchestration never links this HTML parser or interprets its JSON.
 //!
-//! Revision V1 intentionally supports only a single HTML page and ACQ-01.
+//! Revision V1 supports a single pinned HTML page for ACQ-01 and ACQ-02.
 //! Unknown source formats fail closed instead of silently producing evidence.
 
 use ego_tree::NodeRef;
 use scraper::{node::Node, Html, Selector};
 use url::Url;
 
-use crate::operations::ClassifySourcePageInput;
+use crate::operations::{
+    ClassifySourcePageInput, DomBlockRelevanceInput, StrictDomBlockInput,
+};
+use crate::source_relevance::BlockRole;
 use operation_protocol::DAG_MAX_INPUT_BYTES;
 use primitives::hash::{blake3_hex, content_hash_v1};
 
 const MAX_CAPTURED_HTML_BYTES_V1: usize = 2 * 1024 * 1024;
 const MAX_VISIBLE_TEXT_BYTES_V1: usize = 256 * 1024;
 const MAX_TITLE_BYTES_V1: usize = 4 * 1024;
+const MAX_DOM_BLOCKS_V1: usize = 128;
 
 /// Exact subset of a captured `raw.pages` row used by the source issuer.
 /// There is deliberately no free-form, caller-authored title or raw text.
@@ -50,6 +54,7 @@ pub enum TrustedSourceTransformErrorV1 {
     NoVisibleContent,
     VisibleContentTooLarge,
     TitleTooLarge,
+    TooManyDomBlocks,
     WirePayloadTooLarge,
     WireSerializationFailed,
 }
@@ -71,6 +76,14 @@ pub struct DerivedClassifySourcePageV1 {
     /// BLAKE3 of `payload`, for the separately issued SQL source record.
     pub payload_hash: String,
     /// BLAKE3 of the original HTML's UTF-8 bytes, not the JSON input.
+    pub raw_content_hash: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DerivedDomBlockRelevanceV1 {
+    pub input: DomBlockRelevanceInput,
+    pub payload: Vec<u8>,
+    pub payload_hash: String,
     pub raw_content_hash: String,
 }
 
@@ -124,16 +137,19 @@ fn hidden_inline_style(style: Option<&str>) -> bool {
         .any(|declaration| declaration == "display:none" || declaration == "visibility:hidden")
 }
 
-fn collect_visible_text(node: NodeRef<'_, Node>) -> Result<String, TrustedSourceTransformErrorV1> {
+fn collect_visible_text_with_root(
+    node: NodeRef<'_, Node>,
+    include_landmark_root: bool,
+) -> Result<String, TrustedSourceTransformErrorV1> {
     // Iterative DOM walk: untrusted deeply nested HTML must not exhaust the
     // issuer's Rust call stack. Reject excess text instead of truncating it.
-    let mut pending = vec![node];
+    let mut pending = vec![(node, true)];
     let mut parts = Vec::new();
     let mut total_bytes = 0usize;
-    while let Some(current) = pending.pop() {
+    while let Some((current, root)) = pending.pop() {
         match current.value() {
             Node::Element(element) => {
-                if skipped_element(element.name())
+                if (skipped_element(element.name()) && !(root && include_landmark_root))
                     || element.attr("hidden").is_some()
                     || element.attr("inert").is_some()
                     || element.attr("aria-hidden") == Some("true")
@@ -158,9 +174,13 @@ fn collect_visible_text(node: NodeRef<'_, Node>) -> Result<String, TrustedSource
         }
         let mut children = current.children().collect::<Vec<_>>();
         children.reverse();
-        pending.extend(children);
+        pending.extend(children.into_iter().map(|child| (child, false)));
     }
     Ok(parts.join(" "))
+}
+
+fn collect_visible_text(node: NodeRef<'_, Node>) -> Result<String, TrustedSourceTransformErrorV1> {
+    collect_visible_text_with_root(node, false)
 }
 
 fn first_non_empty_text(
@@ -180,9 +200,9 @@ fn first_non_empty_text(
     Ok(None)
 }
 
-fn derive_classifier_input_v1(
+fn verified_raw_html_v1(
     source: &CapturedHtmlPageV1,
-) -> Result<(ClassifySourcePageInput, String), TrustedSourceTransformErrorV1> {
+) -> Result<(&str, String), TrustedSourceTransformErrorV1> {
     use TrustedSourceTransformErrorV1 as Error;
 
     if source.page_id <= 0 {
@@ -217,6 +237,15 @@ fn derive_classifier_input_v1(
         return Err(Error::InvalidSourceUrl);
     }
 
+    Ok((raw_html, raw_content_hash))
+}
+
+fn derive_classifier_input_v1(
+    source: &CapturedHtmlPageV1,
+) -> Result<(ClassifySourcePageInput, String), TrustedSourceTransformErrorV1> {
+    use TrustedSourceTransformErrorV1 as Error;
+    let (raw_html, raw_content_hash) = verified_raw_html_v1(source)?;
+    let url = source.final_url.as_deref().unwrap_or(&source.url);
     let document = Html::parse_document(raw_html);
     let title_selector = Selector::parse("head title").expect("static CSS selector");
     let h1_selector = Selector::parse("h1").expect("static CSS selector");
@@ -256,6 +285,95 @@ fn derive_classifier_input_v1(
         },
         raw_content_hash,
     ))
+}
+
+/// Derive a bounded set of observable semantic landmarks from exactly the
+/// same tenant-pinned HTML as ACQ-01. IDs come from the stored page ID and
+/// deterministic selected-block order, never from caller-authored element IDs or JSON. This is a
+/// raw block score, not permission to extract: ACQ-01's page gate still owns
+/// that decision in a later composition.
+pub fn dom_block_relevance_payload_from_pinned_html_v1(
+    source: &CapturedHtmlPageV1,
+) -> Result<DerivedDomBlockRelevanceV1, TrustedSourceTransformErrorV1> {
+    use TrustedSourceTransformErrorV1 as Error;
+    let (raw_html, raw_content_hash) = verified_raw_html_v1(source)?;
+    let document = Html::parse_document(raw_html);
+    let landmarks = Selector::parse(
+        "body > nav, body > header, body > main, body > article, body > section, body > aside, body > footer, body > form",
+    )
+    .expect("static semantic landmark selector");
+    let mut blocks = Vec::new();
+    let mut total_text_bytes = 0usize;
+    for element in document.select(&landmarks) {
+        if blocks.len() == MAX_DOM_BLOCKS_V1 {
+            return Err(Error::TooManyDomBlocks);
+        }
+        let role = match element.value().name() {
+            "nav" => BlockRole::Navigation,
+            "header" => BlockRole::Header,
+            "aside" => BlockRole::Sidebar,
+            "footer" => BlockRole::Footer,
+            "form" => BlockRole::Form,
+            _ => BlockRole::ContentMain,
+        };
+        let node = document.tree.get(element.id()).ok_or(Error::NoVisibleContent)?;
+        let text = collect_visible_text_with_root(node, true)?;
+        if text.is_empty() {
+            continue;
+        }
+        total_text_bytes = total_text_bytes
+            .checked_add(text.len())
+            .ok_or(Error::VisibleContentTooLarge)?;
+        if total_text_bytes > MAX_VISIBLE_TEXT_BYTES_V1 {
+            return Err(Error::VisibleContentTooLarge);
+        }
+        blocks.push(StrictDomBlockInput {
+            dom_block_id: format!("raw-page-{}-block-{:03}", source.page_id, blocks.len() + 1),
+            block_role: role,
+            text,
+        });
+    }
+    if !blocks.iter().any(|block| block.block_role == BlockRole::ContentMain) {
+        let main_selector = Selector::parse("main").expect("static main selector");
+        let body_selector = Selector::parse("body").expect("static body selector");
+        let scope = document
+            .select(&main_selector)
+            .next()
+            .or_else(|| document.select(&body_selector).next())
+            .ok_or(Error::NoVisibleContent)?;
+        let node = document.tree.get(scope.id()).ok_or(Error::NoVisibleContent)?;
+        let text = collect_visible_text(node)?;
+        if !text.is_empty() {
+            if blocks.len() == MAX_DOM_BLOCKS_V1 {
+                return Err(Error::TooManyDomBlocks);
+            }
+            total_text_bytes = total_text_bytes
+                .checked_add(text.len())
+                .ok_or(Error::VisibleContentTooLarge)?;
+            if total_text_bytes > MAX_VISIBLE_TEXT_BYTES_V1 {
+                return Err(Error::VisibleContentTooLarge);
+            }
+            blocks.push(StrictDomBlockInput {
+                dom_block_id: format!("raw-page-{}-block-{:03}", source.page_id, blocks.len() + 1),
+                block_role: BlockRole::ContentMain,
+                text,
+            });
+        }
+    }
+    if blocks.is_empty() {
+        return Err(Error::NoVisibleContent);
+    }
+    let input = DomBlockRelevanceInput { blocks };
+    let payload = serde_json::to_vec(&input).map_err(|_| Error::WireSerializationFailed)?;
+    if payload.len() > DAG_MAX_INPUT_BYTES {
+        return Err(Error::WirePayloadTooLarge);
+    }
+    Ok(DerivedDomBlockRelevanceV1 {
+        input,
+        payload_hash: blake3_hex(&payload),
+        payload,
+        raw_content_hash,
+    })
 }
 
 /// Deterministic source-to-wire transformation used only by an independently

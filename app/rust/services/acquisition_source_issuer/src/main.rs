@@ -17,13 +17,16 @@ use std::{
 };
 
 use acquisition::{
-    operations::{acquisition_pure_contracts, ClassifySourcePage},
+    operations::{acquisition_pure_contracts, ClassifySourcePage, EvaluateDomBlocks},
     trusted_source_transform_v1::{
-        classify_source_page_payload_from_pinned_html_v1, CapturedHtmlPageV1,
+        classify_source_page_payload_from_pinned_html_v1,
+        dom_block_relevance_payload_from_pinned_html_v1, CapturedHtmlPageV1,
     },
 };
 use anyhow::{ensure, Context, Result};
-use operation_protocol::{ArtifactBinding, ArtifactId, Operation, OperationDagRunV6, PortId};
+use operation_protocol::{
+    ArtifactBinding, ArtifactId, Operation, OperationDagRunV6, OperationRef, PortId,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -44,6 +47,7 @@ struct SourceIssuanceIntentV1 {
 
 struct CheckedSource<'a> {
     artifact_id: &'a ArtifactId,
+    operation: &'a OperationRef,
     record_id: Uuid,
 }
 
@@ -95,7 +99,15 @@ fn validate_source_intent(intent: &SourceIssuanceIntentV1, now: i64) -> Result<C
         "source issuer only supports a single pure Acquisition operation"
     );
     let node = &intent.run.plan.nodes[0];
-    let installed = ClassifySourcePage::contract();
+    let installed = acquisition_pure_contracts()?
+        .contract(&node.operation)
+        .cloned()
+        .context("source issuer only supports compiled Acquisition pure operations")?;
+    ensure!(
+        node.operation == ClassifySourcePage::contract().reference
+            || node.operation == EvaluateDomBlocks::contract().reference,
+        "source issuer cannot attest an unknown Acquisition operation"
+    );
     // The caller cannot silently replace pinned contracts or present a
     // self-consistent but unsealed plan. The operator independently rechecks
     // these constraints before Temporal Start using its private root catalog.
@@ -136,6 +148,7 @@ fn validate_source_intent(intent: &SourceIssuanceIntentV1, now: i64) -> Result<C
     let record_id = checked_record_id(&admitted.provenance)?;
     Ok(CheckedSource {
         artifact_id,
+        operation: &node.operation,
         record_id,
     })
 }
@@ -255,15 +268,25 @@ async fn issue_source(
         raw_html_bytes: row.try_get("raw_html_bytes")?,
         content_hash: row.try_get("content_hash")?,
     };
-    let derived = classify_source_page_payload_from_pinned_html_v1(&captured)
-        .context("pinned raw HTML failed strict typed Acquisition derivation")?;
+    let (payload, payload_hash, raw_content_hash) =
+        if checked.operation == &ClassifySourcePage::contract().reference {
+            let derived = classify_source_page_payload_from_pinned_html_v1(&captured)
+                .context("pinned raw HTML failed ACQ-01 typed derivation")?;
+            (derived.payload, derived.payload_hash, derived.raw_content_hash)
+        } else if checked.operation == &EvaluateDomBlocks::contract().reference {
+            let derived = dom_block_relevance_payload_from_pinned_html_v1(&captured)
+                .context("pinned raw HTML failed ACQ-02 typed derivation")?;
+            (derived.payload, derived.payload_hash, derived.raw_content_hash)
+        } else {
+            anyhow::bail!("source issuer cannot derive a foreign operation")
+        };
     let admitted = intent
         .run
         .admitted
         .get(checked.artifact_id)
         .context("typed source not admitted")?;
     ensure!(
-        admitted.payload == derived.payload,
+        admitted.payload == payload,
         "caller-proposed operation bytes differ from independently derived raw HTML"
     );
     let schema = &intent
@@ -287,9 +310,9 @@ async fn issue_source(
     .bind(intent.run.plan.hash.as_str())
     .bind(checked.artifact_id.as_str())
     .bind(sqlx::types::Json(schema))
-    .bind(&derived.payload_hash)
+    .bind(&payload_hash)
     .bind(intent.source_page_id)
-    .bind(&derived.raw_content_hash)
+    .bind(&raw_content_hash)
     .bind(&raw_html_sha256)
     .bind(intent.expires_at_unix_seconds)
     .execute(&mut **transaction)
@@ -299,7 +322,7 @@ async fn issue_source(
         inserted.rows_affected() == 1,
         "issuer inserted no source proof"
     );
-    Ok(derived.payload_hash)
+    Ok(payload_hash)
 }
 
 async fn execute(path: &Path) -> Result<()> {

@@ -1,6 +1,6 @@
 use super::*;
-use crate::operations::{ClassifySourcePage, PureAcquisitionOperation};
-use crate::source_relevance::PageMode;
+use crate::operations::{ClassifySourcePage, EvaluateDomBlocks, PureAcquisitionOperation};
+use crate::source_relevance::{BlockRole, PageMode};
 
 const SOURCE_HTML: &str = "<html><head><title>Captured page</title></head><body>\
     <nav>Cookie menu directory</nav>\
@@ -170,4 +170,60 @@ fn stored_untrusted_title_cannot_override_captured_html() {
     let html = "<html><body><main><h1>Observed H1</h1><p>Body.</p></main></body></html>";
     let derived = classify_source_page_payload_from_pinned_html_v1(&snapshot(html)).unwrap();
     assert_eq!(derived.input.title, "Observed H1");
+}
+
+#[test]
+fn trusted_html_derives_independently_scored_dom_landmarks() {
+    let html = "<html><body><nav>Visa menu</nav><main><h1>Visa fee</h1>\
+        <p>Official documents EUR 25</p><script>forged</script>\
+        <div hidden>Secret</div></main><footer>Related links</footer></body></html>";
+    let derived = dom_block_relevance_payload_from_pinned_html_v1(&snapshot(html)).unwrap();
+    assert_eq!(derived.raw_content_hash, content_hash_v1(html));
+    assert_eq!(derived.payload_hash, blake3_hex(&derived.payload));
+    assert_eq!(derived.input.blocks.len(), 3);
+    assert_eq!(derived.input.blocks[0].block_role, BlockRole::Navigation);
+    assert_eq!(derived.input.blocks[0].text, "Visa menu");
+    assert_eq!(derived.input.blocks[1].block_role, BlockRole::ContentMain);
+    assert_eq!(derived.input.blocks[1].text, "Visa fee Official documents EUR 25");
+    assert_eq!(derived.input.blocks[2].block_role, BlockRole::Footer);
+    assert_eq!(derived.input.blocks[2].text, "Related links");
+    assert_eq!(derived.input.blocks[0].dom_block_id, "raw-page-42-block-001");
+    let decisions = EvaluateDomBlocks::evaluate(&derived.input);
+    assert!(!decisions.blocks[0].allow_extraction);
+    assert!(decisions.blocks[1].allow_extraction);
+    assert!(!decisions.blocks[2].allow_extraction);
+    let repeated = dom_block_relevance_payload_from_pinned_html_v1(&snapshot(html)).unwrap();
+    assert_eq!(derived.payload, repeated.payload);
+}
+
+#[test]
+fn trusted_dom_source_denies_forged_metadata_and_unbounded_landmarks() {
+    let mut forged = snapshot(SOURCE_HTML);
+    forged.content_hash = Some("0".repeat(64));
+    assert_eq!(
+        dom_block_relevance_payload_from_pinned_html_v1(&forged).unwrap_err(),
+        TrustedSourceTransformErrorV1::RawContentHashMismatch
+    );
+    let only_hidden = "<html><body><nav hidden>Link</nav><main hidden>Secret</main></body></html>";
+    assert_eq!(
+        dom_block_relevance_payload_from_pinned_html_v1(&snapshot(only_hidden)).unwrap_err(),
+        TrustedSourceTransformErrorV1::NoVisibleContent
+    );
+    let huge = format!("<html><body>{}</body></html>", "<main>x</main>".repeat(129));
+    assert_eq!(
+        dom_block_relevance_payload_from_pinned_html_v1(&snapshot(&huge)).unwrap_err(),
+        TrustedSourceTransformErrorV1::TooManyDomBlocks
+    );
+}
+
+#[test]
+fn dom_block_score_does_not_override_page_level_extraction_denial() {
+    let html = "<html><head><title>Directory</title></head><body>\
+        <main><p>Visa fee EUR 25</p><p>All countries directory</p></main></body></html>";
+    let captured = snapshot(html);
+    let page = classify_source_page_payload_from_pinned_html_v1(&captured).unwrap();
+    let blocks = dom_block_relevance_payload_from_pinned_html_v1(&captured).unwrap();
+    assert!(!ClassifySourcePage::evaluate(&page.input).allow_structural_extraction);
+    assert!(EvaluateDomBlocks::evaluate(&blocks.input).blocks[0].allow_extraction);
+    // A future DAG consumer must compose both decisions and refuse extraction.
 }

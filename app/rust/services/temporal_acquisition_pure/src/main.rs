@@ -65,9 +65,14 @@ fn verify_owner_validation(request: &OwnerValidationRequestV1) -> Result<()> {
             && request.command_bytes == b"{}",
         "Acquisition ValidateOnly rejects foreign contract or settings"
     );
-    // Produced inputs are unavailable until the previous child completes;
-    // ValidateOnly checks their declared schema now, and the actual bytes are
-    // decoded by the owner after the parent supplies the completed artifact.
+    // The operation Child deliberately refuses Produced inputs until an
+    // independent reader can attest the producer's actual Temporal History.
+    // ValidateOnly must report the same restriction before the parent starts
+    // any Child: accepting an impossible recipe is misleading and unsafe.
+    ensure!(
+        request.produced_input_ports.is_empty(),
+        "Acquisition Produced input requires independently attested Temporal History"
+    );
     for (port, external) in &request.external_inputs {
         ensure!(port == &PortId::from("input"), "foreign Acquisition port");
         validate_acquisition_pure_input(&request.operation, &external.payload)
@@ -374,6 +379,17 @@ mod tests {
             br#"{"url":"https://example.org","title":"Content","raw_text":"x","secret":true}"#
                 .to_vec();
         assert!(verify_owner_validation(&changed).is_err());
+    }
+
+    #[test]
+    fn validate_only_rejects_produced_input_before_child_start() {
+        let mut request = valid_owner_validation();
+        request.external_inputs.clear();
+        request.produced_input_ports.insert(PortId::from("input"));
+        // The generic V1 wire considers this an otherwise valid schema-only
+        // request. This particular owner cannot yet attest its producer.
+        request.validate_shape().unwrap();
+        assert!(verify_owner_validation(&request).is_err());
     }
 
     #[test]
