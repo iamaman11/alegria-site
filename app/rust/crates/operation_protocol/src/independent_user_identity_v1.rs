@@ -162,7 +162,8 @@ pub fn preflight_trusted_oauth_one_step_identity_v1(
         .expires_at_unix_seconds
         .checked_sub(claims_from_verifier.issued_at_unix_seconds);
     if claims_from_verifier.issued_at_unix_seconds < 0
-        || claims_from_verifier.not_before_unix_seconds < claims_from_verifier.issued_at_unix_seconds
+        || claims_from_verifier.not_before_unix_seconds
+            < claims_from_verifier.issued_at_unix_seconds
         || claims_from_verifier.expires_at_unix_seconds
             <= claims_from_verifier.not_before_unix_seconds
         || !matches!(
@@ -333,7 +334,13 @@ mod tests {
     fn verifier_claims_require_exact_resource_subject_acl_and_grant() {
         let (claims, resource, mapping, policy, locator, grant) = fixture();
         let checked = preflight_trusted_oauth_one_step_identity_v1(
-            &claims, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+            &claims,
+            &resource,
+            &mapping,
+            &policy,
+            &locator,
+            &grant,
+            1_900_000_100,
         )
         .unwrap();
         assert_eq!(checked.request_id(), locator.request_id.as_str());
@@ -341,34 +348,64 @@ mod tests {
         altered.subject = "another-oauth-account".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &altered,
+                &resource,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::UnmappedUser)
         ));
         let mut altered = claims.clone();
         altered.tenant_id = "tenant-b".into();
         assert!(preflight_trusted_oauth_one_step_identity_v1(
-            &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+            &altered,
+            &resource,
+            &mapping,
+            &policy,
+            &locator,
+            &grant,
+            1_900_000_100,
         )
         .is_err());
         let mut wrong = grant.clone();
         wrong.authenticated_principal_id = "other-principal".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &claims, &resource, &mapping, &policy, &locator, &wrong, 1_900_000_100,
+                &claims,
+                &resource,
+                &mapping,
+                &policy,
+                &locator,
+                &wrong,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::ScopeMismatch)
         ));
         let mut wrong = policy.clone();
         wrong.context_key = "another-context".into();
         assert!(preflight_trusted_oauth_one_step_identity_v1(
-            &claims, &resource, &mapping, &wrong, &locator, &grant, 1_900_000_100,
+            &claims,
+            &resource,
+            &mapping,
+            &wrong,
+            &locator,
+            &grant,
+            1_900_000_100,
         )
         .is_err());
         let mut other = locator.clone();
         other.request_id = "d8d1760b-9732-4480-b082-237bad3dd845".into();
         assert!(preflight_trusted_oauth_one_step_identity_v1(
-            &claims, &resource, &mapping, &policy, &other, &grant, 1_900_000_100,
+            &claims,
+            &resource,
+            &mapping,
+            &policy,
+            &other,
+            &grant,
+            1_900_000_100,
         )
         .is_err());
     }
@@ -386,27 +423,54 @@ mod tests {
         ] {
             let mut altered = claims.clone();
             altered.scope = bad_scope.into();
-            assert!(preflight_trusted_oauth_one_step_identity_v1(
-                &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
-            )
-            .is_err(), "{bad_scope:?}");
+            assert!(
+                preflight_trusted_oauth_one_step_identity_v1(
+                    &altered,
+                    &resource,
+                    &mapping,
+                    &policy,
+                    &locator,
+                    &grant,
+                    1_900_000_100,
+                )
+                .is_err(),
+                "{bad_scope:?}"
+            );
         }
         let mut altered = claims.clone();
         altered.not_before_unix_seconds = 1_900_000_200;
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &altered,
+                &resource,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::NotActive)
         ));
         assert!(preflight_trusted_oauth_one_step_identity_v1(
-            &claims, &resource, &mapping, &policy, &locator, &grant, 1_900_000_600,
+            &claims,
+            &resource,
+            &mapping,
+            &policy,
+            &locator,
+            &grant,
+            1_900_000_600,
         )
         .is_err());
         let mut altered = claims.clone();
         altered.expires_at_unix_seconds = 1_900_086_400;
         assert!(preflight_trusted_oauth_one_step_identity_v1(
-            &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+            &altered,
+            &resource,
+            &mapping,
+            &policy,
+            &locator,
+            &grant,
+            1_900_000_100,
         )
         .is_err());
         let mut altered = claims.clone();
@@ -414,7 +478,13 @@ mod tests {
         altered.expires_at_unix_seconds = i64::MAX;
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &altered, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &altered,
+                &resource,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::NotActive)
         ));
@@ -422,7 +492,13 @@ mod tests {
         altered.required_scope = "openid".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &claims, &altered, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &claims,
+                &altered,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::InvalidResourcePolicy)
         ));
@@ -435,7 +511,13 @@ mod tests {
         wrong.audience = "https://unrelated-service.example.test".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &wrong, &resource, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &wrong,
+                &resource,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::UntrustedIssuerOrAudience)
         ));
@@ -443,7 +525,13 @@ mod tests {
         wrong.issuer = "https://other-issuer.example.test".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &claims, &resource, &wrong, &policy, &locator, &grant, 1_900_000_100,
+                &claims,
+                &resource,
+                &wrong,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::UnmappedUser)
         ));
@@ -451,7 +539,13 @@ mod tests {
         wrong.expected_audience = "\r\nauth injection".into();
         assert!(matches!(
             preflight_trusted_oauth_one_step_identity_v1(
-                &claims, &wrong, &mapping, &policy, &locator, &grant, 1_900_000_100,
+                &claims,
+                &wrong,
+                &mapping,
+                &policy,
+                &locator,
+                &grant,
+                1_900_000_100,
             ),
             Err(OAuthOneStepIdentityErrorV1::InvalidResourcePolicy)
         ));

@@ -111,8 +111,7 @@ pub(crate) fn local_catalog_execution_readiness(
         }
         Some(_) => OperationGateV1::IndependentOwnerValidationRequired,
     };
-    let effectful = !contract.effects.is_empty()
-        || contract.idempotency != IdempotencyPolicy::Pure;
+    let effectful = !contract.effects.is_empty() || contract.idempotency != IdempotencyPolicy::Pure;
     OperationExecutionReadinessV1 {
         schema_revision: OPERATION_EXECUTION_READINESS_SCHEMA_REVISION_V1,
         status: "catalog_preview_only",

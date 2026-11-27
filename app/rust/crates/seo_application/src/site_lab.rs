@@ -36,8 +36,7 @@ pub use parameters_json::{
 };
 pub use readiness::{
     summarize_local_execution_readiness, OperationExecutionReadinessV1, OperationGateV1,
-    OperationReadinessSummaryV1,
-    OPERATION_EXECUTION_READINESS_SCHEMA_REVISION_V1,
+    OperationReadinessSummaryV1, OPERATION_EXECUTION_READINESS_SCHEMA_REVISION_V1,
 };
 pub use source_bridge::{
     bind_public_page_findings_v1, preview_serp_fetch_candidates_v1, PublicPageEvidenceInputV1,
@@ -258,8 +257,10 @@ pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, 
                 effects: contract.effects.clone(),
                 idempotency: contract.idempotency,
                 contract_hash: contract.fingerprint()?.as_str().to_owned(),
-                execution_readiness:
-                    readiness::local_catalog_execution_readiness(contract, parameters.as_ref()),
+                execution_readiness: readiness::local_catalog_execution_readiness(
+                    contract,
+                    parameters.as_ref(),
+                ),
                 parameters,
                 readiness: if missing_schema {
                     "missing_parameter_schema"

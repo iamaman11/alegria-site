@@ -19,9 +19,9 @@ use operation_protocol::{
     IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
     OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationId,
     OperationRef, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
-    TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
-    DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
-    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    TrustedOneStepRequestGrantV1, TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
+    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
+    OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -788,9 +788,12 @@ async fn try_read_granted_single_status_from_private_locator(
         "private one-shot status request locator",
     )?;
     let locator = decode_granted_start_status_locator(&bytes)?;
-    let pool = timeout(Duration::from_secs(15), checked_one_shot_status_pool(&tenant))
-        .await
-        .context("one-shot status SQL reader timed out")??;
+    let pool = timeout(
+        Duration::from_secs(15),
+        checked_one_shot_status_pool(&tenant),
+    )
+    .await
+    .context("one-shot status SQL reader timed out")??;
     // The independently bound SQL LOGIN, not the opaque locator, defines the
     // tenant. Explicit principal/policy/context filters prevent a shared
     // tenant from enumerating another user's request via a UUID.
@@ -838,7 +841,9 @@ async fn try_read_granted_single_status_from_private_locator(
         !canonical_run_id.is_nil()
             && workflow_id == operation_dag_parent_workflow_id_v2(&canonical_run_id.to_string())
             && plan_hash.len() == 64
-            && plan_hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && plan_hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
             && row.try_get::<String, _>("tenant_id")? == tenant
             && row.try_get::<String, _>("context_key")? == context,
         "one-shot SQL scope/parent identity differs from native workflow"
@@ -897,12 +902,9 @@ async fn independently_attest_granted_parent_start_history(
     status_reader_login: &str,
     trusted_reserver_login: &str,
 ) -> Result<Option<String>> {
-    let pool = operator_dag_read_v2::tenant_read_only_pool(
-        tenant,
-        GRANTED_STATUS_READER_DSN_ENV,
-        true,
-    )
-    .await?;
+    let pool =
+        operator_dag_read_v2::tenant_read_only_pool(tenant, GRANTED_STATUS_READER_DSN_ENV, true)
+            .await?;
     let governance_reader_login: String = sqlx::query_scalar("SELECT session_user::text")
         .fetch_one(&pool)
         .await?;
@@ -939,7 +941,10 @@ async fn independently_attest_granted_parent_start_history(
     if governance.is_empty() {
         return Ok(None);
     }
-    ensure!(governance.len() == 1, "ambiguous independent Temporal governance");
+    ensure!(
+        governance.len() == 1,
+        "ambiguous independent Temporal governance"
+    );
     let attestation = &governance[0];
     let server_run_id = attestation.try_get::<String, _>("parent_workflow_run_id")?;
     let server_uuid = uuid::Uuid::parse_str(&server_run_id)?;
@@ -1622,7 +1627,8 @@ mod tests {
 
     #[test]
     fn granted_status_locator_accepts_only_one_canonical_opaque_request_uuid() {
-        let canonical = br#"{"schema_revision":1,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08"}"#;
+        let canonical =
+            br#"{"schema_revision":1,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08"}"#;
         let checked = decode_granted_start_status_locator(canonical).unwrap();
         assert_eq!(
             checked.request_id.to_string(),

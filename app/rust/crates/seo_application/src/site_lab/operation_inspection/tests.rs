@@ -86,7 +86,9 @@ fn individual_operation_inspection_returns_exact_installed_metadata_without_exec
         OperationGateV1::NotVerified
     );
     assert_eq!(
-        report.execution_readiness.authenticated_principal_tenant_acl,
+        report
+            .execution_readiness
+            .authenticated_principal_tenant_acl,
         OperationGateV1::NotVerified
     );
     assert_eq!(
