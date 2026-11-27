@@ -69,7 +69,10 @@ impl<'de> Deserialize<'de> for UniqueJson {
                 UniqueJson::deserialize(deserializer)
             }
 
-            fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+            fn visit_seq<A: SeqAccess<'de>>(
+                self,
+                mut sequence: A,
+            ) -> Result<Self::Value, A::Error> {
                 let mut values = Vec::new();
                 while let Some(UniqueJson(value)) = sequence.next_element::<UniqueJson>()? {
                     values.push(value);
@@ -79,9 +82,7 @@ impl<'de> Deserialize<'de> for UniqueJson {
 
             fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
                 let mut values = serde_json::Map::new();
-                while let Some((key, UniqueJson(value))) =
-                    map.next_entry::<String, UniqueJson>()?
-                {
+                while let Some((key, UniqueJson(value))) = map.next_entry::<String, UniqueJson>()? {
                     if values.insert(key, value).is_some() {
                         return Err(A::Error::custom("duplicate owner descriptor JSON key"));
                     }
@@ -105,8 +106,19 @@ pub(crate) fn validate_json_schema_2020_12(bytes: &[u8]) -> Result<(), &'static 
                 return Err("owner schema dialect must be JSON Schema 2020-12");
             }
             if ![
-                "type", "properties", "items", "prefixItems", "enum", "const", "$ref",
-                "oneOf", "anyOf", "allOf", "not", "if", "patternProperties",
+                "type",
+                "properties",
+                "items",
+                "prefixItems",
+                "enum",
+                "const",
+                "$ref",
+                "oneOf",
+                "anyOf",
+                "allOf",
+                "not",
+                "if",
+                "patternProperties",
             ]
             .iter()
             .any(|key| object.contains_key(*key))

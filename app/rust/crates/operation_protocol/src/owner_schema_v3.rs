@@ -279,7 +279,6 @@ mod tests {
         }
     }
 
-
     fn spec(contract: &OperationContract) -> OwnerOperationSchemaV3 {
         OwnerOperationSchemaV3 {
             schema_revision: OWNER_SCHEMA_ATTESTATION_REVISION_V3,
@@ -438,6 +437,10 @@ mod tests {
         let mut schema = spec(&installed);
         schema.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
         schema.failure.descriptor_bytes = descriptor.encode_to_vec();
-        schema.seal(&installed).unwrap().validate(&installed).unwrap();
+        schema
+            .seal(&installed)
+            .unwrap()
+            .validate(&installed)
+            .unwrap();
     }
 }

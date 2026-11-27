@@ -3,8 +3,7 @@
 
 use super::{
     EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
-    PURE_DAG_ORCHESTRATOR_QUEUE, PURE_DAG_ORCHESTRATOR_V4_QUEUE,
-    PURE_DAG_ORCHESTRATOR_V5_QUEUE,
+    PURE_DAG_ORCHESTRATOR_QUEUE, PURE_DAG_ORCHESTRATOR_V4_QUEUE, PURE_DAG_ORCHESTRATOR_V5_QUEUE,
 };
 use std::path::Path;
 
@@ -30,8 +29,7 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
     );
     #[cfg(not(feature = "legacy-workflows"))]
     anyhow::ensure!(
-        queue != PURE_DAG_ORCHESTRATOR_V4_QUEUE
-            && queue != PURE_DAG_ORCHESTRATOR_V5_QUEUE,
+        queue != PURE_DAG_ORCHESTRATOR_V4_QUEUE && queue != PURE_DAG_ORCHESTRATOR_V5_QUEUE,
         "strict pure V4/V5 replay requires legacy-workflows binary feature"
     );
     #[cfg(feature = "legacy-qdrant-v1")]

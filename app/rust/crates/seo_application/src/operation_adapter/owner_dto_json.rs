@@ -5,8 +5,7 @@ use super::*;
 use serde_json::Value;
 
 fn descriptor_json(descriptor: &OwnerDtoDescriptorV3) -> Value {
-    serde_json::from_slice(&descriptor.descriptor_bytes)
-        .expect("derived JSON Schema is valid JSON")
+    serde_json::from_slice(&descriptor.descriptor_bytes).expect("derived JSON Schema is valid JSON")
 }
 
 #[test]
@@ -28,7 +27,10 @@ fn schema_is_derived_for_each_real_installed_semantic_contract() {
             .chain(schema.schema.outputs.values())
         {
             let json = descriptor_json(desc);
-            assert_eq!(json["$schema"], "https://json-schema.org/draft/2020-12/schema");
+            assert_eq!(
+                json["$schema"],
+                "https://json-schema.org/draft/2020-12/schema"
+            );
             assert_eq!(json["type"], "object");
             assert!(json["properties"].is_object());
         }
@@ -131,10 +133,10 @@ fn direction_sensitive_serde_wire_is_reflected_in_generated_input_and_output() {
         id: ArtifactTypeId::from("test.directional"),
         revision: 1,
     };
-    let decoded = descriptor_from_dto::<DirectionalDto>(&artifact, DtoWireRole::InputDeserialize)
-        .unwrap();
-    let encoded = descriptor_from_dto::<DirectionalDto>(&artifact, DtoWireRole::OutputSerialize)
-        .unwrap();
+    let decoded =
+        descriptor_from_dto::<DirectionalDto>(&artifact, DtoWireRole::InputDeserialize).unwrap();
+    let encoded =
+        descriptor_from_dto::<DirectionalDto>(&artifact, DtoWireRole::OutputSerialize).unwrap();
     assert_ne!(decoded.descriptor_bytes, encoded.descriptor_bytes);
     let decode_json = descriptor_json(&decoded);
     let encode_json = descriptor_json(&encoded);

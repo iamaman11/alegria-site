@@ -12,8 +12,8 @@ use std::convert::Infallible;
 
 use operation_protocol::{
     ArtifactSchema, ArtifactTypeId, Operation, OperationRef, OwnerDtoDescriptorFormatV3,
-    OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3,
-    PinnedOwnerOperationSchemaV3, PlanError, PortId, OWNER_SCHEMA_ATTESTATION_REVISION_V3,
+    OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3, PinnedOwnerOperationSchemaV3,
+    PlanError, PortId, OWNER_SCHEMA_ATTESTATION_REVISION_V3,
 };
 use schemars::{generate::SchemaSettings, JsonSchema};
 use seo_domain::extraction::operations::{

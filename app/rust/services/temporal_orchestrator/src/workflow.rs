@@ -13,6 +13,8 @@ use operation_protocol::{
     OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1, TemporalExecutionIdentityV4,
     TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
+#[cfg(feature = "legacy-workflows")]
+use operation_protocol::{OperationRef, PinnedOwnerOperationSchemaV3, DAG_MAX_INPUT_BYTES};
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,
@@ -25,8 +27,6 @@ use seo_application::operation_adapter::{
 };
 #[cfg(feature = "legacy-workflows")]
 use seo_application::operation_adapter::{execute_pure_dag, PureDagReceipt, PureDagRun};
-#[cfg(feature = "legacy-workflows")]
-use operation_protocol::{OperationRef, PinnedOwnerOperationSchemaV3, DAG_MAX_INPUT_BYTES};
 #[cfg(feature = "legacy-workflows")]
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "legacy-workflows")]
@@ -186,7 +186,10 @@ fn verify_owner_generated_pins_v5(input: &PureDagRunSchemaPinnedV5) -> anyhow::R
         .iter()
         .map(|node| node.operation.clone())
         .collect();
-    anyhow::ensure!(!required.is_empty(), "schema-pinned pure DAG requires nodes");
+    anyhow::ensure!(
+        !required.is_empty(),
+        "schema-pinned pure DAG requires nodes"
+    );
     anyhow::ensure!(
         input.owner_schemas.len() == required.len(),
         "pure DAG structural pins must cover exactly the referenced operations"

@@ -10,8 +10,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{
-    ContractCatalog, IdempotencyPolicy, OperationContract, OperationRef, PinnedOwnerOperationSchemaV3,
-    PinnedOwnerRouteV1, TrustedRouteCatalog,
+    ContractCatalog, IdempotencyPolicy, OperationContract, OperationRef,
+    PinnedOwnerOperationSchemaV3, PinnedOwnerRouteV1, TrustedRouteCatalog,
     OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
@@ -216,7 +216,8 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
         "unsupported trusted route catalog version"
     );
     anyhow::ensure!(
-        !config.entries.is_empty() || (config.schema_revision == 3 && !config.schema_entries.is_empty()),
+        !config.entries.is_empty()
+            || (config.schema_revision == 3 && !config.schema_entries.is_empty()),
         "trusted owner catalog is empty"
     );
     anyhow::ensure!(
@@ -252,14 +253,17 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
             );
         } else {
             let pinned = entry
-                .owner_schema.as_ref()
+                .owner_schema
+                .as_ref()
                 .context("v3 owner route must provide independently installed structural schema")?;
             pinned
                 .validate(&entry.contract)
                 .context("v3 effectful owner schema does not match installed contract")?;
             schema_contracts.register_contract(entry.contract.clone())?;
             anyhow::ensure!(
-                owner_schemas.insert(operation.clone(), pinned.clone()).is_none(),
+                owner_schemas
+                    .insert(operation.clone(), pinned.clone())
+                    .is_none(),
                 "duplicate trusted owner structural schema"
             );
             schema_build_ids.insert(operation.clone(), entry.route.build_id.clone());
@@ -284,7 +288,9 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
         schema_contracts.register_contract(entry.contract)?;
         schema_build_ids.insert(operation.clone(), entry.build_id);
         anyhow::ensure!(
-            owner_schemas.insert(operation, entry.owner_schema).is_none(),
+            owner_schemas
+                .insert(operation, entry.owner_schema)
+                .is_none(),
             "duplicate trusted owner structural schema"
         );
     }
@@ -399,9 +405,15 @@ mod tests {
             .seal(loaded.schema_contracts.contract(&reference).unwrap())
             .unwrap();
         assert!(loaded.verify_caller_schema(&reference, &forged).is_err());
-        assert!(loaded.verify_caller_schema(&OperationRef {
-            id: OperationId::from("unknown"), revision: 1,
-        }, installed).is_err());
+        assert!(loaded
+            .verify_caller_schema(
+                &OperationRef {
+                    id: OperationId::from("unknown"),
+                    revision: 1,
+                },
+                installed
+            )
+            .is_err());
     }
 
     #[test]
@@ -426,7 +438,10 @@ mod tests {
         assert_eq!(loaded.owner_schemas.len(), 1);
 
         let mut no_owner_schema: Value = serde_json::from_slice(&good).unwrap();
-        no_owner_schema["entries"][0].as_object_mut().unwrap().remove("owner_schema");
+        no_owner_schema["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("owner_schema");
         assert!(decode_trusted_catalog(&serde_json::to_vec(&no_owner_schema).unwrap()).is_err());
 
         let mut forged = no_owner_schema;
@@ -456,7 +471,8 @@ mod tests {
                 "owner_schema": pinned,
                 "build_id": "caller-selected"
             }]
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(decode_trusted_catalog(&invalid).is_err());
     }
 
