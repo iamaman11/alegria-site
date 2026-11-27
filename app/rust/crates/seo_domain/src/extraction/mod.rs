@@ -5,11 +5,14 @@
 //! Both the Temporal workflow and the in-process extraction adapter use these
 //! same domain types; the runtime payload registry keeps its established IDs.
 
+pub mod commercial_signals;
 pub mod editorial_topics;
 pub mod entity_spans;
 pub mod layer_routing;
 pub mod operational_entities;
 pub mod operations;
+pub mod seo_signals;
+pub mod signal_owner_operations;
 
 #[cfg(test)]
 mod tests {

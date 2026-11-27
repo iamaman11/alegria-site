@@ -43,9 +43,53 @@ SHA. Только после этого siteArchitect может показыв�
 исполнению**. Предварительный каталог и structural preview не равны работе.
 
 До прохождения этой приёмки показатели остаются фактическими: пять
-установленных pure-операций, два acquisition owner-only контракта,
+установленных pure-операций, отдельные пока не установленные owner-only контракты,
 **0/52 fully accepted**. Переименование интерфейса не изменяет ни эти
 числа, ни сохранённые Temporal History или SQL authority identities.
+
+### Дополнительный owner-local срез (ожидает exact-SHA CI и native E2E)
+
+В независимых предметных модулях подготовлены **13 отдельных pure-контрактов**
+для кандидатов матрицы. Они не добавлены в пользовательский каталог
+siteArchitect, пока нет доказанного владельцем исполняемого пути. Этот
+перечень показывает продвижение по source-level разработке, **не 13 новых
+работающих кнопок**:
+
+| Строка | Версионированная операция | Граница владельца |
+| --- | --- | --- |
+| ACQ-01 | `acquisition.classify_source_page@1` | `acquisition` |
+| ACQ-02 | `acquisition.evaluate_dom_blocks@1` | `acquisition` |
+| EX-04 | `seo_steps.extract_procedural_rules@1` | `seo_steps` |
+| EX-07 split A | `semantic.seo_signals@1` | `seo_signal_extraction` |
+| EX-07 split B | `semantic.commercial_signals@1` | `commercial_signal_extraction` |
+| TR-02 | `truth.judge_completeness@1` | `truth_domain` |
+| TR-03 | `truth.detect_contradictions@1` | `truth_domain` |
+| PL-02 | `seo_steps.normalize_serp_queries@1` | `seo_steps` |
+| PL-03 | `seo_steps.build_seo_opportunities@1` | `seo_steps` |
+| ED-04a | `ValidateContentContract` | `seo_domain` |
+| ED-04b | `ValidateDraftQuality` | `seo_domain` |
+| PUB-02 | `ValidateRenderPreview` | `seo_domain` |
+| PUB-04 | `DetectRebuildImpact` | `seo_domain` |
+
+Для ACQ-01/02 добавлен изолированный, **opt-in** native Temporal пакет
+`temporal_acquisition_pure`, фиксированная очередь
+`alegria-acquisition-pure-owner-v1` и два отдельных Workflow Types
+`AlegriaOwnerValidateV1Workflow`/`AlegriaOwnerOperationV1Workflow`.
+Выпуск worker binary не создаёт сам по себе trusted deployment route в
+generic DAG parent; нельзя обходить issuer, tenant, бюджет или owner History.
+До появления независимой проверки Temporal History предыдущего Child этот
+Worker **отклоняет Produced-входы**, даже при согласованных локальных hash;
+текущий исходный срез пригоден только для External-артефактов с отдельно
+организованным admission. Источник URL/документа сам по себе не аттестован.
+Нативные server History, активный Build-ID, индивидуальные приемочные
+прогоны и пользовательская регистрация для этих 13 операций **отсутствуют**.
+`SPLIT` не закрыт чистой половиной, когда в исходной операции остаются
+внешние эффекты. Цель — покрыть каждую релевантную строку, а не остановиться
+на этом source-only срезе.
+Отдельная ACQ-02 возвращает только *сырые оценки блоков*: в исходном
+`extraction_prelude` запрет структурного извлечения из ACQ-01 дополнительно
+сбрасывает `allow_extraction` у **всех** блоков. Композиция, в которой
+положительный ответ ACQ-02 обходил бы page-level gate, недопустима.
 
 ### Новая проверяемая структурная граница (после исходного baseline)
 
@@ -130,8 +174,8 @@ python3 automation/audit_operation_inventory.py --format json
 | Доказательство | Уровень, который оно подтверждает | Текущий статус |
 | --- | --- | --- |
 | Строка матрицы, исходный owner и классификация | Source inventory | 52/52 записаны; финальные границы не утверждены |
-| Rust typed `Input`/`Output`/`Failure`, versioned `Operation::contract` | Source-level owner contract; **компиляция требует CI** | 5 `semantic.*` + 2 owner-only ACQ; не все 52 |
-| Доверенная регистрация и однозначный исполнитель | Source-level installed/dispatch | 5 `semantic.*`; ACQ — нет |
+| Rust typed `Input`/`Output`/`Failure`, versioned `Operation::contract` | Source-level owner contract; **компиляция требует CI** | 5 `semantic.*` + 13 owner-only (включая 2 ACQ); не все 52 |
+| Доверенная регистрация и однозначный исполнитель | Source-level installed/dispatch | 5 `semantic.*`; новые 13 — нет |
 | Независимый one-node вызов и отрицательные случаи | Unit tests + после прогона CI проверка на SHA | Новые тесты для пяти pure; не подтверждает эффектные owner-гейты |
 | Native Temporal History, PG/Outbox owner receipt, replay, failures, tenant isolation | Physical E2E **на конкретном SHA** | 0 из 52 атрибутированы как fully-accepted |
 | Режимы production: RLS, provider budgets, rollback, Build-ID/drain | Production readiness | Не утверждено |

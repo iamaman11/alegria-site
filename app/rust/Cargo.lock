@@ -12,6 +12,7 @@ dependencies = [
  "operation_protocol",
  "primitives",
  "regex",
+ "schemars 1.2.3",
  "scraper",
  "serde",
  "serde_json",
@@ -4740,10 +4741,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "contracts",
+ "operation_protocol",
  "primitives",
  "prost",
  "regex",
  "runtime_models",
+ "schemars 1.2.3",
  "seo_domain",
  "serde",
  "serde_json",
@@ -5411,6 +5414,23 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "temporal_acquisition_pure"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "operation_protocol",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -6326,6 +6346,7 @@ version = "0.1.0"
 dependencies = [
  "operation_protocol",
  "regex",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
  "uuid",

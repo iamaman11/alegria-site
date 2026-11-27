@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PageMode {
     ContentPage,
@@ -22,7 +22,7 @@ pub struct PageUtilityClassifierInput {
     pub raw_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PageUtilityClassifierOutput {
     pub page_mode: PageMode,
     pub allow_procedural_extraction: bool,
@@ -75,7 +75,7 @@ pub fn classify_page(input: &PageUtilityClassifierInput) -> PageUtilityClassifie
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockRole {
     ContentMain,
@@ -97,7 +97,7 @@ pub struct DomBlockInput {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DomBlockDecision {
     pub dom_block_id: String,
     pub block_role: BlockRole,
@@ -105,7 +105,7 @@ pub struct DomBlockDecision {
     pub allow_extraction: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct DomBlockRelevanceOutput {
     pub blocks: Vec<DomBlockDecision>,
 }

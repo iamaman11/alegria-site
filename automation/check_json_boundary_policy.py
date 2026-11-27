@@ -203,6 +203,17 @@ ACQUISITION_OWNER_JSON_TEST_BOUNDARIES = frozenset({
     "app/rust/crates/acquisition/src/operations_json.rs",
 })
 
+# Newly isolated owner-local *pure* DTO wire and test boundaries. These exact
+# files may decode/inspect JSON for typed Input/Output and structural schema
+# tests, but neither a domain policy file nor the generic DAG gains a JSON
+# exemption. They do not start Temporal or grant external owner admission.
+PURE_OWNER_LOCAL_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",
+    "app/rust/services/temporal_acquisition_pure/src/main.rs",
+    "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
+    "app/rust/crates/truth_domain/src/operations_json.rs",
+})
+
 # A single opt-in cross-owner integration fixture constructs protected catalog
 # JSON and typed Temporal plan wire values for a real PG/Qdrant contract test.
 # No production owner, DAG runner, or sibling E2E file inherits this exception.
@@ -244,6 +255,7 @@ def is_allowed_json_boundary(path: Path) -> bool:
                | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES
                | TYPED_OPERATION_JSON_BOUNDARIES
                | ACQUISITION_OWNER_JSON_TEST_BOUNDARIES
+               | PURE_OWNER_LOCAL_JSON_BOUNDARIES
                | SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES
                | DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES):
         return True

@@ -8,6 +8,9 @@ import tomllib
 import unittest
 
 from check_rust_adapter_boundaries import (
+    ACQUISITION_PURE_OWNER_MANIFEST,
+    ACQUISITION_PURE_OWNER_SOURCE_FILES,
+    ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     DELIVERY_MANIFEST,
     DELIVERY_FORBIDDEN_LOCAL_OWNERS,
     MANIFEST_DEP_EXCEPTIONS,
@@ -25,6 +28,7 @@ from check_rust_adapter_boundaries import (
     QDRANT_TEMPORAL_E2E_SDKS,
     RUST_ROOT,
     VOYAGE_MANIFEST,
+    acquisition_pure_owner_direct_sdk_allowed,
     pg_e2e_direct_temporal_sdk_allowed,
     qdrant_e2e_direct_temporal_sdk_allowed,
     qdrant_runtime_direct_temporal_sdk_allowed,
@@ -32,6 +36,29 @@ from check_rust_adapter_boundaries import (
     pg_runtime_closure_failures,
     workspace_dependency_closure,
 )
+
+
+class NativeAcquisitionPureOwnerBoundaryTests(unittest.TestCase):
+    def test_exact_native_sdk_surface_and_no_provider_escape(self) -> None:
+        self.assertEqual({path.name for path in ACQUISITION_PURE_OWNER_SOURCE_FILES}, {"main.rs"})
+        self.assertEqual(MANIFEST_DEP_EXCEPTIONS[ACQUISITION_PURE_OWNER_MANIFEST],
+                         ACQUISITION_PURE_OWNER_TEMPORAL_SDKS)
+        for source in ACQUISITION_PURE_OWNER_SOURCE_FILES:
+            for sdk in ACQUISITION_PURE_OWNER_TEMPORAL_SDKS:
+                self.assertTrue(acquisition_pure_owner_direct_sdk_allowed(
+                    source, re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
+            for forbidden in ("reqwest", "sqlx", "neo4rs", "qdrant_client", "temporalio_sdk_core"):
+                self.assertFalse(acquisition_pure_owner_direct_sdk_allowed(
+                    source, re.compile(rf"\buse\s+{forbidden}::")))
+
+    def test_other_owner_files_and_domain_are_denied(self) -> None:
+        for source in (
+            ACQUISITION_PURE_OWNER_MANIFEST.parent / "src" / "future_owner.rs",
+            ACQUISITION_PURE_OWNER_MANIFEST.parent / "src" / "nested" / "main.rs",
+            RUST_ROOT / "crates" / "acquisition" / "src" / "operations.rs",
+        ):
+            self.assertFalse(acquisition_pure_owner_direct_sdk_allowed(
+                source, re.compile(r"\buse\s+temporalio_sdk::")))
 
 
 class PgE2eSdkBoundaryTests(unittest.TestCase):

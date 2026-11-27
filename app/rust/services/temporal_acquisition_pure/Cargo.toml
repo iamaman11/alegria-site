@@ -1,0 +1,18 @@
+[package]
+name = "temporal_acquisition_pure"
+version = "0.1.0"
+edition = "2021"
+
+# Isolated acquisition pure owner. Never links SQL/HTTP/provider effect SDKs.
+[dependencies]
+acquisition = { path = "../../crates/acquisition" }
+operation_protocol = { path = "../../crates/operation_protocol" }
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+temporalio-common = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }

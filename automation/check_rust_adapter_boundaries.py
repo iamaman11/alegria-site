@@ -52,6 +52,14 @@ TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "
 TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
 TEMPORAL_QDRANT_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_qdrant_effects" / "src"
 TEMPORAL_DATAFORSEO_SRC = RUST_ROOT / "services" / "temporal_dataforseo" / "src"
+TEMPORAL_ACQUISITION_PURE_SRC = RUST_ROOT / "services" / "temporal_acquisition_pure" / "src"
+ACQUISITION_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_acquisition_pure" / "Cargo.toml").resolve()
+ACQUISITION_PURE_OWNER_SOURCE_FILES = frozenset({
+    (TEMPORAL_ACQUISITION_PURE_SRC / "main.rs").resolve(),
+})
+ACQUISITION_PURE_OWNER_TEMPORAL_SDKS = frozenset({
+    "temporalio-sdk", "temporalio-client", "temporalio-common", "temporalio-macros",
+})
 OPERATION_PROTOCOL_MANIFEST = RUST_ROOT / "crates" / "operation_protocol" / "Cargo.toml"
 PG_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml"
 QDRANT_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
@@ -164,6 +172,7 @@ MANIFEST_DEP_EXCEPTIONS = {
     },
     QDRANT_EFFECTS_MANIFEST.resolve(): QDRANT_EFFECTS_RUNTIME_SDKS,
     DATAFORSEO_OWNER_MANIFEST: DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
+    ACQUISITION_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
         "qdrant-client",
@@ -480,6 +489,13 @@ def dataforseo_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str
     )
 
 
+def acquisition_pure_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=ACQUISITION_PURE_OWNER_SOURCE_FILES,
+        sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    )
+
+
 def main() -> int:
     violations: list[str] = []
 
@@ -511,6 +527,8 @@ def main() -> int:
             if qdrant_runtime_direct_temporal_sdk_allowed(file_path, pat):
                 continue
             if dataforseo_owner_direct_sdk_allowed(file_path, pat):
+                continue
+            if acquisition_pure_owner_direct_sdk_allowed(file_path, pat):
                 continue
             if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
                 f"{sdk.replace('-', '_')}::" in pat.pattern

@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 
 use operation_protocol::{
-    ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId, OperationOwnerId,
-    OperationRef, PortId,
+    ArtifactSchema, ContractCatalog, IdempotencyPolicy, Operation, OperationContract, OperationId,
+    OperationOwnerId, OperationRef, PlanError, PortId,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ use crate::source_relevance::{
 
 /// Versioned, strict external wire boundary. The existing V1/Temporal DTOs in
 /// `source_relevance` intentionally remain permissive for historical replay.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClassifySourcePageInput {
     pub url: String,
@@ -38,13 +38,13 @@ impl From<&ClassifySourcePageInput> for PageUtilityClassifierInput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DomBlockRelevanceInput {
     pub blocks: Vec<StrictDomBlockInput>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StrictDomBlockInput {
     pub dom_block_id: String,
@@ -118,7 +118,11 @@ impl PureAcquisitionOperation for ClassifySourcePage {
     }
 }
 
-/// ACQ-02: independent block relevance with the same rule used by the crawler.
+/// ACQ-02: independent *raw* block relevance with the same scoring rule used
+/// by the crawler. This is not an extraction authorization. The legacy
+/// extraction_prelude applies the ACQ-01 page-level structural-extraction
+/// gate *after* block scoring; a composed DAG must enforce the same gate
+/// before consuming any positive block score for extraction.
 pub struct EvaluateDomBlocks;
 
 impl Operation for EvaluateDomBlocks {
@@ -145,6 +149,16 @@ impl PureAcquisitionOperation for EvaluateDomBlocks {
                 .collect::<Vec<_>>(),
         )
     }
+}
+
+/// An owner-authored list of exact pure contracts, not a runtime admission
+/// grant. The independent worker must still be installed and verified before
+/// these can be offered as runnable siteArchitect operations.
+pub fn acquisition_pure_contracts() -> Result<ContractCatalog, PlanError> {
+    let mut catalog = ContractCatalog::default();
+    catalog.register::<ClassifySourcePage>()?;
+    catalog.register::<EvaluateDomBlocks>()?;
+    Ok(catalog)
 }
 
 // JSON encoding/decoding tests belong to a named wire-boundary module, not

@@ -7,6 +7,8 @@ pub mod contradictions;
 pub mod evidence;
 pub mod fact_verifier;
 pub mod hitl_decision;
+pub mod operation_owner_schema_json;
+pub mod operations;
 pub mod persisted_candidates;
 pub mod procedural_candidates;
 pub mod review_decisions;
