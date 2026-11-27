@@ -15,7 +15,7 @@ e2e = [
   "dep:url", "dep:testcontainers", "dep:tokio",
   "dep:uuid", "dep:vector_qdrant", "dep:truth_domain",
   "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
-  "dep:trusted_owner_catalog",
+  "dep:trusted_owner_catalog", "dep:dataforseo_contracts",
 ]
 
 [dependencies]
@@ -37,4 +37,5 @@ qdrant_contracts = { path = "../qdrant_contracts", optional = true }
 postgres_store = { path = "../postgres_store", optional = true }
 projection_contracts = { path = "../projection_contracts", optional = true }
 trusted_owner_catalog = { path = "../trusted_owner_catalog", optional = true }
+dataforseo_contracts = { path = "../dataforseo_contracts", optional = true }
 serde_json = { workspace = true }

@@ -363,6 +363,18 @@ MIXED_V6_NATIVE_RUNTIME_BINARIES = {
     "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
 }
+DATAFORSEO_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "-p", "temporal_dataforseo",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--bin", "temporal_dataforseo",
+)
+DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+    "INTEGRATION_DATAFORSEO_EFFECT_WORKER_BIN": "temporal_dataforseo",
+}
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
@@ -723,6 +735,37 @@ SUITE_OWNERS = {
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "mixed_v2_native_",
             "--locked", "--", "--nocapture",
+        ),
+    },
+    # The only full-system DataForSEO proof uses REAL Temporal parent,
+    # ValidateOnly and effect Child Histories; distinct business, governance,
+    # provider issuer and Activity LOGINS; disposable PostgreSQL's immutable
+    # ledger; and real 127.0.0.1 POST/GET bytes. The native test kills the
+    # worker while GET is pending, and rejects ambiguous POST replays.
+    # It does NOT contact a paid DataForSEO endpoint.
+    "dataforseo_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_dataforseo_tests.rs",
+            "app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_pg_effects/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts",
+                        "operation_protocol", "temporal_orchestrator",
+                        "temporal_pg_effects", "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": DATAFORSEO_NATIVE_V2_PREPARE,
+        "runtime_binaries": DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "dataforseo_native_v2_", "--locked", "--", "--nocapture",
         ),
     },
     "temporal_restart": {
@@ -1245,6 +1288,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         # One live Temporal/PG/Qdrant V2 proof plus one isolated test of
         # the exact trusted Site Lab provider catalog on real owner contracts.
         ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+        ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

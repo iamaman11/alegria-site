@@ -1120,6 +1120,13 @@ jobs:
         run: |
           python3 automation/rust_ci_artifacts.py pack --kind v3 --source-sha "$GITHUB_SHA" \
             --directory automation/reports/rust-ci-artifacts/v3
+      - name: Build independent DataForSEO offline owner for physical Temporal E2E
+        working-directory: app/rust
+        run: cargo build --locked -p temporal_dataforseo --bin temporal_dataforseo
+      - name: Package isolated exact-source DataForSEO owner (no provider credentials)
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind dataforseo_effects --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/dataforseo_effects
       - name: Prove exact-source generic Temporal rejects every historical replay mode
         run: |
           set -euo pipefail
@@ -1137,6 +1144,11 @@ jobs:
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/v3/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-dataforseo-effects-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/dataforseo_effects/
           if-no-files-found: error
 
   # The Qdrant SDK/PG effects runtime is compiled and attested independently
@@ -1311,6 +1323,10 @@ jobs:
           path: ${{ runner.temp }}/rust-ci-bundles/v3
       - uses: actions/download-artifact@v7
         with:
+          name: rust-e2e-dataforseo-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/dataforseo_effects
+      - uses: actions/download-artifact@v7
+        with:
           name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
@@ -1325,6 +1341,9 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind v3 --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind dataforseo_effects --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/dataforseo_effects"
           python3 automation/rust_ci_artifacts.py install \
             --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"

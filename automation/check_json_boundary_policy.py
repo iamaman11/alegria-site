@@ -198,6 +198,9 @@ DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/dataforseo_contracts/src/lib.rs",
     "app/rust/services/temporal_dataforseo/src/main.rs",
     "app/rust/services/temporal_dataforseo/src/operator.rs",
+    # This single opt-in physical E2E decodes captured server History and
+    # the immutable SQL receipt, and constructs only loopback HTTP fixtures.
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_dataforseo_tests.rs",
 })
 
 FORBIDDEN_PATTERNS = {

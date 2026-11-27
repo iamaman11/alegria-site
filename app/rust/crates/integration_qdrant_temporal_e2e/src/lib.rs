@@ -103,5 +103,6 @@ mod tests {
 
     include!("tests/native_temporal_qdrant_tests.rs");
     include!("tests/native_temporal_mixed_owner_tests.rs");
+    include!("tests/native_temporal_dataforseo_tests.rs");
     include!("tests/trusted_site_lab_owner_catalog_tests.rs");
 }

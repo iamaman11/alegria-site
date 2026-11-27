@@ -42,6 +42,9 @@ KINDS = {
     # frozen Workflow Type and replay logic inside the legacy feature.
     "legacy_qdrant_parent": ("temporal_orchestrator_legacy_qdrant_v1",),
     "qdrant_effects": ("temporal_qdrant_effects",),
+    # Separately attested opt-in stub-only DataForSEO worker executable.
+    # Never alias provider code to the provider-neutral parent bundle.
+    "dataforseo_effects": ("temporal_dataforseo",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 TARGET = WORKSPACE / "target" / "debug"

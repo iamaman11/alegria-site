@@ -121,7 +121,15 @@ fn probe_options() -> ActivityOptions {
 }
 
 fn stub_effect_options() -> ActivityOptions {
-    let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+    // A Worker may die after the durable POST task ID is committed but while
+    // GET is in flight. Bound each Activity attempt so Temporal can dispatch
+    // a new attempt to a restarted Worker. The SQL 'posted' marker guarantees
+    // every such replay is GET-only; an uncertain POST can never repeat.
+    let mut options = ActivityOptions::start_to_close_timeout(Duration::from_secs(20));
+    options.close_timeouts = ActivityCloseTimeouts::ScheduleAndStartToClose {
+        schedule_to_close: Duration::from_secs(300),
+        start_to_close: Duration::from_secs(20),
+    };
     options.task_queue = Some(DATAFORSEO_ACTIVITY_QUEUE_V1.to_owned());
     options
 }
