@@ -22,6 +22,7 @@ use thiserror::Error;
 mod effectful_v1;
 mod effectful_v4;
 mod effectful_v5;
+mod owner_dto_schema;
 pub use effectful_v1::{
     decode_owner_child_result_v4, execute_checked_dag_v1, preflight_effect_dag_v1,
     CheckedDagOutcomeV1, EffectDagError, EffectDagRunV1, OwnerCommandV1, PreparedDagStepV1,
@@ -32,6 +33,7 @@ pub use effectful_v5::{
     AdmittedDagReceiptV5, IndependentOwnerChildV5, MixedDagMachineV5, NativeEffectRouteV5,
     ADMITTED_DAG_RECEIPT_SCHEMA_V5,
 };
+pub use owner_dto_schema::semantic_extraction_owner_schemas;
 pub use operation_protocol::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

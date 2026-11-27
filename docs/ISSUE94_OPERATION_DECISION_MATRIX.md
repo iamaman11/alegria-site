@@ -16,6 +16,53 @@ Paths are repository-relative and checked by the audit script.
 
 ## Приёмка по доказательствам (текущий срез Draft PR #95)
 
+### Новая проверяемая структурная граница (после исходного baseline)
+
+Новый owner-local код `seo_application::operation_adapter::owner_dto_schema`
+генерирует JSON Schema draft 2020-12 **непосредственно из Rust DTO** пяти
+`semantic.*` операций из `JsonSchema` derives. Генератор явно использует
+`SchemaSettings::draft2020_12().for_deserialize()` для фактического входного
+Serde wire (`Input`) и `for_serialize()` для выходного wire (`Output`):
+расхождения `rename`/`skip_serializing` нельзя маскировать общей схемой.
+Для этих пяти безошибочных pure-операций доменный `Failure = Infallible`:
+структурная wire-схема Failure — логическое `false`, что не выдумывает
+несуществующий сериализуемый error payload. Rust-регрессии проверяют
+изменение дескриптора при смене типа поля, `Option` или enum-варианта,
+а также вложенные структуры и реальные `serde`-имена. **Это пока только
+пять конкретных owner DTO, не все 52 строки матрицы.**
+
+`operation_protocol::owner_schema_v3` теперь дополнительно разбирает
+ограниченные JSON Schema / Protobuf FileDescriptorSet дескрипторы до
+фиксации fingerprint; это проверка формы IDL, **не доказательство
+соответствия чужих дескрипторов их настоящим DTO**. Независимая установка
+версионированных схем доступна в `trusted_owner_catalog` из доверенного
+root-owned каталога, а входной self-sealed pin сверяется с установленным.
+Для `schema_revision=3` эффектные owner routes требуют собственного
+`owner_schema`, а отдельные `schema_entries` предназначены только для
+бесэффектных pure-контрактов. Чистым операциям не создаётся фиктивная
+эффектная Temporal Child Route. Записанный в trusted catalog `build_id`
+должен быть дополнительно подтверждён как идентичность действительно
+запущенного owner Worker; один правильный SHA-подобный текст сам по себе
+не удостоверяет запущенный бинарник. Параметр `parameter_schema` Site Lab
+не эквивалентен полной owner DTO-схеме и не выдаёт admission.
+
+Новый opt-in `AlegriaPureOperationDagV3Workflow` / `alegria-pure-dag-v5`
+фиксирует в immutable Temporal Start input версионированные структурные
+схемы запрошенных pure-операций и перед исполнением сравнивает их с
+owner-generated DTO схемами **из скомпилированного владельца**.
+Существующие V3/V4 Workflow Types, очереди и V2 fingerprints сохраняются.
+Источник authority для V5 pure — linked owner implementation; конфигурация
+каталога эффектных owner и их внешний issuer остаются отдельной границей.
+
+Статус приёмки новых изменений требует **успешного exact-SHA CI с native
+Temporal V5 E2E/replay**. Исходный код и дешёвые Python source/mutation gates
+сами по себе не доказывают серверную History, а локально записанная
+History **не заменяет replay исторической production History**.
+
+Нельзя изменять показатель `0/52`, пока для каждой конкретной строки
+не приложены индивидуальные source, native Temporal и owner receipt
+evidence, включая негативные эффекты и отказ при чужом tenant.
+
 В этой таблице **52 предварительных кандидата** (29 KEEP, 12 SPLIT,
 11 INTERNAL), но **не 52 принятые самостоятельные операции**. Полный
 машинно-читаемый source-audit, включая отдельную строку и степень проверки
@@ -90,14 +137,14 @@ ACQ/EX/TR (в `proto_runtime_payload_store/registered_payload_impls.rs`
 Rust Input/Output/Failure**. Изменение DTO без ревизии может оставить прежний
 hash. На текущей V2 History-схеме нельзя добавить descriptor in-place,
 поскольку это изменит исторические pinned fingerprints. В отдельном
-`operation_protocol::owner_schema_v3` теперь есть **additive фундамент**:
-версионированный `OwnerOperationSchemaV3`, явные независимые Input/Output/
+`operation_protocol::owner_schema_v3` предоставляет независимые Input/Output/
 Failure descriptor bytes, ограничение размера, собственный fingerprint и
-сверка с независимо установленным trusted owner pin. V2 Contract/History
-не меняются. Но owner-side автоматическая генерация/семантическая проверка
-полного schema descriptor из реальных Rust DTO, установка доверенного
-каталога и включение V3 pin в новую History ещё **не реализованы**: P0
-поэтому остаётся открытым. Проверки raw duplicate JSON и typed round-trip в pure-исполнителе
+сверку с доверенным owner pin. Для пяти semantic pure DTO теперь добавлены
+реальная owner-side генерация и отдельный Temporal V5 History-контракт,
+но масштабирование на остальных владельцев, публичная регистрация,
+production доверие к live source/provider и доработка owner Failure wire
+для fallible операций остаются P0. V2 Contract/History не меняются.
+Проверки raw duplicate JSON и typed round-trip в pure-исполнителе
 защищают от молча проигнорированных параметров **сейчас**, но не заменяют
 полного структурного descriptor. Исходные boundary regressions:
 `python3 automation/test_operation_wire_boundary.py`; эти source-checks

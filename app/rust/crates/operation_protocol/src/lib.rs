@@ -17,6 +17,7 @@ pub mod effect_child_v4;
 pub mod json_budget;
 pub mod owner_dispatch;
 pub mod owner_schema_v3;
+mod owner_schema_json;
 pub mod owner_validation;
 pub use dag_machine::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
 pub use effect_child_v4::{

@@ -33,11 +33,13 @@ mod workflow;
 // offline replay; the default worker refuses to poll these queues.
 const PURE_DAG_ORCHESTRATOR_QUEUE: &str = "alegria-pure-dag-v3";
 const PURE_DAG_ORCHESTRATOR_V4_QUEUE: &str = "alegria-pure-dag-v4";
+const PURE_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-pure-dag-v5";
 const EFFECT_DAG_ORCHESTRATOR_V4_QUEUE: &str = "alegria-effect-dag-v4";
 const EFFECT_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-effect-dag-v5";
 
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
 const PURE_V4_LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR_V4";
+const PURE_V5_LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR_V5";
 const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
 const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
 const QDRANT_V1_LIVE_OPT_IN: &str = "ALLOW_QDRANT_DAG_ORCHESTRATOR_V1";
@@ -50,6 +52,8 @@ enum OrchestratorMode {
     PureV3,
     #[cfg(feature = "legacy-workflows")]
     PureV4,
+    #[cfg(feature = "legacy-workflows")]
+    PureV5SchemaPinned,
     #[cfg(feature = "legacy-workflows")]
     AdmittedEffectV4,
     #[cfg(feature = "legacy-workflows")]
@@ -67,6 +71,8 @@ impl OrchestratorMode {
             Self::PureV3 => PURE_DAG_ORCHESTRATOR_QUEUE,
             #[cfg(feature = "legacy-workflows")]
             Self::PureV4 => PURE_DAG_ORCHESTRATOR_V4_QUEUE,
+            #[cfg(feature = "legacy-workflows")]
+            Self::PureV5SchemaPinned => PURE_DAG_ORCHESTRATOR_V5_QUEUE,
             #[cfg(feature = "legacy-workflows")]
             Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
             #[cfg(feature = "legacy-workflows")]
@@ -97,6 +103,7 @@ fn immutable_source_sha(value: &str) -> bool {
 fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConfig> {
     let pure_opt_in = read(LIVE_OPT_IN);
     let pure_v4_opt_in = read(PURE_V4_LIVE_OPT_IN);
+    let pure_v5_opt_in = read(PURE_V5_LIVE_OPT_IN);
     let effect_opt_in = read(V4_LIVE_OPT_IN);
     let v5_effect_opt_in = read(V5_LIVE_OPT_IN);
     let qdrant_opt_in = read(QDRANT_V1_LIVE_OPT_IN);
@@ -105,6 +112,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     for (label, setting) in [
         (LIVE_OPT_IN, &pure_opt_in),
         (PURE_V4_LIVE_OPT_IN, &pure_v4_opt_in),
+        (PURE_V5_LIVE_OPT_IN, &pure_v5_opt_in),
         (V4_LIVE_OPT_IN, &effect_opt_in),
         (V5_LIVE_OPT_IN, &v5_effect_opt_in),
         (QDRANT_V1_LIVE_OPT_IN, &qdrant_opt_in),
@@ -119,13 +127,14 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     let mode = match (
         pure_opt_in.as_deref() == Some("true"),
         pure_v4_opt_in.as_deref() == Some("true"),
+        pure_v5_opt_in.as_deref() == Some("true"),
         effect_opt_in.as_deref() == Some("true"),
         v5_effect_opt_in.as_deref() == Some("true"),
         qdrant_opt_in.as_deref() == Some("true"),
         operation_v1_opt_in.as_deref() == Some("true"),
         operation_v2_opt_in.as_deref() == Some("true"),
     ) {
-        (true, false, false, false, false, false, false) => {
+        (true, false, false, false, false, false, false, false) => {
             #[cfg(feature = "legacy-workflows")]
             {
                 OrchestratorMode::PureV3
@@ -135,7 +144,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
                 anyhow::bail!("historical pure DAG requires legacy-workflows binary feature")
             }
         }
-        (false, true, false, false, false, false, false) => {
+        (false, true, false, false, false, false, false, false) => {
             #[cfg(feature = "legacy-workflows")]
             {
                 OrchestratorMode::PureV4
@@ -145,7 +154,17 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
                 anyhow::bail!("strict pure V4 DAG requires legacy-workflows binary feature")
             }
         }
-        (false, false, true, false, false, false, false) => {
+        (false, false, true, false, false, false, false, false) => {
+            #[cfg(feature = "legacy-workflows")]
+            {
+                OrchestratorMode::PureV5SchemaPinned
+            }
+            #[cfg(not(feature = "legacy-workflows"))]
+            {
+                anyhow::bail!("schema-pinned pure V5 DAG requires legacy-workflows binary feature")
+            }
+        }
+        (false, false, false, true, false, false, false, false) => {
             #[cfg(feature = "legacy-workflows")]
             {
                 OrchestratorMode::AdmittedEffectV4
@@ -155,7 +174,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
                 anyhow::bail!("historical V4 parent requires legacy-workflows binary feature")
             }
         }
-        (false, false, false, true, false, false, false) => {
+        (false, false, false, false, true, false, false, false) => {
             #[cfg(feature = "legacy-workflows")]
             {
                 OrchestratorMode::AdmittedEffectV5
@@ -165,7 +184,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
                 anyhow::bail!("historical V5 parent requires legacy-workflows binary feature")
             }
         }
-        (false, false, false, false, true, false, false) => {
+        (false, false, false, false, false, true, false, false) => {
             #[cfg(feature = "legacy-qdrant-v1")]
             {
                 OrchestratorMode::QdrantV1
@@ -175,9 +194,11 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
                 anyhow::bail!("frozen Qdrant V1 parent requires legacy-qdrant-v1 binary feature")
             }
         }
-        (false, false, false, false, false, true, false) => OrchestratorMode::OperationDagV1,
-        (false, false, false, false, false, false, true) => OrchestratorMode::OperationDagV2Validated,
-        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {PURE_V4_LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}, {OPERATION_V1_LIVE_OPT_IN}, {OPERATION_V2_LIVE_OPT_IN}=true"),
+        (false, false, false, false, false, false, true, false) => OrchestratorMode::OperationDagV1,
+        (false, false, false, false, false, false, false, true) => {
+            OrchestratorMode::OperationDagV2Validated
+        }
+        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {PURE_V4_LIVE_OPT_IN}, {PURE_V5_LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}, {OPERATION_V1_LIVE_OPT_IN}, {OPERATION_V2_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
@@ -241,6 +262,8 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
         #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::PureV4 => workflow::register_pure_v4(&mut options)?,
         #[cfg(feature = "legacy-workflows")]
+        OrchestratorMode::PureV5SchemaPinned => workflow::register_pure_v5(&mut options)?,
+        #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
         #[cfg(feature = "legacy-workflows")]
         OrchestratorMode::AdmittedEffectV5 => workflow::register_v5(&mut options)?,
@@ -262,6 +285,7 @@ async fn main() -> Result<()> {
     if let Some(argument) = args.next() {
         if argument == std::ffi::OsStr::new("--replay-history")
             || argument == std::ffi::OsStr::new("--replay-pure-v4-history")
+            || argument == std::ffi::OsStr::new("--replay-pure-v5-history")
             || argument == std::ffi::OsStr::new("--replay-effect-history")
             || argument == std::ffi::OsStr::new("--replay-v5-effect-history")
             || argument == std::ffi::OsStr::new("--replay-qdrant-effect-history")
@@ -270,6 +294,8 @@ async fn main() -> Result<()> {
         {
             let queue = if argument == std::ffi::OsStr::new("--replay-pure-v4-history") {
                 PURE_DAG_ORCHESTRATOR_V4_QUEUE
+            } else if argument == std::ffi::OsStr::new("--replay-pure-v5-history") {
+                PURE_DAG_ORCHESTRATOR_V5_QUEUE
             } else if argument == std::ffi::OsStr::new("--replay-operation-dag-v2-history") {
                 OPERATION_DAG_PARENT_QUEUE_V2
             } else if argument == std::ffi::OsStr::new("--replay-operation-dag-v1-history") {
@@ -452,6 +478,32 @@ mod tests {
             PURE_DAG_ORCHESTRATOR_QUEUE.into(),
         );
         assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
+    }
+
+    #[cfg(feature = "legacy-workflows")]
+    #[test]
+    fn schema_pinned_v5_requires_exclusive_opt_in_and_distinct_queue() {
+        let mut settings = valid_env();
+        settings.insert(OPERATION_V2_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(PURE_V5_LIVE_OPT_IN.into(), "true".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            PURE_DAG_ORCHESTRATOR_V5_QUEUE.into(),
+        );
+        let config = checked_live_config(|name| settings.get(name).cloned()).unwrap();
+        assert_eq!(config.mode, OrchestratorMode::PureV5SchemaPinned);
+        assert_ne!(config.mode.task_queue(), PURE_DAG_ORCHESTRATOR_QUEUE);
+        assert_ne!(config.mode.task_queue(), PURE_DAG_ORCHESTRATOR_V4_QUEUE);
+        build_worker_options(&config).unwrap();
+
+        settings.insert(PURE_V4_LIVE_OPT_IN.into(), "true".into());
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+        settings.insert(PURE_V4_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            PURE_DAG_ORCHESTRATOR_V4_QUEUE.into(),
+        );
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
     }
 
     #[cfg(feature = "legacy-workflows")]

@@ -145,13 +145,85 @@ class OperationWireBoundaryTests(unittest.TestCase):
         )
         self.assertIn("V3 compares a separately installed trusted owner pin", failures)
 
-    def test_v3_provider_free_schema_does_not_decode_json_values(self) -> None:
-        changed = dict(self.baseline)
-        changed["owner_schema_v3"] += "\nlet untrusted: serde_json::Value = Default::default();\n"
-        self.assertIn(
-            "provider-neutral V3 descriptor cannot decode provider JSON/protobuf DTOs",
-            check_sources(changed),
+    def test_v3_json_schema_must_validate_real_descriptor_bytes(self) -> None:
+        failures = self.mutated(
+            "owner_schema_v3",
+            "owner_schema_json::validate_json_schema_2020_12(&self.descriptor_bytes)",
+            "owner_schema_json::validate_json_schema_2020_12(b\"false\")",
         )
+        self.assertIn("V3 validates the actual JSON Schema descriptor bytes", failures)
+
+    def test_owner_descriptor_parser_does_not_reintroduce_last_wins_json(self) -> None:
+        failures = self.mutated(
+            "owner_schema_json",
+            "values.insert(key, value).is_some()",
+            "values.insert(key, value).is_none()",
+        )
+        self.assertIn("owner JSON descriptor parser rejects recursively duplicate keys", failures)
+
+    def test_v3_protobuf_schema_must_decode_real_descriptor_bytes(self) -> None:
+        failures = self.mutated(
+            "owner_schema_v3",
+            "FileDescriptorSet::decode(self.descriptor_bytes.as_slice())",
+            "FileDescriptorSet::decode(&[][..])",
+        )
+        self.assertIn("V3 parses the actual Protobuf descriptor set bytes", failures)
+
+    def test_trusted_schema_registry_cannot_drop_the_owner_pin(self) -> None:
+        failures = self.mutated(
+            "trusted_owner_catalog",
+            "owner_schemas: BTreeMap<OperationRef, PinnedOwnerOperationSchemaV3>",
+            "owner_schemas: BTreeMap<OperationRef, String>",
+        )
+        self.assertIn("trusted owner bundle stores pinned owner structural schemas", failures)
+
+    def test_caller_cannot_self_seal_and_replace_trusted_owner_schema(self) -> None:
+        failures = self.mutated(
+            "trusted_owner_catalog",
+            "verify_against_trusted_owner(",
+            "validate(",
+        )
+        self.assertIn("catalog checks untrusted pin against separately installed owner pin", failures)
+
+    def test_owner_input_schema_must_be_generated_from_real_dto(self) -> None:
+        failures = self.mutated(
+            "owner_generated_dto_schema",
+            "descriptor_from_dto::<O::Input>(input_artifact, DtoWireRole::InputDeserialize)",
+            "descriptor_from_dto::<O::Output>(input_artifact, DtoWireRole::InputDeserialize)",
+        )
+        self.assertIn("owner Input descriptor is generated from concrete Rust DTO", failures)
+
+    def test_owner_output_schema_must_be_generated_from_real_dto(self) -> None:
+        failures = self.mutated(
+            "owner_generated_dto_schema",
+            "descriptor_from_dto::<O::Output>(output_artifact, DtoWireRole::OutputSerialize)",
+            "descriptor_from_dto::<O::Output>(output_artifact, DtoWireRole::InputDeserialize)",
+        )
+        self.assertIn("owner Output descriptor is generated from concrete Rust DTO", failures)
+
+    def test_owner_schema_generator_cannot_be_replaced_with_handwritten_json(self) -> None:
+        failures = self.mutated(
+            "owner_generated_dto_schema",
+            "into_generator().into_root_schema_for::<T>()",
+            'into_generator().into_root_schema_for::<String>()',
+        )
+        self.assertIn("owner descriptor generator derives schema from Rust DTO", failures)
+
+    def test_owner_input_wire_direction_cannot_switch_to_serialize(self) -> None:
+        failures = self.mutated(
+            "owner_generated_dto_schema",
+            "DtoWireRole::InputDeserialize => settings.for_deserialize()",
+            "DtoWireRole::InputDeserialize => settings.for_serialize()",
+        )
+        self.assertIn("owner Input schema models actual Deserialize wire", failures)
+
+    def test_owner_output_wire_direction_cannot_switch_to_deserialize(self) -> None:
+        failures = self.mutated(
+            "owner_generated_dto_schema",
+            "DtoWireRole::OutputSerialize => settings.for_serialize()",
+            "DtoWireRole::OutputSerialize => settings.for_deserialize()",
+        )
+        self.assertIn("owner Output schema models actual Serialize wire", failures)
 
     def test_domain_protocol_must_not_import_arbitrary_json_value(self) -> None:
         changed = dict(self.baseline)
@@ -226,6 +298,46 @@ class OperationWireBoundaryTests(unittest.TestCase):
             'PURE_V4_LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR"',
         )
         self.assertIn("new Temporal V4 has independent opt-in", failures)
+
+    def test_v5_history_input_must_contain_structural_owner_schema_pins(self) -> None:
+        failures = self.mutated(
+            "temporal_pure_workflows",
+            "pub owner_schemas: Vec<PinnedOwnerOperationSchemaV3>",
+            "pub owner_schemas: Vec<String>",
+        )
+        self.assertIn("V5 Temporal Start History includes full immutable owner structural pins", failures)
+
+    def test_v5_must_compare_pins_with_installed_owner_before_execution(self) -> None:
+        failures = self.mutated(
+            "temporal_pure_workflows",
+            "verify_owner_generated_pins_v5(&input).map_err(workflow_failure)?;",
+            "let _ = &input.owner_schemas;",
+        )
+        self.assertIn("V5 verifies full structural pins before typed pure DAG execution", failures)
+
+    def test_v5_must_verify_exact_owner_generated_schema_not_caller_copy(self) -> None:
+        failures = self.mutated(
+            "temporal_pure_workflows",
+            "pin.verify_against_trusted_owner(expected, contract)?",
+            "pin.validate(contract)?",
+        )
+        self.assertIn("V5 compares each caller pin with concrete installed owner identity", failures)
+
+    def test_v5_queue_cannot_reuse_v4_queue_and_history(self) -> None:
+        failures = self.mutated(
+            "temporal_pure_launcher",
+            'PURE_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-pure-dag-v5"',
+            'PURE_DAG_ORCHESTRATOR_V5_QUEUE: &str = "alegria-pure-dag-v4"',
+        )
+        self.assertIn("V5 Temporal has separate Task Queue", failures)
+
+    def test_v5_deployment_requires_independent_opt_in(self) -> None:
+        failures = self.mutated(
+            "temporal_pure_launcher",
+            'PURE_V5_LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR_V5"',
+            'PURE_V5_LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR_V4"',
+        )
+        self.assertIn("V5 Temporal requires independent opt-in", failures)
 
 
 if __name__ == "__main__":

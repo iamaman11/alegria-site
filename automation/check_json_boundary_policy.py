@@ -186,6 +186,14 @@ SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
 # modules do not inherit permission to interpret raw JSON.
 TYPED_OPERATION_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/seo_application/src/typed_json.rs",
+    # Owner-local DTO descriptor serialization and its schema regression
+    # fixtures, never a generic provider payload executor or DAG authoring
+    # permission. Only real concrete Rust DTOs are accepted via schemars.
+    "app/rust/crates/seo_application/src/operation_adapter/owner_dto_json.rs",
+    # One bounded, fail-closed JSON Schema 2020-12 descriptor parser. The
+    # provider-neutral operation_protocol remains denied for arbitrary JSON
+    # payloads, including owner_schema_v3.rs and all sibling modules.
+    "app/rust/crates/operation_protocol/src/owner_schema_json.rs",
 })
 
 # Only the acquisition V1 replay-compatibility *unit fixture* may serialize

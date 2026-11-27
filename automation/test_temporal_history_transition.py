@@ -773,6 +773,7 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
             ("AlegriaPureOperationDagV1Workflow", "alegria-pipeline"),
             ("AlegriaPureOperationDagV1Workflow", "alegria-pure-dag-v3"),
             ("AlegriaPureOperationDagV2Workflow", "alegria-pure-dag-v4"),
+            ("AlegriaPureOperationDagV3Workflow", "alegria-pure-dag-v5"),
             ("AlegriaCheckedEffectDagV1Workflow", "alegria-pure-dag-v3"),
             ("AlegriaAdmittedEffectDagV2Workflow", "alegria-effect-dag-v4"),
             ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"),

@@ -1,20 +1,21 @@
 //! Extract editorial questions, pain points and audience profiles.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EditorialExtractionInput {
     pub section_id: String,
     pub raw_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EditorialTopic {
     pub topic_type: String,
     pub topic_key_candidate: String,
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EditorialExtractionOutput {
     pub topics: Vec<EditorialTopic>,
 }

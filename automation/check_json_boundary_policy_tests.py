@@ -14,6 +14,7 @@ from check_json_boundary_policy import (
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     PG_V3_OPERATOR_JSON_BOUNDARIES,
     SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES,
+    TYPED_OPERATION_JSON_BOUNDARIES,
     V3_TYPED_EFFECT_JSON_BOUNDARIES,
     ROOT,
     is_allowed_json_boundary,
@@ -21,6 +22,25 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
+    def test_owner_structural_json_permissions_are_exact_descriptor_files(self) -> None:
+        self.assertEqual(TYPED_OPERATION_JSON_BOUNDARIES, {
+            "app/rust/crates/seo_application/src/typed_json.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/owner_dto_json.rs",
+            "app/rust/crates/operation_protocol/src/owner_schema_json.rs",
+        })
+        for relative in TYPED_OPERATION_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+        for relative in (
+            "app/rust/crates/operation_protocol/src/owner_schema_v3.rs",
+            "app/rust/crates/operation_protocol/src/owner_schema_other_json.rs",
+            "app/rust/crates/operation_protocol/src/owner_dispatch.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/owner_dto_schema.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/future_owner_json.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
     def test_acquisition_owner_json_is_one_replay_fixture_not_a_domain_exemption(self) -> None:
         exact = "app/rust/crates/acquisition/src/operations_json.rs"
         self.assertEqual(ACQUISITION_OWNER_JSON_TEST_BOUNDARIES, {exact})

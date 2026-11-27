@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use prost::Message;
+use prost_types::FileDescriptorSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -38,7 +40,7 @@ pub struct OwnerDtoDescriptorV3 {
     pub revision: u32,
     pub format: OwnerDtoDescriptorFormatV3,
     /// Exact descriptor bytes, generated and semantically validated by the
-    /// owner codec. The provider-free kernel does not parse either format.
+    /// owner codec. The provider-free kernel does not parse owner payloads.
     pub descriptor_bytes: Vec<u8>,
 }
 
@@ -50,6 +52,32 @@ impl OwnerDtoDescriptorV3 {
         let len = self.descriptor_bytes.len();
         if len == 0 || len > MAX_OWNER_DTO_DESCRIPTOR_BYTES_V3 {
             return Err(OwnerSchemaErrorV3::DescriptorSize);
+        }
+        match self.format {
+            OwnerDtoDescriptorFormatV3::JsonSchema2020_12 => {
+                crate::owner_schema_json::validate_json_schema_2020_12(&self.descriptor_bytes)
+                    .map_err(|_| OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)?;
+            }
+            OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet => {
+                let descriptors = FileDescriptorSet::decode(self.descriptor_bytes.as_slice())
+                    .map_err(|_| OwnerSchemaErrorV3::InvalidProtobufDescriptor)?;
+                if descriptors.file.is_empty()
+                    || descriptors.file.iter().any(|file| {
+                        file.name.as_deref().is_none_or(str::is_empty)
+                            || (file.message_type.is_empty() && file.enum_type.is_empty())
+                            || file
+                                .message_type
+                                .iter()
+                                .any(|message| message.name.as_deref().is_none_or(str::is_empty))
+                            || file.enum_type.iter().any(|enumeration| {
+                                enumeration.name.as_deref().is_none_or(str::is_empty)
+                                    || enumeration.value.is_empty()
+                            })
+                    })
+                {
+                    return Err(OwnerSchemaErrorV3::InvalidProtobufDescriptor);
+                }
+            }
         }
         Ok(len)
     }
@@ -99,6 +127,10 @@ pub enum OwnerSchemaErrorV3 {
     InvalidDescriptorIdentity,
     #[error("owner DTO descriptor bytes are empty or over the strict budget")]
     DescriptorSize,
+    #[error("owner JSON Schema descriptor must be unambiguous draft 2020-12 syntax with a declared root shape")]
+    InvalidJsonSchemaDescriptor,
+    #[error("owner Protobuf descriptor is not a FileDescriptorSet with declared types")]
+    InvalidProtobufDescriptor,
     #[error("owner DTO descriptors exceed total operation budget")]
     TotalDescriptorSize,
     #[error("pinned owner V3 structural schema fingerprint changed")]
@@ -247,6 +279,7 @@ mod tests {
         }
     }
 
+
     fn spec(contract: &OperationContract) -> OwnerOperationSchemaV3 {
         OwnerOperationSchemaV3 {
             schema_revision: OWNER_SCHEMA_ATTESTATION_REVISION_V3,
@@ -257,14 +290,14 @@ mod tests {
                 PortId::from("input"),
                 dto(
                     "semantic.input",
-                    r#"{"type":"object","properties":{"source":{"type":"string"}}}"#,
+                    r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"source":{"type":"string"}}}"#,
                 ),
             )]),
             outputs: BTreeMap::from([(
                 PortId::from("output"),
                 dto(
                     "semantic.output",
-                    r#"{"type":"array","items":{"type":"integer"}}"#,
+                    r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"array","items":{"type":"integer"}}"#,
                 ),
             )]),
             failure: dto("semantic.infallible", "false"),
@@ -286,7 +319,7 @@ mod tests {
             .get_mut(&PortId::from("input"))
             .unwrap()
             .descriptor_bytes =
-            br#"{"type":"object","properties":{"source":{"type":"integer"}}}"#.to_vec();
+            br#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"source":{"type":"integer"}}}"#.to_vec();
         assert!(matches!(
             tampered.validate(&installed),
             Err(OwnerSchemaErrorV3::FingerprintMismatch)
@@ -360,5 +393,51 @@ mod tests {
             oversized.seal(&installed),
             Err(OwnerSchemaErrorV3::DescriptorSize)
         ));
+    }
+
+    #[test]
+    fn v3_refuses_vacuous_or_malformed_descriptors_even_if_self_sealed() {
+        let installed = contract();
+        for bad in ["true", "{}", "[]", "{", r#"{"type":"object"}"#] {
+            let mut candidate = spec(&installed);
+            candidate.failure.descriptor_bytes = bad.as_bytes().to_vec();
+            assert!(matches!(
+                candidate.seal(&installed),
+                Err(OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)
+            ));
+        }
+        let mut candidate = spec(&installed);
+        candidate.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
+        candidate.failure.descriptor_bytes = b"not a descriptor set".to_vec();
+        assert!(matches!(
+            candidate.seal(&installed),
+            Err(OwnerSchemaErrorV3::InvalidProtobufDescriptor)
+        ));
+        let mut duplicate = spec(&installed);
+        duplicate.failure.descriptor_bytes = br#"{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"person":{"type":"object","properties":{"x":{"type":"string"},"x":{"type":"number"}}}}}"#.to_vec();
+        assert!(matches!(
+            duplicate.seal(&installed),
+            Err(OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)
+        ));
+    }
+
+    #[test]
+    fn v3_accepts_a_real_protobuf_file_descriptor_set_without_touching_legacy_proto() {
+        let installed = contract();
+        let descriptor = prost_types::FileDescriptorSet {
+            file: vec![prost_types::FileDescriptorProto {
+                name: Some("owner/operation.proto".to_owned()),
+                package: Some("owner.operation.v1".to_owned()),
+                message_type: vec![prost_types::DescriptorProto {
+                    name: Some("Failure".to_owned()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        let mut schema = spec(&installed);
+        schema.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
+        schema.failure.descriptor_bytes = descriptor.encode_to_vec();
+        schema.seal(&installed).unwrap().validate(&installed).unwrap();
     }
 }

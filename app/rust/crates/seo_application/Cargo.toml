@@ -15,6 +15,7 @@ seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 runtime_models = { path = "../runtime_models" }
 serde_json = { workspace = true }
+schemars = { version = "1.2.3" }
 serde = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1"

@@ -10,7 +10,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{
-    OperationContract, OperationRef, PinnedOwnerRouteV1, TrustedRouteCatalog,
+    ContractCatalog, IdempotencyPolicy, OperationContract, OperationRef, PinnedOwnerOperationSchemaV3,
+    PinnedOwnerRouteV1, TrustedRouteCatalog,
     OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
@@ -91,6 +92,10 @@ fn validate_config_file_trust(_path: &Path) -> Result<()> {
 struct TrustedCatalogFileV1 {
     schema_revision: u16,
     entries: Vec<TrustedRegistrationV1>,
+    /// V3 also accepts pure owner schemas; pure operations do not have an
+    /// effectful child route and must never receive a fabricated one.
+    #[serde(default)]
+    schema_entries: Vec<TrustedSchemaRegistrationV3>,
 }
 
 #[derive(Deserialize)]
@@ -101,6 +106,18 @@ struct TrustedRegistrationV1 {
     /// Optional in historical v1; mandatory in v2 for rich owner parameters.
     #[serde(default)]
     parameter_schema: Option<Value>,
+    /// Required for every effectful route in V3; unavailable to V1/V2.
+    #[serde(default)]
+    owner_schema: Option<PinnedOwnerOperationSchemaV3>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrustedSchemaRegistrationV3 {
+    contract: OperationContract,
+    owner_schema: PinnedOwnerOperationSchemaV3,
+    /// Owner build identity, not a user-supplied authoring parameter.
+    build_id: String,
 }
 
 /// The same verified source drives Temporal routing and ChatGPT discovery.
@@ -108,6 +125,53 @@ struct TrustedRegistrationV1 {
 pub struct TrustedOwnerCatalog {
     pub routes: TrustedRouteCatalog,
     pub parameter_schemas: BTreeMap<OperationRef, Value>,
+    /// Trusted installation, not a request-provided or self-sealed schema.
+    owner_schemas: BTreeMap<OperationRef, PinnedOwnerOperationSchemaV3>,
+    schema_contracts: ContractCatalog,
+    /// Exact owner build that published the schema. Runtime deployment must
+    /// separately attest that it is the build polling the relevant queue.
+    schema_build_ids: BTreeMap<OperationRef, String>,
+}
+
+impl TrustedOwnerCatalog {
+    pub fn owner_schema(&self, operation: &OperationRef) -> Option<&PinnedOwnerOperationSchemaV3> {
+        self.owner_schemas.get(operation)
+    }
+
+    pub fn owner_schema_build_id(&self, operation: &OperationRef) -> Option<&str> {
+        self.schema_build_ids.get(operation).map(String::as_str)
+    }
+
+    /// Caller schema can only be checked against a separately installed
+    /// owner schema. This method does not grant execution or validate an
+    /// input payload: actual DTO payload validation remains owner-local.
+    pub fn verify_caller_schema(
+        &self,
+        operation: &OperationRef,
+        caller: &PinnedOwnerOperationSchemaV3,
+    ) -> Result<()> {
+        let trusted = self
+            .owner_schemas
+            .get(operation)
+            .context("no authoritative owner structural schema installed for this operation")?;
+        let contract = self
+            .schema_contracts
+            .contract(operation)
+            .context("missing installed owner contract")?;
+        caller
+            .verify_against_trusted_owner(trusted, contract)
+            .context("caller owner schema differs from trusted installation")
+    }
+}
+
+fn validate_build_id(build_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        build_id.len() == 40
+            && build_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && build_id.bytes().any(|byte| byte != b'0'),
+        "owner build_id must be a nonzero immutable 40-hex source SHA"
+    );
+    Ok(())
 }
 
 fn register_trusted_entry(
@@ -124,12 +188,7 @@ fn register_trusted_entry(
             && route.task_queue != OPERATION_DAG_PARENT_QUEUE_V2,
         "owner child must never poll the DAG parent Task Queue"
     );
-    anyhow::ensure!(
-        route.build_id.len() == 40
-            && route.build_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && route.build_id.bytes().any(|byte| byte != b'0'),
-        "owner build_id must be a nonzero immutable 40-hex source SHA"
-    );
+    validate_build_id(&route.build_id)?;
     catalog.register(entry.contract, entry.route)?;
     Ok(())
 }
@@ -153,12 +212,22 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
     let config: TrustedCatalogFileV1 =
         serde_json::from_slice(data).context("decode trusted owner route catalog")?;
     anyhow::ensure!(
-        config.schema_revision == 1 || config.schema_revision == 2,
+        (1..=3).contains(&config.schema_revision),
         "unsupported trusted route catalog version"
     );
-    anyhow::ensure!(!config.entries.is_empty(), "trusted route catalog is empty");
+    anyhow::ensure!(
+        !config.entries.is_empty() || (config.schema_revision == 3 && !config.schema_entries.is_empty()),
+        "trusted owner catalog is empty"
+    );
+    anyhow::ensure!(
+        config.schema_revision == 3 || config.schema_entries.is_empty(),
+        "standalone pure owner schemas require trusted catalog v3"
+    );
     let mut catalog = TrustedRouteCatalog::default();
     let mut parameter_schemas = BTreeMap::new();
+    let mut owner_schemas = BTreeMap::new();
+    let mut schema_contracts = ContractCatalog::default();
+    let mut schema_build_ids = BTreeMap::new();
     for entry in config.entries {
         let operation = entry.contract.reference.clone();
         if config.schema_revision == 1 {
@@ -176,21 +245,66 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
                 "owner parameter schema must describe an object"
             );
         }
+        if config.schema_revision < 3 {
+            anyhow::ensure!(
+                entry.owner_schema.is_none(),
+                "historical trusted catalogs cannot claim v3 structural owner schemas"
+            );
+        } else {
+            let pinned = entry
+                .owner_schema.as_ref()
+                .context("v3 owner route must provide independently installed structural schema")?;
+            pinned
+                .validate(&entry.contract)
+                .context("v3 effectful owner schema does not match installed contract")?;
+            schema_contracts.register_contract(entry.contract.clone())?;
+            anyhow::ensure!(
+                owner_schemas.insert(operation.clone(), pinned.clone()).is_none(),
+                "duplicate trusted owner structural schema"
+            );
+            schema_build_ids.insert(operation.clone(), entry.route.build_id.clone());
+        }
         if let Some(schema) = &entry.parameter_schema {
             parameter_schemas.insert(operation, schema.clone());
         }
         register_trusted_entry(&mut catalog, entry)?;
     }
+    for entry in config.schema_entries {
+        validate_build_id(&entry.build_id)?;
+        anyhow::ensure!(
+            entry.contract.idempotency == IdempotencyPolicy::Pure
+                && entry.contract.effects.is_empty(),
+            "standalone schema registration is only for pure owners; effectful owners require a checked child route"
+        );
+        entry
+            .owner_schema
+            .validate(&entry.contract)
+            .context("v3 standalone owner schema does not match installed pure contract")?;
+        let operation = entry.contract.reference.clone();
+        schema_contracts.register_contract(entry.contract)?;
+        schema_build_ids.insert(operation.clone(), entry.build_id);
+        anyhow::ensure!(
+            owner_schemas.insert(operation, entry.owner_schema).is_none(),
+            "duplicate trusted owner structural schema"
+        );
+    }
     Ok(TrustedOwnerCatalog {
         routes: catalog,
         parameter_schemas,
+        owner_schemas,
+        schema_contracts,
+        schema_build_ids,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operation_protocol::{IdempotencyPolicy, OperationId, OperationOwnerId, OperationRef};
+    use operation_protocol::{
+        ArtifactTypeId, IdempotencyPolicy, OperationId, OperationOwnerId, OperationRef,
+        OwnerDtoDescriptorFormatV3, OwnerDtoDescriptorV3, OwnerOperationSchemaV3,
+        OWNER_SCHEMA_ATTESTATION_REVISION_V3,
+    };
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -219,6 +333,7 @@ mod tests {
             contract,
             route,
             parameter_schema: None,
+            owner_schema: None,
         }
     }
 
@@ -229,6 +344,120 @@ mod tests {
             record["parameter_schema"] = schema;
         }
         serde_json::to_vec(&json!({"schema_revision":revision,"entries":[record]})).unwrap()
+    }
+
+    fn pinned_schema(contract: &OperationContract) -> PinnedOwnerOperationSchemaV3 {
+        OwnerOperationSchemaV3 {
+            schema_revision: OWNER_SCHEMA_ATTESTATION_REVISION_V3,
+            operation: contract.reference.clone(),
+            owner: contract.owner.clone(),
+            v2_contract_fingerprint: contract.fingerprint().unwrap(),
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::new(),
+            failure: OwnerDtoDescriptorV3 {
+                schema_id: ArtifactTypeId::from("test.owner.infallible"),
+                revision: 1,
+                format: OwnerDtoDescriptorFormatV3::JsonSchema2020_12,
+                descriptor_bytes: b"false".to_vec(),
+            },
+        }
+        .seal(contract)
+        .unwrap()
+    }
+
+    #[test]
+    fn pure_owner_schema_installs_without_fabricated_effectful_route() {
+        let registration = registered_test_owner();
+        let pinned = pinned_schema(&registration.contract);
+        let trusted_v3 = serde_json::to_vec(&json!({
+            "schema_revision": 3,
+            "entries": [],
+            "schema_entries": [{
+                "contract": registration.contract,
+                "owner_schema": pinned,
+                "build_id": "0123456789abcdef0123456789abcdef01234567"
+            }]
+        }))
+        .unwrap();
+        let loaded = decode_trusted_catalog(&trusted_v3).unwrap();
+        let reference = registered_test_owner().contract.reference;
+        assert_eq!(loaded.routes.catalog().contracts().count(), 0);
+        let installed = loaded.owner_schema(&reference).unwrap();
+        assert_eq!(
+            loaded.owner_schema_build_id(&reference),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        loaded.verify_caller_schema(&reference, installed).unwrap();
+
+        // A caller can mint an internally valid new schema, but may not
+        // replace the independently installed owner descriptor.
+        let mut forged = installed.schema.clone();
+        forged.failure.descriptor_bytes =
+            br#"{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}"#
+                .to_vec();
+        let forged = forged
+            .seal(loaded.schema_contracts.contract(&reference).unwrap())
+            .unwrap();
+        assert!(loaded.verify_caller_schema(&reference, &forged).is_err());
+        assert!(loaded.verify_caller_schema(&OperationRef {
+            id: OperationId::from("unknown"), revision: 1,
+        }, installed).is_err());
+    }
+
+    #[test]
+    fn v3_route_requires_owner_schema_and_ties_it_to_contract() {
+        let entry = registered_test_owner();
+        let pinned = pinned_schema(&entry.contract);
+        let route = entry.route.clone();
+        let contract = entry.contract.clone();
+        let schema = json!({"type":"object"});
+        let good = serde_json::to_vec(&json!({
+            "schema_revision": 3,
+            "entries": [{
+                "contract": contract,
+                "route": route,
+                "parameter_schema": schema,
+                "owner_schema": pinned
+            }]
+        }))
+        .unwrap();
+        let loaded = decode_trusted_catalog(&good).unwrap();
+        assert_eq!(loaded.routes.catalog().contracts().count(), 1);
+        assert_eq!(loaded.owner_schemas.len(), 1);
+
+        let mut no_owner_schema: Value = serde_json::from_slice(&good).unwrap();
+        no_owner_schema["entries"][0].as_object_mut().unwrap().remove("owner_schema");
+        assert!(decode_trusted_catalog(&serde_json::to_vec(&no_owner_schema).unwrap()).is_err());
+
+        let mut forged = no_owner_schema;
+        forged["entries"][0]["owner_schema"] = json!(pinned_schema(&entry.contract));
+        forged["entries"][0]["owner_schema"]["schema"]["owner"] = json!("caller-not-owner");
+        assert!(decode_trusted_catalog(&serde_json::to_vec(&forged).unwrap()).is_err());
+    }
+
+    #[test]
+    fn legacy_catalogs_cannot_claim_owner_schemas_and_v3_rejects_invalid_builds() {
+        let registration = registered_test_owner();
+        let pinned = pinned_schema(&registration.contract);
+        for version in [1, 2] {
+            let mut historical: Value = serde_json::from_slice(&manifest(
+                version,
+                (version == 2).then(|| json!({"type":"object"})),
+            ))
+            .unwrap();
+            historical["entries"][0]["owner_schema"] = json!(pinned);
+            assert!(decode_trusted_catalog(&serde_json::to_vec(&historical).unwrap()).is_err());
+        }
+        let invalid = serde_json::to_vec(&json!({
+            "schema_revision": 3,
+            "entries": [],
+            "schema_entries": [{
+                "contract": registration.contract,
+                "owner_schema": pinned,
+                "build_id": "caller-selected"
+            }]
+        })).unwrap();
+        assert!(decode_trusted_catalog(&invalid).is_err());
     }
 
     #[test]

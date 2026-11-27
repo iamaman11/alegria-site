@@ -1,13 +1,14 @@
 //! Deterministic mention detection for acquired source sections.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EntitySpanInput {
     pub section_id: String,
     pub raw_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EntityMention {
     pub raw_text: String,
     pub entity_type: String,
@@ -16,7 +17,7 @@ pub struct EntityMention {
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EntitySpanOutput {
     pub mentions: Vec<EntityMention>,
 }
