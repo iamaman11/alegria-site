@@ -237,10 +237,7 @@ async fn restricted_grant_pool() -> Result<PgPool> {
     .fetch_optional(&pool)
     .await
     .context("issuer_phase_sql_membership_query")?;
-    ensure!(
-        membership.is_none(),
-        "issuer_phase_sql_membership_denied"
-    );
+    ensure!(membership.is_none(), "issuer_phase_sql_membership_denied");
     Ok(pool)
 }
 
