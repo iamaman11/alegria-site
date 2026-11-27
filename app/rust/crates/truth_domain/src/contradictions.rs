@@ -278,12 +278,19 @@ mod tests {
             assert!(output.is_blocked);
             assert_eq!(output.decision, "block_publish");
             assert_eq!(output.conflict_count, 1);
-            assert_eq!(output.conflicts[0].severity, "critical");
-            assert_eq!(output.conflicts[0].confidence_left, 0.99);
-            assert_eq!(
-                output.conflicts[0].source_left.as_deref(),
-                Some("source:official")
-            );
+            let conflict = &output.conflicts[0];
+            assert_eq!(conflict.severity, "critical");
+            // Value order is stable lexical order, not "preferred evidence
+            // always goes on the left". Verify the winning source is tied
+            // to the *80 EUR value* regardless of pair orientation.
+            let (source, confidence) = if conflict.value_left == "80 EUR" {
+                (conflict.source_left.as_deref(), conflict.confidence_left)
+            } else {
+                assert_eq!(conflict.value_right, "80 EUR");
+                (conflict.source_right.as_deref(), conflict.confidence_right)
+            };
+            assert_eq!(confidence, 0.99);
+            assert_eq!(source, Some("source:official"));
         }
     }
 
@@ -307,9 +314,27 @@ mod tests {
         });
         assert_eq!(output.conflict_count, 2);
         assert!(output.is_blocked);
-        assert_eq!(output.conflicts[0].value_right, "120 EUR");
-        assert_eq!(output.conflicts[0].confidence_right, 0.95);
-        assert_eq!(output.conflicts[1].value_right, "150 EUR");
-        assert_eq!(output.conflicts[1].severity, "high");
+        // Canonical representative is lexicographically first, so an
+        // alternative can be on either side. Every conflict against the
+        // repeated 120 EUR value must use its strongest 0.95 evidence.
+        let alternatives = output
+            .conflicts
+            .iter()
+            .map(|conflict| {
+                assert_eq!(conflict.severity, "critical");
+                if conflict.value_left == "120 EUR" {
+                    assert_eq!(conflict.confidence_left, 0.95);
+                    conflict.value_right.as_str()
+                } else {
+                    assert_eq!(conflict.value_right, "120 EUR");
+                    assert_eq!(conflict.confidence_right, 0.95);
+                    conflict.value_left.as_str()
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            alternatives,
+            std::collections::BTreeSet::from(["80 EUR", "150 EUR"])
+        );
     }
 }
