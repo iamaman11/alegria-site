@@ -166,7 +166,10 @@ class OperationInventoryTests(unittest.TestCase):
 
     def test_candidate_drift_and_unresolved_source_are_detected(self) -> None:
         original = inventory.MATRIX.read_text(encoding="utf-8")
-        altered = original.replace("| ACQ-01 |", "| ACQ-99 |", 1)
+        # Match the canonical matrix row, not an earlier status/progress
+        # table that may mention the same candidate by name.
+        altered = original.replace("| ACQ-01 | KEEP |", "| ACQ-99 | KEEP |", 1)
+        self.assertNotEqual(altered, original)
         altered = altered.replace("app/rust/crates/acquisition/src/source_relevance.rs",
                                   "app/rust/crates/acquisition/src/missing.rs", 1)
         with tempfile.TemporaryDirectory() as tmp:
