@@ -424,9 +424,13 @@ def check() -> None:
     assert 'name: rust-e2e-v3-${{ github.sha }}' in qdrant_runner
     assert '--kind qdrant_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in qdrant_runner
+    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert 'cargo build --locked -p temporal_dataforseo --bin temporal_dataforseo' in v3_job
+    assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in v3_job
     assert 'name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}' in qdrant_runner
     assert '--kind legacy_qdrant_parent --source-sha "$GITHUB_SHA"' in qdrant_runner
-    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 4
+    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 5
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]

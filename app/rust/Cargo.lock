@@ -2324,6 +2324,7 @@ name = "integration_qdrant_temporal_e2e"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dataforseo_contracts",
  "integration_data_fixtures",
  "operation_protocol",
  "postgres_store",
