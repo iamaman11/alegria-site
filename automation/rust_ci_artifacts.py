@@ -45,8 +45,10 @@ KINDS = {
     # Separately attested opt-in stub-only DataForSEO worker executable.
     # Never alias provider code to the provider-neutral parent bundle.
     "dataforseo_effects": ("temporal_dataforseo",),
-    # Independent provider-free Acquisition V1 Child on its own Task Queue.
-    "acquisition_pure": ("temporal_acquisition_pure",),
+    # Two independently privileged Acquisition executables built once in the
+    # existing architecture owner job: pure Temporal Child and source-only SQL
+    # issuer. Each filename is pinned and hash-verified separately at install.
+    "acquisition_pure": ("temporal_acquisition_pure", "acquisition_source_issuer"),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 TARGET = WORKSPACE / "target" / "debug"

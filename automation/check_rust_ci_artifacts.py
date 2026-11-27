@@ -168,21 +168,29 @@ class RustArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("legacy_qdrant_parent", SHA, legacy_bundle, target=self.root / "tampered")
 
-    def test_pure_acquisition_worker_is_exact_sha_separate_and_tamper_evident(self) -> None:
+    def test_acquisition_worker_and_independent_source_issuer_are_exact_sha_tamper_evident(self) -> None:
         with patch.object(artifacts, "TARGET", self.target):
             source = self.executable("temporal_acquisition_pure", b"native pure acquisition owner")
+            issuer = self.executable("acquisition_source_issuer", b"separately credentialed raw HTML issuer")
             bundle = self.root / "acquisition_bundle"
             manifest = artifacts.package("acquisition_pure", SHA, bundle)
-            self.assertEqual(set(manifest["files"]), {"temporal_acquisition_pure"})
+            self.assertEqual(set(manifest["files"]), {
+                "temporal_acquisition_pure", "acquisition_source_issuer",
+            })
             for wrong in ("v3", "dataforseo_effects", "qdrant_effects"):
                 with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "manifest"):
                     artifacts.install(wrong, SHA, bundle, target=self.root / f"wrong_{wrong}")
             destination = self.root / "acquisition_install"
             artifacts.install("acquisition_pure", SHA, bundle, target=destination)
             self.assertEqual((destination / "temporal_acquisition_pure").read_bytes(), source.read_bytes())
+            self.assertEqual((destination / "acquisition_source_issuer").read_bytes(), issuer.read_bytes())
             (bundle / "temporal_acquisition_pure").write_bytes(b"forged owner executable")
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("acquisition_pure", SHA, bundle, target=self.root / "forged")
+            (bundle / "temporal_acquisition_pure").write_bytes(source.read_bytes())
+            (bundle / "acquisition_source_issuer").write_bytes(b"forged SQL issuer executable")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                artifacts.install("acquisition_pure", SHA, bundle, target=self.root / "forged_issuer")
 
     def test_rejects_manifest_confusion_symlink_and_extra_payload(self) -> None:
         source = self.executable("real")

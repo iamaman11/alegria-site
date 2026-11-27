@@ -7,10 +7,12 @@ import unittest
 
 from check_json_boundary_policy import (
     ACQUISITION_OWNER_JSON_TEST_BOUNDARIES,
+    ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES,
     EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
     NATIVE_OWNER_V2_JSON_BOUNDARIES,
     NATIVE_OWNER_V6_JSON_BOUNDARIES,
+    ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES,
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     PG_V3_OPERATOR_JSON_BOUNDARIES,
     PURE_OWNER_LOCAL_JSON_BOUNDARIES,
@@ -23,6 +25,23 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
+    def test_one_step_grant_and_acquisition_issuer_have_only_exact_wire_adapters(self) -> None:
+        self.assertEqual(ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES, {
+            "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
+        })
+        self.assertEqual(ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES, {
+            "app/rust/services/acquisition_source_issuer/src/issue_json.rs",
+        })
+        for relative in ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES | ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES:
+            self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+        for relative in (
+            "app/rust/crates/operation_protocol/src/one_step_request_grant_v1.rs",
+            "app/rust/crates/operation_protocol/src/unreviewed_grant_json.rs",
+            "app/rust/services/acquisition_source_issuer/src/main.rs",
+            "app/rust/services/acquisition_source_issuer/src/unreviewed_json.rs",
+        ):
+            self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
     def test_new_pure_owner_json_is_exact_and_does_not_exempt_domain_modules(self) -> None:
         self.assertEqual(PURE_OWNER_LOCAL_JSON_BOUNDARIES, {
             "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",

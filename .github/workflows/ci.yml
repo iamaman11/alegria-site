@@ -332,17 +332,17 @@ jobs:
           SQLX_OFFLINE: "true"
         run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
 
-      # The independently deployed paid-provider owner must compile as a real
-      # executable, not only as a cargo-test harness.  Full-scope CI already
-      # has a warm Rust toolchain, source cache and formatter in this owner.
-      # Keep this off the existing physical Temporal/PG/Qdrant E2E chain:
-      # until operator admission is implemented it is deliberately stub-only.
-      - name: Compile independent DataForSEO and pure Acquisition Temporal owner binaries
+      # Compile the independently deployed paid-provider owner, pure Temporal
+      # Acquisition Child and separately credentialed raw-HTML source issuer
+      # as real executables in this already-required compiler job. Transfer
+      # their exact SHA-bound bytes into the native Temporal E2E runner; no
+      # second owner compilation in the E2E job.
+      - name: Compile independent DataForSEO, pure Acquisition and source issuer binaries
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
         working-directory: app/rust
-        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure --bins
+        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p acquisition_source_issuer --bins
 
       # Reuse the independently compiled owner as an exact-source artifact.
       # The pure Temporal/PG binary job must never recompile or transitively
