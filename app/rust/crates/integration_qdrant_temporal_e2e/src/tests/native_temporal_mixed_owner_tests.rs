@@ -846,6 +846,8 @@ struct MixedV2NativeRoles {
     business_issuer_url: String,
     governance_issuer_url: String,
     pg_projection_issuer_url: String,
+    read_only_url: String,
+    foreign_read_only_url: String,
     qdrant_worker_secret: PathBuf,
     qdrant_operator_secret: PathBuf,
 }
@@ -860,6 +862,8 @@ async fn mixed_v2_native_roles(
     let business = format!("v2_business_{nonce}");
     let governance = format!("v2_governance_{nonce}");
     let pg_issuer = format!("v2_pg_issuer_{nonce}");
+    let reader = format!("v2_reader_{nonce}");
+    let foreign_reader = format!("v2_foreign_reader_{nonce}");
     let q_worker = format!("v2_q_worker_{nonce}");
     let q_issuer = format!("v2_q_issuer_{nonce}");
     const PASSWORD: &str = "disposable_mixed_owner_password";
@@ -867,12 +871,16 @@ async fn mixed_v2_native_roles(
         "CREATE ROLE {business} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {governance} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {pg_issuer} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {reader} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {foreign_reader} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {q_worker} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {q_issuer} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
-         GRANT CONNECT ON DATABASE alegria TO {business},{governance},{pg_issuer},{q_worker},{q_issuer};
-         GRANT USAGE ON SCHEMA pipeline TO {business},{governance},{pg_issuer},{q_worker},{q_issuer};
+         GRANT CONNECT ON DATABASE alegria TO {business},{governance},{pg_issuer},{reader},{foreign_reader},{q_worker},{q_issuer};
+         GRANT USAGE ON SCHEMA pipeline TO {business},{governance},{pg_issuer},{reader},{foreign_reader},{q_worker},{q_issuer};
          GRANT INSERT ON pipeline.operation_dag_business_runs_v1 TO {business};
          GRANT SELECT ON pipeline.operation_dag_business_runs_v1 TO {governance},{pg_issuer},{q_issuer};
+         GRANT SELECT ON pipeline.operation_dag_business_runs_v1,
+             pipeline.operation_dag_run_governance_v2 TO {reader},{foreign_reader};
          GRANT INSERT ON pipeline.operation_dag_run_governance_v2 TO {governance};
          GRANT SELECT ON pipeline.vector_projection_sources_v1 TO {pg_issuer};
          GRANT INSERT ON pipeline.pg_vector_projection_admissions_v1 TO {pg_issuer};
@@ -896,10 +904,13 @@ async fn mixed_v2_native_roles(
              TO {q_issuer};",
         pg_worker = existing.pg_worker_role,
     ))) .execute(&pg.pool).await.expect("DBA creates strictly disjoint V2 roles");
-    for role in [&business, &governance, &pg_issuer, &q_worker, &q_issuer] {
+    for role in [&business, &governance, &pg_issuer, &reader, &q_worker, &q_issuer] {
         sqlx::query("INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)")
             .bind(role).bind(tenant).execute(&pg.pool).await.unwrap();
     }
+    sqlx::query("INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)")
+        .bind(&foreign_reader).bind("ci-unrelated-read-only-tenant")
+        .execute(&pg.pool).await.expect("cross-tenant reader has distinct RLS scope");
     let url = |role: &str| {
         let prefix = "postgres://postgres:postgres_password@";
         assert!(pg.database_url.starts_with(prefix));
@@ -909,6 +920,8 @@ async fn mixed_v2_native_roles(
         business_issuer_url: url(&business),
         governance_issuer_url: url(&governance),
         pg_projection_issuer_url: url(&pg_issuer),
+        read_only_url: url(&reader),
+        foreign_read_only_url: url(&foreign_reader),
         qdrant_worker_secret: secret("ci-v2-qdrant-worker", &url(&q_worker)),
         qdrant_operator_secret: secret("ci-v2-qdrant-operator", &url(&q_issuer)),
     }
@@ -2429,18 +2442,113 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
 
     // Positive SINGLE-operation proof, inside the SAME physical Temporal,
     // PostgreSQL and Qdrant harness and with the SAME production V2 workers.
-    // No direct provider shortcut: only one Qdrant owner ValidateOnly Child,
-    // one independently admitted effect Child, and one durable real receipt.
+    // Start through the independently enabled native operator interface,
+    // NOT directly through the test's Temporal client. The operator never
+    // mints the separate business/owner authorities or substitutes an
+    // untrusted recipe for the installed immutable owner route.
+    #[derive(serde::Serialize)]
+    struct ExactSingleStartRequest<'a> {
+        schema_revision: u16,
+        run: &'a operation_protocol::OperationDagRunV6,
+        context_key: &'a str,
+        expected: &'a operation_protocol::SiteLabExpectedStartV1,
+        expires_at_unix_seconds: u64,
+    }
+    let one_expected = operation_protocol::SiteLabExpectedStartV1 {
+        schema_revision: operation_protocol::SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        plan_hash: single_run.plan.hash.clone(),
+        command_hashes: single_run.owner_commands.iter().map(|(instance, wire)| (
+            instance.clone(), operation_protocol::owner_content_hash(&wire.command_bytes),
+        )).collect(),
+        source_payload_hashes: single_run.admitted.iter().map(|(id, source)| (
+            id.clone(), operation_protocol::owner_content_hash(&source.payload),
+        )).collect(),
+    };
+    let one_start_deadline = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 300;
+    let one_start_request = |run: &operation_protocol::OperationDagRunV6, prefix: &str| {
+        private_locators.request(prefix, &serde_json::to_string(&ExactSingleStartRequest {
+            schema_revision: 1,
+            run,
+            context_key: &contexts[5],
+            expected: &one_expected,
+            expires_at_unix_seconds: one_start_deadline,
+        }).unwrap())
+    };
+    let one_reader_dsn = private_locators.request(
+        "v2-one-step-reader-dsn", &roles.read_only_url,
+    );
+    let invoke_single_start = |locator: &std::path::Path| {
+        Command::new(&pg_bin)
+            .arg("--operator-start-single-v2")
+            .arg(locator)
+            .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
+            .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
+            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &one_reader_dsn)
+            .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
+            .env_remove("DATABASE_URL")
+            .output().expect("run native one-step Temporal Start operator")
+    };
+    let mut changed_single_run = single_run.clone();
+    changed_single_run.admitted.get_mut(&"external_vector_command".into()).unwrap()
+        .payload.push(0x7f);
+    let forged_start = invoke_single_start(&one_start_request(
+        &changed_single_run, "v2-one-step-forged-source",
+    ));
+    assert!(!forged_start.status.success(),
+        "changed source bytes with independently captured expected hash cannot start Temporal");
+    let expired_start_request = private_locators.request(
+        "v2-one-step-expired-intent",
+        &serde_json::to_string(&ExactSingleStartRequest {
+            schema_revision: 1,
+            run: &single_run,
+            context_key: &contexts[5],
+            expected: &one_expected,
+            expires_at_unix_seconds: 1,
+        }).unwrap(),
+    );
+    assert!(!invoke_single_start(&expired_start_request).status.success(),
+        "expired authoring intent cannot create a new Temporal workflow");
     let one_parent_id = operation_dag_parent_workflow_id_v2(&single_id.to_string());
-    let one_parent = client.start_workflow(
-        UntypedWorkflow::new(OPERATION_DAG_PARENT_TYPE_V2),
-        RawValue::from_value(&single_run, &PayloadConverter::serde_json()),
-        WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE_V2, one_parent_id.clone()).build(),
-    ).await.expect("start one-step V2 recipe through the same real Temporal coordinator");
-    let one_parent_run = one_parent.info().run_id.clone().unwrap();
+    let one_approved_request = one_start_request(&single_run, "v2-one-step-approved-start");
+    let without_business_root = invoke_single_start(&one_approved_request);
+    assert!(!without_business_root.status.success(),
+        "the independent SQL business authority must exist before any Temporal Start");
+    assert!(client.get_workflow_handle::<UntypedWorkflow>(one_parent_id.clone())
+        .describe(WorkflowDescribeOptions::builder().build()).await.is_err(),
+        "without independent business authority, no Temporal V2 parent may exist at all");
     mixed_v2_authorize_business_root(
         &roles, &single_run, &contexts[5], &one_parent_id,
     ).await;
+    let one_start = invoke_single_start(&one_approved_request);
+    assert!(one_start.status.success(),
+        "one-step operator Start: stdout={} stderr={}",
+        String::from_utf8_lossy(&one_start.stdout),
+        String::from_utf8_lossy(&one_start.stderr));
+    let one_start_report: serde_json::Value = serde_json::from_slice(&one_start.stdout)
+        .expect("native Start operator returns bounded structured JSON");
+    assert_eq!(one_start_report["status"],
+        "started_business_root_verified_owner_unadmitted");
+    assert_eq!(one_start_report["run_id"], single_id.to_string());
+    assert_eq!(one_start_report["parent_workflow_id"], one_parent_id);
+    assert_eq!(one_start_report["plan_hash"], single_run.plan.hash.as_str());
+    assert_eq!(one_start_report["owner_admission"], "not_issued_by_start");
+    let one_parent_run = one_start_report["parent_workflow_run_id"]
+        .as_str().expect("Temporal server-issued run ID must be returned").to_owned();
+    let duplicate_running_start = invoke_single_start(&one_approved_request);
+    assert!(!duplicate_running_start.status.success(),
+        "repeat Start with the same Workflow ID while running must be refused, not open a second effect path");
+    assert!(!String::from_utf8_lossy(&duplicate_running_start.stdout)
+            .contains("started_business_root_verified_owner_unadmitted"),
+        "a rejected duplicate must not advertise another successful Temporal Start");
+    let one_parent = WorkflowExecutionInfo::builder()
+        .namespace(temporal.namespace.clone())
+        .workflow_id(one_parent_id.clone())
+        .run_id(one_parent_run.clone())
+        .build()
+        .bind_untyped(client.clone());
     let one_governance_request = private_locators.request(
         "v2-one-step-governance",
         &serde_json::json!({
@@ -2466,6 +2574,33 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "one-step native governance: stdout={} stderr={}",
         String::from_utf8_lossy(&one_governance.stdout),
         String::from_utf8_lossy(&one_governance.stderr));
+    let foreign_reader_dsn = private_locators.request(
+        "v2-one-step-foreign-reader-dsn", &roles.foreign_read_only_url,
+    );
+    let one_read_locator = private_locators.request(
+        "v2-one-step-exact-run-read",
+        &serde_json::json!({"canonical_run_id":single_id}).to_string(),
+    );
+    let invoke_one_read = |sql_file: &std::path::Path, reader_tenant: &str| {
+        Command::new(&pg_bin)
+            .arg("--operator-read-dag-run-v2")
+            .arg(&one_read_locator)
+            .env("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2", "true")
+            .env("OPERATION_DAG_READ_V2_DATABASE_URL_FILE", sql_file)
+            .env("OPERATION_DAG_READ_V2_TENANT_ID", reader_tenant)
+            .env("OPERATION_DAG_READ_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
+            .env_remove("DATABASE_URL")
+            .output().expect("invoke tenant-bound exact server Temporal V2 reader")
+    };
+    let foreign_read = invoke_one_read(&foreign_reader_dsn, "ci-unrelated-read-only-tenant");
+    assert!(!foreign_read.status.success(),
+        "RLS must refuse a genuine foreign-tenant reader even for an existing run");
+    let foreign_diagnostic: serde_json::Value = serde_json::from_slice(&foreign_read.stdout)
+        .expect("foreign reader must return bounded redacted diagnostic JSON");
+    assert_eq!(foreign_diagnostic["status"], "refused");
+    assert_eq!(foreign_diagnostic["code"], "run_unavailable_or_untrusted");
     let (one_child_id, one_child_run) = timeout(Duration::from_secs(70), async {
         loop {
             let history = one_parent.fetch_history(
@@ -2505,6 +2640,15 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1",
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(q_before, 0, "one-step provider effect cannot precede independent issuer");
+    let pending_read = invoke_one_read(&one_reader_dsn, tenant);
+    assert!(pending_read.status.success(),
+        "admitted-but-not-yet-executed one-step run must be readable: stdout={} stderr={}",
+        String::from_utf8_lossy(&pending_read.stdout),
+        String::from_utf8_lossy(&pending_read.stderr));
+    let pending_view: serde_json::Value = serde_json::from_slice(&pending_read.stdout).unwrap();
+    assert_eq!(pending_view["status"], "temporal_running");
+    assert_eq!(pending_view["owner_result_count"], 0);
+    assert_eq!(pending_view["canonical_run_id"], single_id.to_string());
     let one_q_request = private_locators.request("v2-one-step-qdrant-issuer", &serde_json::json!({
         "admission_id": single_q_admission,
         "canonical_run_id": single_id,
@@ -2564,6 +2708,48 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(one_effects, (1, 1),
         "one operation produces exactly one durable effect attempt and receipt");
+    // A fresh, unexpired intent with the same canonical Workflow ID must
+    // still fail: expiry alone must not mask a dangerous post-completion
+    // Workflow ID reuse policy.
+    let fresh_duplicate_start_request = private_locators.request(
+        "v2-one-step-fresh-duplicate-start",
+        &serde_json::to_string(&ExactSingleStartRequest {
+            schema_revision: 1,
+            run: &single_run,
+            context_key: &contexts[5],
+            expected: &one_expected,
+            expires_at_unix_seconds: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 300,
+        }).unwrap(),
+    );
+    let duplicate_completed_start = invoke_single_start(&fresh_duplicate_start_request);
+    assert!(!duplicate_completed_start.status.success(),
+        "completed one-operation Workflow ID must not be reused by replaying the same intent");
+    let final_effects: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1),
+                (SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts WHERE admission_id=$1)",
+    ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(final_effects, (1, 1),
+        "refused duplicate Start cannot cause another durable Qdrant effect or receipt");
+    let completed_read = invoke_one_read(&one_reader_dsn, tenant);
+    assert!(completed_read.status.success(),
+        "completed one-step read from exact server History: stdout={} stderr={}",
+        String::from_utf8_lossy(&completed_read.stdout),
+        String::from_utf8_lossy(&completed_read.stderr));
+    let completed_view: serde_json::Value = serde_json::from_slice(&completed_read.stdout)
+        .expect("operator must only emit typed bounded metadata");
+    assert_eq!(completed_view["status"], "temporal_completed_owner_unverified");
+    assert_eq!(completed_view["canonical_run_id"], single_id.to_string());
+    assert_eq!(completed_view["parent_workflow_run_id"], one_parent_run);
+    assert_eq!(completed_view["plan_hash"], single_run.plan.hash.as_str());
+    assert_eq!(completed_view["step_count"], 1);
+    assert_eq!(completed_view["owner_result_count"], 1);
+    assert_eq!(completed_view["temporal_history_attestation"],
+        "exact_server_parent_start_and_completion");
+    assert_eq!(completed_view["owner_receipt_attestation"], "not_independently_verified");
+    assert_eq!(completed_view["result_blake3"].as_str().map(str::len), Some(64));
+    assert!(!String::from_utf8_lossy(&completed_read.stdout).contains(&one_command.keyword_key),
+        "run diagnostics must not emit a provider keyword or private payload");
     eprintln!("CI_MIXED_V2_NATIVE_SINGLE_OPERATION_TEMPORAL_QDRANT=PASS");
 
     // A structurally legal plan with either malformed concrete bytes or an

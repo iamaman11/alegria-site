@@ -1,0 +1,762 @@
+//! Read-only, tenant-scoped proof of ONE native V2 Temporal operation.
+//!
+//! This operator does not issue root authority, start a Workflow, signal a
+//! Child, invoke a provider or claim that an owner's durable external effect
+//! was independently verified. Only the exact server History is observed.
+
+use std::{env, path::Path};
+
+use anyhow::{bail, ensure, Context, Result};
+use operation_protocol::{
+    enforce_json_budget, operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2,
+    owner_content_hash, OperationDagReceiptV1, OperationDagRunV6, OwnerInvocationV1,
+    OwnerResultV1, TrustedRouteCatalog, DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES,
+    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    OWNER_OPERATION_CHILD_TYPE_V1,
+    OWNER_VALIDATION_CHILD_TYPE_V1,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, Row};
+use temporalio_client::Client;
+use temporalio_common::protos::temporal::api::history::v1::{
+    history_event::Attributes, History,
+};
+use uuid::Uuid;
+
+use super::operator_dag_governance::{
+    read_operator_owned_catalog, read_private_operator_file, validate_local_temporal_endpoint,
+};
+use super::operator_v4::{fetch_exact_history, first_started_payload};
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunLocator {
+    canonical_run_id: Uuid,
+}
+
+#[derive(Debug, Serialize)]
+struct SafeRunInspection {
+    operation: &'static str,
+    status: &'static str,
+    canonical_run_id: Uuid,
+    parent_workflow_run_id: String,
+    plan_hash: String,
+    parent_start_sha256: String,
+    step_count: usize,
+    owner_result_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_blake3: Option<String>,
+    governance_currently_active: bool,
+    temporal_history_attestation: &'static str,
+    owner_receipt_attestation: &'static str,
+    source_authentication: &'static str,
+    next_action: &'static str,
+}
+
+const OPERATION: &str = "read_operation_dag_run_v2";
+
+/// Even a refused lookup must not echo raw Workflow/SQL/provider errors or
+/// distinguish a nonexistent run from somebody else's tenant-scoped run.
+pub(super) async fn read_from_file(path: &Path) -> Result<()> {
+    match read_verified_run(path).await {
+        Ok(report) => {
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "operation":OPERATION,
+                    "status":"refused",
+                    "code":"run_unavailable_or_untrusted",
+                    "next_action":"Check the tenant-bound read-only role, installed catalog and exact Temporal/SQL run records with the operator."
+                })
+            );
+            bail!("read-only V2 run proof refused; see redacted JSON diagnostic")
+        }
+    }
+}
+
+async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
+    ensure!(
+        env::var("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2")
+            .ok()
+            .as_deref()
+            == Some("true"),
+        "native V2 read-only operator disabled"
+    );
+    let bytes = read_private_operator_file(path, "V2 read-only run locator")?;
+    ensure!(bytes.len() <= 256, "V2 run locator exceeds bounded UUID request");
+    let locator: RunLocator = serde_json::from_slice(&bytes)?;
+    ensure!(
+        !locator.canonical_run_id.is_nil(),
+        "canonical business run UUID is nil"
+    );
+    let tenant = env::var("OPERATION_DAG_READ_V2_TENANT_ID")?;
+    ensure!(
+        !tenant.is_empty() && tenant.trim() == tenant,
+        "reader tenant must be configured"
+    );
+    let pool = read_only_pool(&tenant).await?;
+    // The PostgreSQL LOGIN, not a caller-provided tenant field or mutable
+    // session GUC, establishes identity. Missing/cross-tenant RLS rows are
+    // deliberately indistinguishable in the public diagnostic.
+    let root = sqlx::query(
+        "SELECT tenant_id,context_key,plan_hash,parent_workflow_id,
+                expires_at,revoked_at
+         FROM pipeline.operation_dag_business_runs_v1 WHERE run_id=$1",
+    )
+    .bind(locator.canonical_run_id)
+    .fetch_optional(&pool)
+    .await?
+    .context("tenant-owned business run not found")?;
+    let workflow_id = operation_dag_parent_workflow_id_v2(&locator.canonical_run_id.to_string());
+    let context = root.get::<String, _>("context_key");
+    let plan_hash = root.get::<String, _>("plan_hash");
+    ensure!(
+        root.get::<String, _>("tenant_id") == tenant
+            && root.get::<String, _>("parent_workflow_id") == workflow_id,
+        "business root identity mismatch"
+    );
+    let governance = sqlx::query(
+        "SELECT tenant_id,context_key,plan_hash,parent_workflow_id,
+                parent_workflow_run_id,parent_workflow_type,parent_task_queue,
+                parent_start_sha256,expires_at,revoked_at
+         FROM pipeline.operation_dag_run_governance_v2
+         WHERE canonical_run_id=$1 ORDER BY issued_at DESC LIMIT 2",
+    )
+    .bind(locator.canonical_run_id)
+    .fetch_all(&pool)
+    .await?;
+    ensure!(
+        governance.len() == 1,
+        "none or ambiguous independent Temporal governance identity"
+    );
+    let admitted = &governance[0];
+    ensure!(
+        admitted.get::<String, _>("tenant_id") == tenant
+            && admitted.get::<String, _>("context_key") == context
+            && admitted.get::<String, _>("plan_hash") == plan_hash
+            && admitted.get::<String, _>("parent_workflow_id") == workflow_id
+            && admitted.get::<String, _>("parent_workflow_type")
+                == OPERATION_DAG_PARENT_TYPE_V2
+            && admitted.get::<String, _>("parent_task_queue") == OPERATION_DAG_PARENT_QUEUE_V2,
+        "trusted governance differs from the canonical business root"
+    );
+    let temporal_run_id = admitted.get::<String, _>("parent_workflow_run_id");
+    Uuid::parse_str(&temporal_run_id).context("noncanonical Temporal server Run ID")?;
+    let governance_active = root
+        .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
+        .is_none()
+        && admitted
+            .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
+            .is_none()
+        && root.get::<chrono::DateTime<chrono::Utc>, _>("expires_at") > chrono::Utc::now()
+        && admitted.get::<chrono::DateTime<chrono::Utc>, _>("expires_at") > chrono::Utc::now();
+
+    let temporal_url = env::var("OPERATION_DAG_READ_V2_TEMPORAL_URL")?;
+    validate_local_temporal_endpoint(&temporal_url)?;
+    let namespace = env::var("OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE")?;
+    ensure!(
+        !namespace.is_empty() && namespace.trim() == namespace,
+        "reader Temporal namespace invalid"
+    );
+    let catalog_path = env::var("OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE")?;
+    let catalog = read_operator_owned_catalog(Path::new(&catalog_path))?;
+    let client = crate::connect_client(
+        &temporal_url,
+        format!("alegria-v2-read-only-{}", std::process::id()),
+        &namespace,
+    )
+    .await?;
+    let history = fetch_exact_history(&client, &namespace, &workflow_id, &temporal_run_id).await?;
+    ensure!(history.events.len() <= 1_000, "one-step server History is too large");
+    let start = first_started_payload(
+        &history,
+        OPERATION_DAG_PARENT_TYPE_V2,
+        OPERATION_DAG_PARENT_QUEUE_V2,
+    )?;
+    ensure!(
+        !start.is_empty() && start.len() <= DAG_MAX_INPUT_BYTES,
+        "unbounded native V2 parent Start input"
+    );
+    let start_sha256: String =
+        sqlx::query_scalar("SELECT encode(public.digest($1::bytea,'sha256'),'hex')")
+            .bind(&start)
+            .fetch_one(&pool)
+            .await?;
+    ensure!(
+        start_sha256 == admitted.get::<String, _>("parent_start_sha256"),
+        "server Start bytes differ from independently issued SQL governance"
+    );
+    let run: OperationDagRunV6 = serde_json::from_slice(&start)?;
+    ensure!(
+        run.schema_revision == 6
+            && serde_json::to_vec(&run)? == start
+            && run.plan.scope.run_id == locator.canonical_run_id.to_string()
+            && run.plan.scope.tenant_id == tenant
+            && run.plan.hash.as_str() == plan_hash
+            && run.plan.nodes.len() == 1
+            && run.owner_commands.len() == 1
+            && run.pinned_routes.len() == 1,
+        "server Start is not the exact canonical one-operation V2 run"
+    );
+    let validated = run.plan.validate(catalog.catalog())?;
+    catalog.validate_run_routes(&run)?;
+    let node = &run.plan.nodes[0];
+    ensure!(
+        run.owner_commands.contains_key(&node.instance),
+        "single operation command absent"
+    );
+
+    let (status, receipt_hash, owner_result_count, temporal_proof, next_action) =
+        classify_server_result(&history, &run, validated.execution_order())?;
+    if status == "temporal_completed_owner_unverified" {
+        attest_one_owner_child(
+            &client,
+            &namespace,
+            &history,
+            &run,
+            &catalog,
+            &workflow_id,
+            &temporal_run_id,
+        )
+        .await?;
+    }
+    Ok(SafeRunInspection {
+        operation: OPERATION,
+        status,
+        canonical_run_id: locator.canonical_run_id,
+        parent_workflow_run_id: temporal_run_id,
+        plan_hash,
+        parent_start_sha256: start_sha256,
+        step_count: 1,
+        owner_result_count,
+        result_blake3: receipt_hash,
+        governance_currently_active: governance_active,
+        temporal_history_attestation: if status == "temporal_completed_owner_unverified" {
+            "exact_server_parent_and_owner_child_histories"
+        } else {
+            temporal_proof
+        },
+        owner_receipt_attestation: "not_independently_verified",
+        source_authentication: "not_independently_attested",
+        next_action,
+    })
+}
+
+fn classify_server_result(
+    history: &History,
+    run: &OperationDagRunV6,
+    expected_order: &[operation_protocol::OperationInstanceId],
+) -> Result<(
+    &'static str,
+    Option<String>,
+    usize,
+    &'static str,
+    &'static str,
+)> {
+    let completed: Vec<_> = history
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::WorkflowExecutionCompletedEventAttributes(done)) => Some(done),
+            _ => None,
+        })
+        .collect();
+    let terminal_count = history
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::WorkflowExecutionCompletedEventAttributes(_))
+                    | Some(Attributes::WorkflowExecutionFailedEventAttributes(_))
+                    | Some(Attributes::WorkflowExecutionCanceledEventAttributes(_))
+                    | Some(Attributes::WorkflowExecutionTimedOutEventAttributes(_))
+                    | Some(Attributes::WorkflowExecutionTerminatedEventAttributes(_))
+                    | Some(Attributes::WorkflowExecutionContinuedAsNewEventAttributes(_))
+            )
+        })
+        .count();
+    ensure!(
+        terminal_count <= 1 && completed.len() <= 1,
+        "contradictory native V2 terminal events"
+    );
+    if let Some(done) = completed.first() {
+        ensure!(
+            matches!(
+                history.events.last().and_then(|event| event.attributes.as_ref()),
+                Some(Attributes::WorkflowExecutionCompletedEventAttributes(_))
+            ),
+            "Temporal completion is not the last server History event"
+        );
+        let payloads = done
+            .result
+            .as_ref()
+            .context("completed native V2 result lacks payload")?;
+        ensure!(
+            payloads.payloads.len() == 1
+                && !payloads.payloads[0].data.is_empty()
+                && payloads.payloads[0].data.len() <= DAG_MAX_RESULT_BYTES,
+            "completed native V2 result is missing or exceeds budget"
+        );
+        let bytes = &payloads.payloads[0].data;
+        let receipt: OperationDagReceiptV1 = serde_json::from_slice(bytes)?;
+        ensure!(
+            serde_json::to_vec(&receipt)?.as_slice() == bytes.as_slice(),
+            "noncanonical native V2 result bytes"
+        );
+        enforce_json_budget(&receipt, DAG_MAX_RESULT_BYTES, "v2_native_read_receipt")?;
+        ensure!(
+            receipt.plan_hash == run.plan.hash
+                && receipt.order.as_slice() == expected_order
+                && receipt.owner_results.len() == 1
+                && receipt.owner_results.contains_key(&run.plan.nodes[0].instance)
+                && receipt.produced_evidence.len() == run.plan.nodes[0].outputs.len()
+                && receipt.artifacts.len()
+                    == run.plan.external_artifacts.len() + run.plan.nodes[0].outputs.len(),
+            "native V2 result does not match one exact operation and its sealed plan"
+        );
+        return Ok((
+            "temporal_completed_owner_unverified",
+            Some(owner_content_hash(bytes)),
+            1,
+            "exact_server_parent_start_and_completion",
+            "Ask the installed owner for an independently attested durable provider receipt before treating outputs as research evidence.",
+        ));
+    }
+    let terminal_status = history.events.last().and_then(|event| match &event.attributes {
+        Some(Attributes::WorkflowExecutionFailedEventAttributes(_)) => Some("temporal_failed"),
+        Some(Attributes::WorkflowExecutionCanceledEventAttributes(_)) => Some("temporal_canceled"),
+        Some(Attributes::WorkflowExecutionTimedOutEventAttributes(_)) => Some("temporal_timed_out"),
+        Some(Attributes::WorkflowExecutionTerminatedEventAttributes(_)) => {
+            Some("temporal_terminated")
+        }
+        Some(Attributes::WorkflowExecutionContinuedAsNewEventAttributes(_)) => {
+            Some("temporal_continued_as_new")
+        }
+        _ => None,
+    });
+    if let Some(status) = terminal_status {
+        return Ok((
+            status,
+            None,
+            0,
+            "exact_server_parent_start_and_terminal_event",
+            "Inspect the server-side terminal step without exposing raw Activity or provider errors to this reader.",
+        ));
+    }
+    Ok((
+        "temporal_running",
+        None,
+        0,
+        "exact_server_parent_start_only",
+        "Wait for the native Temporal Workflow to finish, then read this same business run again.",
+    ))
+}
+
+/// Parent completion by itself is not a provider receipt. At least verify the
+/// native owner's *separate* actual Temporal Child History, exact typed input,
+/// reciprocal server parent identity, typed completion and parent receipt.
+/// SQL/provider readback belongs to the independently installed owner.
+async fn attest_one_owner_child(
+    client: &Client,
+    namespace: &str,
+    parent: &History,
+    run: &OperationDagRunV6,
+    catalog: &TrustedRouteCatalog,
+    parent_workflow_id: &str,
+    parent_run_id: &str,
+) -> Result<()> {
+    let node = &run.plan.nodes[0];
+    let route = &run.pinned_routes[0];
+    let wire = run
+        .owner_commands
+        .get(&node.instance)
+        .context("single owner command not pinned")?;
+    ensure!(
+        route.operation == node.operation
+            && route.owner == wire.owner
+            && route.contract_hash == wire.contract_hash
+            && route.workflow_type == OWNER_OPERATION_CHILD_TYPE_V1,
+        "one-owner trusted route/command mismatch"
+    );
+    let validations = parent
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs))
+                if attrs.workflow_id.starts_with("alegria-owner-validate-v1-") =>
+            {
+                Some((event, attrs))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        validations.len() == 1
+            && validations[0]
+                .1
+                .workflow_type
+                .as_ref()
+                .map(|typed| typed.name.as_str())
+                == Some(OWNER_VALIDATION_CHILD_TYPE_V1)
+            && validations[0]
+                .1
+                .task_queue
+                .as_ref()
+                .map(|queue| queue.name.as_str())
+                == Some(route.task_queue.as_str()),
+        "exactly one typed owner ValidateOnly must be scheduled"
+    );
+    let validated = parent
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(&event.attributes,
+                Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs))
+                    if attrs.initiated_event_id == validations[0].0.event_id)
+        })
+        .collect::<Vec<_>>();
+    ensure!(validated.len() == 1, "owner ValidateOnly did not complete once");
+
+    let effects = parent
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs))
+                if attrs.workflow_id.starts_with("alegria-owner-operation-v2-") =>
+            {
+                Some((event, attrs))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure!(effects.len() == 1, "exactly one V2 owner effect child is required");
+    let (initiated, effect) = effects[0];
+    ensure!(
+        effect.workflow_type.as_ref().map(|typed| typed.name.as_str())
+            == Some(OWNER_OPERATION_CHILD_TYPE_V1)
+            && effect.task_queue.as_ref().map(|queue| queue.name.as_str())
+                == Some(route.task_queue.as_str()),
+        "owner effect Child Type or Task Queue mismatches installed route"
+    );
+    let started = parent
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs))
+                if attrs.initiated_event_id == initiated.event_id => Some((event, attrs)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        started.len() == 1 && validated[0].event_id < started[0].0.event_id,
+        "owner effect started before typed ValidateOnly completed"
+    );
+    let child_run = started[0]
+        .1
+        .workflow_execution
+        .as_ref()
+        .context("owner Child server execution identity missing")?;
+    ensure!(
+        child_run.workflow_id == effect.workflow_id
+            && !child_run.run_id.is_empty(),
+        "owner Child server identity mismatches initiated event"
+    );
+    let child = fetch_exact_history(client, namespace, &child_run.workflow_id, &child_run.run_id)
+        .await?;
+    ensure!(child.events.len() <= 1_000, "owner Child History exceeds one-step budget");
+    let child_start =
+        first_started_payload(&child, OWNER_OPERATION_CHILD_TYPE_V1, &route.task_queue)?;
+    ensure!(
+        child_start.len() <= DAG_MAX_INPUT_BYTES
+            && effect.input.as_ref().is_some_and(|input| {
+                input.payloads.len() == 1
+                    && input.payloads[0].data.as_slice() == child_start.as_slice()
+            }),
+        "server parent/Child command bytes differ"
+    );
+    let own_start = child.events.first().context("missing owner Child start")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(own_start)) =
+        &own_start.attributes
+    else {
+        bail!("owner Child own History lacks start attributes")
+    };
+    let actual_parent = own_start
+        .parent_workflow_execution
+        .as_ref()
+        .context("owner Child lacks real server parent")?;
+    ensure!(
+        actual_parent.workflow_id == parent_workflow_id
+            && actual_parent.run_id == parent_run_id
+            && own_start.parent_initiated_event_id == initiated.event_id,
+        "owner Child reciprocal Temporal parent identity mismatches"
+    );
+    let invocation: OwnerInvocationV1 = serde_json::from_slice(&child_start)?;
+    ensure!(
+        serde_json::to_vec(&invocation)? == child_start
+            && invocation.parent.workflow_id == parent_workflow_id
+            && invocation.parent.run_id == parent_run_id
+            && invocation.checked_dispatch.instance == node.instance
+            && invocation.checked_dispatch.plan_hash == run.plan.hash
+            && invocation.checked_dispatch.scope == run.plan.scope
+            && invocation.checked_dispatch.operation == node.operation
+            && invocation.checked_dispatch.owner == route.owner
+            && wire.operation == node.operation
+            && wire.command_bytes == invocation.command_bytes
+            && effect.workflow_id
+                == owner_child_workflow_id_v2(
+                    &invocation.checked_dispatch.execution_key,
+                ),
+        "native owner Child typed command differs from exact parent Start"
+    );
+    catalog.route_for_dispatch(&invocation.checked_dispatch)?;
+
+    let parent_completions = parent
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs))
+                if attrs.initiated_event_id == initiated.event_id => Some(attrs),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let child_completions = child
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::WorkflowExecutionCompletedEventAttributes(attrs)) => Some(attrs),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        parent_completions.len() == 1 && child_completions.len() == 1,
+        "owner Child lacks one exact parent/own completed result"
+    );
+    let parent_result = parent_completions[0]
+        .result
+        .as_ref()
+        .and_then(|result| (result.payloads.len() == 1).then_some(result.payloads[0].data.as_slice()))
+        .context("owner parent ChildCompleted has no typed result")?;
+    let own_result = child_completions[0]
+        .result
+        .as_ref()
+        .and_then(|result| (result.payloads.len() == 1).then_some(result.payloads[0].data.as_slice()))
+        .context("owner Child own History has no typed result")?;
+    ensure!(
+        !parent_result.is_empty()
+            && parent_result.len() <= DAG_MAX_RESULT_BYTES
+            && parent_result == own_result,
+        "owner Child completed bytes differ across genuine server Histories"
+    );
+    let result: OwnerResultV1 = serde_json::from_slice(own_result)?;
+    ensure!(
+        serde_json::to_vec(&result)?.as_slice() == own_result,
+        "noncanonical owner Child completed result"
+    );
+    result.verify_integrity(&invocation.checked_dispatch, catalog)?;
+
+    let parent_done = parent
+        .events
+        .last()
+        .context("native DAG lacks terminal completed event")?;
+    let Some(Attributes::WorkflowExecutionCompletedEventAttributes(parent_done)) =
+        &parent_done.attributes
+    else {
+        bail!("native DAG completed result does not terminate parent History")
+    };
+    let receipt_bytes = parent_done
+        .result
+        .as_ref()
+        .and_then(|result| (result.payloads.len() == 1).then_some(result.payloads[0].data.as_slice()))
+        .context("native DAG parent completion lacks typed receipt")?;
+    let receipt: OperationDagReceiptV1 = serde_json::from_slice(receipt_bytes)?;
+    let stored_result = receipt
+        .owner_results
+        .get(&node.instance)
+        .context("native DAG receipt does not carry completed owner")?;
+    ensure!(
+        serde_json::to_vec(stored_result)?.as_slice() == own_result,
+        "native DAG final receipt differs from independently fetched owner Child"
+    );
+    let result_hash = owner_content_hash(own_result);
+    for (port, artifact_id) in &node.outputs {
+        let output = result
+            .outputs
+            .get(port)
+            .context("real owner Child output port absent")?;
+        let final_artifact = receipt
+            .artifacts
+            .get(artifact_id)
+            .context("native DAG final output artifact absent")?;
+        let evidence = receipt
+            .produced_evidence
+            .get(artifact_id)
+            .context("native DAG produced evidence absent")?;
+        ensure!(
+            final_artifact == output
+                && evidence.producer == node.instance
+                && &evidence.port == port
+                && &evidence.artifact_id == artifact_id
+                && evidence.dispatch_execution_key
+                    == invocation.checked_dispatch.execution_key
+                && evidence.child_workflow_id == effect.workflow_id
+                && evidence.result_hash == result_hash
+                && evidence.receipt_hash == owner_content_hash(&result.receipt_bytes)
+                && evidence.payload_hash == owner_content_hash(&output.payload),
+            "native DAG output differs from independently attested owner Child result"
+        );
+    }
+    Ok(())
+}
+
+async fn read_only_pool(expected_tenant: &str) -> Result<PgPool> {
+    tenant_read_only_pool(
+        expected_tenant,
+        "OPERATION_DAG_READ_V2_DATABASE_URL_FILE",
+        true,
+    )
+    .await
+}
+
+/// Identical fail-closed SQL principal check for the start preflight's own
+/// SELECT-only tenant role. A starter need not read the governance table
+/// because its own job is to prove a preexisting business root before Start;
+/// it must never possess issuer INSERT/revocation permissions.
+pub(super) async fn tenant_read_only_pool(
+    expected_tenant: &str,
+    dsn_file_env: &str,
+    require_governance_read: bool,
+) -> Result<PgPool> {
+    let path = env::var(dsn_file_env)
+        .context("read-only V2 operator requires private SQL credential file")?;
+    let bytes = read_private_operator_file(Path::new(&path), "V2 read-only database DSN")?;
+    let dsn = String::from_utf8(bytes)?;
+    let dsn = dsn.trim_end_matches(|character| character == '\r' || character == '\n');
+    ensure!(!dsn.is_empty() && dsn.trim() == dsn, "invalid reader DSN");
+    let pool = PgPool::connect(dsn).await?;
+    let role = sqlx::query(
+        "SELECT current_user::text effective,session_user::text login,
+                r.rolcanlogin login_enabled,r.rolinherit inherits_roles,
+                r.rolsuper privileged,r.rolbypassrls bypass,
+                r.rolcreaterole role_admin,r.rolcreatedb db_admin,
+                r.rolreplication replication,
+                has_table_privilege(session_user,
+                    'pipeline.operation_dag_business_runs_v1','SELECT') can_read_root,
+                has_table_privilege(session_user,
+                    'pipeline.operation_dag_run_governance_v2','SELECT') can_read_governance
+         FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
+    )
+    .fetch_one(&pool)
+    .await?;
+    ensure!(
+        role.get::<String, _>("effective") == role.get::<String, _>("login")
+            && role.get::<bool, _>("login_enabled")
+            && !role.get::<bool, _>("inherits_roles")
+            && !role.get::<bool, _>("privileged")
+            && !role.get::<bool, _>("bypass")
+            && !role.get::<bool, _>("role_admin")
+            && !role.get::<bool, _>("db_admin")
+            && !role.get::<bool, _>("replication")
+            && role.get::<bool, _>("can_read_root")
+            && (!require_governance_read || role.get::<bool, _>("can_read_governance")),
+        "V2 reader is not a distinct nonprivileged SELECT-only tenant LOGIN"
+    );
+    let member_of_other_role: Option<String> = sqlx::query_scalar(
+        "SELECT inherited.rolname::text
+         FROM pg_catalog.pg_auth_members membership
+         JOIN pg_catalog.pg_roles inherited ON inherited.oid=membership.roleid
+         WHERE membership.member=(SELECT oid FROM pg_catalog.pg_roles
+                                  WHERE rolname=session_user)
+         LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        member_of_other_role.is_none(),
+        "V2 reader must not inherit or SET ROLE into another SQL principal"
+    );
+    let unexpected_mutation: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+         WHERE n.nspname NOT IN ('information_schema')
+           AND n.nspname !~ '^pg_'
+           AND c.relkind IN ('r','p','v','m','f')
+           AND (has_any_column_privilege(current_user,c.oid,'INSERT')
+                OR has_any_column_privilege(current_user,c.oid,'UPDATE')
+                OR has_table_privilege(current_user,c.oid,'DELETE')
+                OR has_table_privilege(current_user,c.oid,'TRUNCATE'))
+         ORDER BY n.nspname,c.relname LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        unexpected_mutation.is_none(),
+        "V2 reader has a mutation capability and cannot inspect runs"
+    );
+    let actual_tenant: Option<String> =
+        sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+            .fetch_one(&pool)
+            .await?;
+    ensure!(
+        actual_tenant.as_deref() == Some(expected_tenant),
+        "reader SQL LOGIN tenant binding differs from the configured tenant"
+    );
+    Ok(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_reader_accepts_only_one_canonical_uuid_locator() {
+        let id = Uuid::new_v4();
+        let valid = format!("{{\"canonical_run_id\":\"{id}\"}}");
+        assert_eq!(
+            serde_json::from_str::<RunLocator>(&valid)
+                .unwrap()
+                .canonical_run_id,
+            id
+        );
+        assert!(serde_json::from_str::<RunLocator>(&format!(
+            "{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"forged\"}}"
+        ))
+        .is_err());
+        assert!(serde_json::from_str::<RunLocator>(&format!(
+            "{{\"canonical_run_id\":\"{id}\",\"parent_workflow_run_id\":\"forged\"}}"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn safe_diagnostic_has_no_history_payload_or_provider_success() {
+        let report = SafeRunInspection {
+            operation: OPERATION,
+            status: "temporal_completed_owner_unverified",
+            canonical_run_id: Uuid::new_v4(),
+            parent_workflow_run_id: Uuid::new_v4().to_string(),
+            plan_hash: "a".repeat(64),
+            parent_start_sha256: "b".repeat(64),
+            step_count: 1,
+            owner_result_count: 1,
+            result_blake3: Some("c".repeat(64)),
+            governance_currently_active: false,
+            temporal_history_attestation: "exact_server_parent_start_and_completion",
+            owner_receipt_attestation: "not_independently_verified",
+            source_authentication: "not_independently_attested",
+            next_action: "Get an independently verified owner receipt.",
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("temporal_completed_owner_unverified"));
+        assert!(json.contains("not_independently_verified"));
+        assert!(!json.contains("receipt_bytes"));
+        assert!(!json.contains("payload"));
+        assert!(!json.contains("provider_success"));
+        assert!(!json.contains("command_bytes"));
+    }
+}

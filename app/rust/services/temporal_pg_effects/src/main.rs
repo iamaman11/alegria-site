@@ -48,7 +48,9 @@ mod operator;
 mod operator_business_run_v1;
 mod operator_dag_governance;
 mod operator_dag_governance_v2;
+mod operator_dag_read_v2;
 mod operator_owner_v1;
+mod operator_single_step_start_v2;
 mod operator_v4;
 mod operator_vector_projection_v1;
 mod operator_vector_projection_v2;
@@ -734,6 +736,23 @@ async fn main() -> Result<()> {
                 .context("--operator-admit-dag-run-v2 requires strict JSON parent locator")?;
             anyhow::ensure!(args.next().is_none(), "unexpected V2 governance arguments");
             operator_dag_governance_v2::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-read-dag-run-v2") {
+            let path = args
+                .next()
+                .context("--operator-read-dag-run-v2 requires private UUID-only locator")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V2 read-only arguments");
+            operator_dag_read_v2::read_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-start-single-v2") {
+            let path = args
+                .next()
+                .context("--operator-start-single-v2 requires one private V2 operator intent")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected single-step Start arguments");
+            operator_single_step_start_v2::start_from_private_request(std::path::Path::new(&path))
+                .await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-business-run-v1") {

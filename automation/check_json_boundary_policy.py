@@ -159,6 +159,13 @@ NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
     "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v2.rs",
     "app/rust/services/temporal_qdrant_effects/src/owner_generic_v1.rs",
+    # Operator-only single-step Temporal Start accepts a bounded private
+    # typed request only after an independent tenant-bound SQL business root
+    # check. Generic DAG orchestration remains provider/SQL-free.
+    "app/rust/services/temporal_pg_effects/src/operator_single_step_start_v2.rs",
+    # Tenant-bound, read-only V2 diagnostics decode server History only after
+    # SQL business/governance lookup; never raw provider payloads in responses.
+    "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs",
 })
 
 # Site Lab accepts untrusted *authoring* JSON, not runtime owner commands.

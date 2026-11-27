@@ -77,6 +77,32 @@ fn admission_probe_error(error: anyhow::Error) -> ActivityError {
     }
 }
 
+/// Only a GET for an already durably persisted stub task may be retried.
+/// After an ambiguous POST the SQL ledger remains `uncertain` and a second
+/// Activity invocation cannot post again. HTTP status/transport failures of
+/// a GET are safe to retry; malformed provider bytes and unexpected response
+/// shapes remain terminal, not endlessly retried.
+fn retryable_posted_stub_get(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<reqwest::Error>().is_some_and(|get| {
+        get.is_connect()
+            || get.is_timeout()
+            || get.is_body()
+            || get.status().is_some_and(|status| {
+                status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+            })
+    })
+}
+
+fn posted_stub_get_error(error: anyhow::Error) -> ActivityError {
+    if retryable_posted_stub_get(&error) {
+        ActivityError::application(ApplicationFailure::new(std::io::Error::other(
+            error.to_string(),
+        )))
+    } else {
+        non_retryable(error)
+    }
+}
+
 fn validation_failure(error: impl std::fmt::Display) -> WorkflowTermination {
     WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
         std::io::Error::other(format!("DataForSEO typed owner validation: {error}")),
@@ -575,7 +601,7 @@ impl DataForSeoActivities {
             input.depth,
         )
         .await
-        .map_err(non_retryable)?;
+        .map_err(posted_stub_get_error)?;
         let result = offline_fixture_result(invocation, input, task_id, &response_bytes, hits)
             .map_err(non_retryable)?;
         let encoded = serde_json::to_vec(&result).map_err(non_retryable)?;
@@ -763,6 +789,96 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::io::{Read, Write};
+
+    async fn stub_get_status_error(status: &str) -> anyhow::Error {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind disposable local-only GET test listener");
+        let address = listener.local_addr().unwrap();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let serving = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            socket.read(&mut request).unwrap();
+            socket.write_all(response.as_bytes()).unwrap();
+        });
+        let url = format!("http://{address}/v3/serp/google/organic/task_get/advanced/stub-serp-1");
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .expect_err("test server must return an HTTP status error");
+        serving.join().unwrap();
+        error.into()
+    }
+
+    #[tokio::test]
+    async fn only_transient_posted_task_get_failures_may_retry() {
+        for status in ["429 Too Many Requests", "503 Service Unavailable"] {
+            let error = stub_get_status_error(status).await;
+            assert!(
+                retryable_posted_stub_get(&error),
+                "{status} must allow GET-only retry"
+            );
+        }
+        for status in ["400 Bad Request", "401 Unauthorized", "404 Not Found"] {
+            let error = stub_get_status_error(status).await;
+            assert!(
+                !retryable_posted_stub_get(&error),
+                "{status} must not mask a permanent provider error"
+            );
+        }
+        let malformed: anyhow::Error = serde_json::from_slice::<Value>(b"not-json")
+            .expect_err("malformed response")
+            .into();
+        assert!(
+            !retryable_posted_stub_get(&malformed),
+            "invalid content cannot cause unlimited GET retries"
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_posted_task_get_body_may_retry_without_new_post() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            socket.read(&mut request).unwrap();
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        });
+        let url = format!("http://{address}/v3/serp/google/organic/task_get/advanced/stub-serp-1");
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .expect_err("incomplete GET response body must fail");
+        serving.join().unwrap();
+        assert!(
+            error.is_body(),
+            "truncated GET response is a body transport failure"
+        );
+        assert!(retryable_posted_stub_get(&error.into()));
+    }
 
     #[test]
     fn stub_network_path_rejects_live_endpoint_or_redirect_targets() {

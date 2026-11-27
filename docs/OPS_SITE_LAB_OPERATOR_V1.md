@@ -173,11 +173,41 @@ MCP предоставляет одиннадцать инструментов �
 
 `inspect` не обращается к Temporal API, PostgreSQL или другим поставщикам. В отчёте явно указаны `temporal_history_attestation: not_checked`, `owner_receipt_attestation: not_checked`, `source_authentication: not_checked`. Самосогласованную подделку файлов он **не может** отличить от настоящего завершённого выполнения: для P0 нужны серверные History и отдельно подтверждённые владельцами записи эффектов.
 
-## Нативная проверка перед будущим Temporal Start
+## Нативная проверка перед операторским Temporal Start
 
 В `operation_protocol` есть **read-only** `preflight_unadmitted_site_lab_v2_start`. Она принимает уже построенный `OperationDagRunV6`, тот же доверенный `TrustedRouteCatalog` и заранее записанные ожидаемые `plan_hash`, хеши точных owner-command bytes и исходных payload bytes. Сначала выполняется **существующая** проверка V2 DAG/маршрутов/контрактов/источников, затем сверяются все ожидаемые BLAKE3-хеши. Подмена команды, отдельного источника, плана или маршрута завершится отказом. Результат имеет статус `preflight_only_not_admitted` и не содержит raw payloads.
 
-Это **не команда запуска CLI** и не серверное подтверждение подлинности данных. Предполагается, что ожидаемые хеши позднее выдаст доверенный типизированный owner codec/issuer; произвольные хеши, присланные пользователем, не создают полномочий. В этой функции **нет** Temporal Start, выполнения owner-child `ValidateOnly`, допуска эффектов, аттестации History или связи с `recipe_hash`: все эти части остаются P0.
+Сама `preflight_unadmitted_site_lab_v2_start` **не запускает CLI/Temporal** и не подтверждает подлинность данных. Ожидаемые хеши должен независимо закрепить доверенный типизированный owner codec/issuer: присланные пользователем хеши не создают полномочий. В этой функции **нет** Temporal Start, выполнения owner-child `ValidateOnly`, допуска эффектов или аттестации History. Отдельный операторский Start ниже сохраняет эти границы.
+
+### Отдельный операторский Start одной операции — локальный pilot
+
+Для физической проверки существует отдельная **явно включаемая оператором** команда, не входящая в ChatGPT/MCP:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
+  --operator-start-single-v2 /absolute/private/single-step-intent.json
+```
+
+Команда размещается в уже существующем операторе PostgreSQL/Temporal; общий `temporal_orchestrator` остаётся без PostgreSQL-зависимости и без полномочий поставщиков. Требуются `ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START=true`, независимо заданные `SITE_LAB_SINGLE_V2_TENANT_ID`, `SITE_LAB_SINGLE_V2_DATABASE_URL_FILE`, `SITE_LAB_SINGLE_V2_TEMPORAL_URL`, `SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE` и `SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE`. SQL DSN читается из отдельного приватного файла для ограниченной **tenant-bound SELECT-only** роли, а доверенный каталог контрактов/маршрутов — из отдельно установленного приватного операторского файла. Temporal допускается **только на точном loopback HTTP URL с портом** (`http://127.0.0.1:7233/` или `http://localhost:7233/`), не через произвольный публичный endpoint. Ни PostgreSQL-роль, ни каталог не выбираются из рецепта.
+
+Приватный файл — канонический JSON ровно со схемой `{schema_revision:1,run:OperationDagRunV6,context_key:<canonical_context>,expected:SiteLabExpectedStartV1,expires_at_unix_seconds:<unix_seconds>}`. Он должен иметь абсолютный путь, быть обычным файлом без симлинков, не более 2 MiB, с разрешением `0600/0400` и защищёнными каталогами-предками. Срок действия — максимум 10 минут в будущем. **До Start** отдельный бизнес-оператор должен выдать tenant business root командой `temporal_pg_effects --operator-issue-business-run-v1`, закрепив tenant, context, plan hash и parent Workflow ID. Оператор Start читает эту уже существующую **действующую**, неотозванную запись через независимую SQL-роль, сверяет её с запросом, проверяет канонический UUID и неизменяемые байты команд/источников/маршрутов тем же одношаговым V2 preflight. Отсутствующий или чужой business root, другой контекст, подмена источника и повторный Start с тем же Workflow ID приводят к отказу. Самосогласованные пользовательские хеши **не** подтверждают provenance.
+
+Только после этих проверок оператор обращается к нативному Temporal `AlegriaOperationDagV2Workflow`, возвращая `status: started_business_root_verified_owner_unadmitted`, серверный `parent_workflow_run_id`, business `run_id` и `plan_hash` **без payload/секретов**. Это факт разрешённого бизнесом и принятого сервером **Start**, а не успешный запуск поставщика: процесс **не выдаёт** новую business root, governance или owner admission, не выполняет сам ValidateOnly и не выдаёт SEO-доказательства. Для эффекта после Start всё ещё нужны независимые `--operator-admit-dag-run-v2` и допуск конкретного владельца с настоящими server Histories. Неопределённый эффект не должен повторяться вслепую.
+
+### Отдельное чтение `run_id` с серверной History — без провайдерских утверждений
+
+Ещё одна независимая **локальная операторская** команда получает состояние уже существующего одноступенчатого V2-run, не осуществляя новый Start или действия у поставщика:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
+  --operator-read-dag-run-v2 /absolute/private/run-locator.json
+```
+
+Локатор строго ограничен приватным JSON `{ "canonical_run_id": "<UUID>" }`: **никакой переданный `tenant_id`, путь к receipt, Workflow Run ID или провайдерский токен не принимаются**. Требуются `ALEGRIA_ENABLE_OPERATION_DAG_READ_V2=true`, `OPERATION_DAG_READ_V2_TENANT_ID`, `OPERATION_DAG_READ_V2_DATABASE_URL_FILE`, `OPERATION_DAG_READ_V2_TEMPORAL_URL`, `OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE` и `OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE`. SQL DSN читается из отдельного приватного файла; сессия обязана быть самостоятельным **tenant-bound SELECT-only LOGIN** без побочных прав на таблицы. Temporal URL также обязан быть локальным loopback.
+
+Читатель сначала сопоставляет tenant business root с отдельной SQL-governance V2, затем находит **точную серверную Temporal History** по закреплённым Workflow ID и серверному Run ID, сверяет байты Start с SQL SHA-256, доверенный каталог/план и ровно один owner-result. Возвращаются безопасные идентификаторы, хеши, количество шагов/результатов и один из диагностических статусов (`temporal_running`, `temporal_failed`, `temporal_completed_owner_unverified`); при отсутствии полномочий, несоответствии или чужом tenant — общий отказ `run_unavailable_or_untrusted` **без раскрытия факта существования чужого запуска**. Сырые данные источников, команды и секреты в выдачу не попадают.
+
+Статус **`temporal_completed_owner_unverified` подтверждает только серверное завершение V2 parent и его типизированный результат**. Он *не* означает подтверждённый реальный эффект Neo4j/Qdrant/DataForSEO, пригодное SEO-доказательство, завершённое исследование потребностей или проверенную provenance. До такого утверждения нужен отдельный независимый durable owner receipt и проверка первоисточника. Читатель не возвращает сохранённые plan/receipt для `site-lab inspect` или MCP: подтверждённый серверный экспорт содержимого пока отдельное P0. Команды Start/Read не опубликованы как удалённые ChatGPT MCP-tools и не создают нового UI/планировщика.
 
 ## Расширение возможностей
 
