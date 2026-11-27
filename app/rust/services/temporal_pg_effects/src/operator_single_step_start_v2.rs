@@ -95,7 +95,7 @@ impl SingleStartStage {
                 "Check independent tenant business-root issuance and the finite request validity window."
             }
             Self::ExternalSourceAttestation => {
-                "Have the separately credentialed source issuer commit one immutable, tenant-bound source record per Acquisition input before submitting any Temporal Start."
+                "Have the separately credentialed Acquisition source-transform issuer derive the exact typed payload from pinned tenant-owned raw HTML, then commit one immutable source record per input before Temporal Start."
             }
             Self::TemporalConnection => {
                 "Restore the independently configured loopback Temporal endpoint before requesting a fresh intent."
@@ -320,6 +320,35 @@ fn source_record_uuid(provenance: &str) -> Result<uuid::Uuid> {
     Ok(record_id)
 }
 
+/// A source row cannot be its own proof if it came from the same SQL login
+/// performing Start. Keep this check independent of Acquisition's HTML parser:
+/// that owner is exclusively responsible for faithful source transformation,
+/// while the generic operator verifies source-record provenance and bytes.
+fn checked_source_record_sql_metadata(
+    issued_by: &str,
+    reader_login: &str,
+    source_page_id: i64,
+    source_page_content_hash: &str,
+    source_page_raw_sha256: &str,
+) -> Result<()> {
+    let canonical_digest = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    };
+    ensure!(
+        !issued_by.is_empty()
+            && !reader_login.is_empty()
+            && issued_by != reader_login
+            && source_page_id > 0
+            && canonical_digest(source_page_content_hash)
+            && canonical_digest(source_page_raw_sha256),
+        "Acquisition source record lacks distinct SQL issuer or pinned raw snapshot identity"
+    );
+    Ok(())
+}
+
 async fn assert_active_independent_acquisition_sources(
     pool: &PgPool,
     tenant: &str,
@@ -343,6 +372,9 @@ async fn assert_active_independent_acquisition_sources(
             "SELECT record_id::text AS record_id, tenant_id,context_key,
                     run_id::text AS run_id,plan_hash,artifact_id,artifact_schema,
                     payload_hash,
+                    issued_by::text AS issued_by,
+                    session_user::text AS reader_login,
+                    source_page_id, source_page_content_hash, source_page_raw_sha256,
                     floor(extract(epoch from issued_at))::bigint AS issued_at_unix_seconds,
                     floor(extract(epoch from expires_at))::bigint AS expires_at_unix_seconds,
                     floor(extract(epoch from revoked_at))::bigint AS revoked_at_unix_seconds
@@ -362,6 +394,13 @@ async fn assert_active_independent_acquisition_sources(
         .fetch_optional(pool)
         .await?
         .context("independent Acquisition source record absent, expired or revoked")?;
+        checked_source_record_sql_metadata(
+            &row.try_get::<String, _>("issued_by")?,
+            &row.try_get::<String, _>("reader_login")?,
+            row.try_get("source_page_id")?,
+            &row.try_get::<String, _>("source_page_content_hash")?,
+            &row.try_get::<String, _>("source_page_raw_sha256")?,
+        )?;
         let record = TrustedExternalSourceRecordV1 {
             schema_revision: EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
             record_id: row.try_get("record_id")?,
@@ -559,6 +598,11 @@ async fn try_start_from_private_request(
             } else {
                 "not_attested"
             },
+            "source_transformation":if requires_acquisition_source_attestation(&intent.run) {
+                "acquisition_issuer_responsible_not_recomputed_by_generic_operator"
+            } else {
+                "not_attested"
+            },
             "business_root":"independently_issued_active_at_start",
             "owner_admission":"not_issued_by_start",
             "execution":"not_confirmed",
@@ -642,6 +686,44 @@ mod tests {
         ] {
             assert!(source_record_uuid(forged).is_err(), "{forged}");
         }
+    }
+
+    #[test]
+    fn source_sql_evidence_requires_distinct_issuer_and_canonical_raw_identity() {
+        let hash = "a".repeat(64);
+        assert!(
+            checked_source_record_sql_metadata("source_issuer", "start_reader", 14, &hash, &hash)
+                .is_ok()
+        );
+        for (issuer, reader, page, digest) in [
+            ("start_reader", "start_reader", 14, hash.as_str()),
+            ("", "start_reader", 14, hash.as_str()),
+            ("source_issuer", "", 14, hash.as_str()),
+            ("source_issuer", "start_reader", 0, hash.as_str()),
+            ("source_issuer", "start_reader", -4, hash.as_str()),
+            (
+                "source_issuer",
+                "start_reader",
+                14,
+                "Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            ("source_issuer", "start_reader", 14, "a"),
+        ] {
+            assert!(
+                checked_source_record_sql_metadata(issuer, reader, page, digest, &hash).is_err(),
+                "must reject missing or self-issued source metadata"
+            );
+        }
+        assert!(
+            checked_source_record_sql_metadata(
+                "source_issuer",
+                "start_reader",
+                14,
+                &hash,
+                "BAD_SHA256"
+            )
+            .is_err()
+        );
     }
 
     #[test]

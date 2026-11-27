@@ -25,6 +25,7 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
     let ingress_name = format!("source_ingress_{nonce}");
     let business_name = format!("source_business_{nonce}");
     let issuer_name = format!("source_issuer_{nonce}");
+    let inherited_writer_name = format!("source_writer_{nonce}");
     let reader_name = format!("source_reader_{nonce}");
     let foreign_name = format!("source_foreign_{nonce}");
     let tenant = format!("source-tenant-{nonce}");
@@ -41,6 +42,9 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
          GRANT USAGE ON SCHEMA raw TO {ingress_name},{issuer_name};
          GRANT INSERT, SELECT ON raw.pages TO {ingress_name};
          GRANT UPDATE(content_hash,title,processed) ON raw.pages TO {ingress_name};
+         GRANT SELECT(id,tenant_id,url,final_url,content_type,status_code,
+                      raw_html,raw_html_bytes,content_hash)
+             ON raw.pages TO {issuer_name};
          GRANT USAGE ON SEQUENCE raw.pages_id_seq TO {ingress_name};
          GRANT INSERT ON pipeline.operation_dag_business_runs_v1 TO {business_name};"
     )))
@@ -191,6 +195,20 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
         .execute(&issuer)
         .await;
     issued.expect("source issuer may attest only a matching tenant-owned raw snapshot");
+    let raw_sha256: String = sqlx::query_scalar(
+        "SELECT source_page_raw_sha256
+         FROM pipeline.operation_dag_external_source_attestations_v1
+         WHERE record_id=$1",
+    )
+    .bind(record_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        raw_sha256,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "the SQL issuer must bind the SHA256 of actual empty raw HTML"
+    );
 
     // Give the actual ingress writer UPDATE permission so rejection must come
     // from the immutable attested-snapshot trigger, not from absent grants.
@@ -253,6 +271,74 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
     .execute(&pg.pool)
     .await
     .unwrap();
+    // A NOINHERIT issuer is still able to SET ROLE into any granted writer
+    // membership. Reject source minting for such a login, even though direct
+    // `has_table_privilege(session_user, raw.pages, UPDATE)` is false.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {inherited_writer_name} NOLOGIN;
+         GRANT UPDATE ON raw.pages TO {inherited_writer_name};
+         GRANT {inherited_writer_name} TO {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    assert!(sqlx::query(insert)
+        .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+        .bind(&context_key).bind(&plan_hash).bind("source_noinherit_writer_membership")
+        .bind(&schema).bind(&payload_hash).bind(page_id).bind(page_hash)
+        .execute(&issuer).await.is_err(),
+        "SET ROLE membership into raw writer must disqualify source issuer");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "REVOKE {inherited_writer_name} FROM {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    assert!(sqlx::query(
+        "INSERT INTO pipeline.operation_dag_external_source_attestations_v1
+          (record_id,run_id,tenant_id,context_key,plan_hash,artifact_id,
+           artifact_schema,payload_hash,source_page_id,source_page_content_hash,
+           source_page_raw_sha256,expires_at)
+         VALUES ($1,$2,$3,$4,$5,'source_forged_raw_digest',$6::jsonb,$7,$8,$9,$10,
+                 clock_timestamp()+interval '4 minutes')"
+    )
+    .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+    .bind(&context_key).bind(&plan_hash).bind(&schema)
+    .bind(&payload_hash).bind(page_id).bind(page_hash).bind("f".repeat(64))
+    .execute(&issuer).await.is_err(),
+    "caller cannot assert a raw HTML digest distinct from actual SQL bytes");
+    let malformed_page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages
+          (url,domain,dtype,raw_html,raw_html_bytes,content_hash)
+         VALUES ('https://example.test/inconsistent-bytes','example.test',
+                 'html','nonempty',0,$1) RETURNING id",
+    )
+    .bind("a".repeat(64))
+    .fetch_one(&ingress)
+    .await
+    .unwrap();
+    assert!(sqlx::query(insert)
+        .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+        .bind(&context_key).bind(&plan_hash).bind("source_bad_bytecount")
+        .bind(&schema).bind(&payload_hash).bind(malformed_page_id).bind("a".repeat(64))
+        .execute(&issuer).await.is_err(),
+        "a source page with mismatched raw_html_bytes must not be admissible");
+    let missing_html_page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages
+          (url,domain,dtype,raw_html,raw_html_bytes,content_hash)
+         VALUES ('https://example.test/missing-html','example.test',
+                 'html',NULL,0,$1) RETURNING id",
+    )
+    .bind(page_hash)
+    .fetch_one(&ingress)
+    .await
+    .unwrap();
+    assert!(sqlx::query(insert)
+        .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+        .bind(&context_key).bind(&plan_hash).bind("source_without_html")
+        .bind(&schema).bind(&payload_hash).bind(missing_html_page_id).bind(page_hash)
+        .execute(&issuer).await.is_err(),
+        "an asserted content hash without captured raw_html is not a source");
     assert!(sqlx::query(insert)
         .bind(Uuid::new_v4()).bind(run_id).bind(&foreign_tenant)
         .bind(&context_key).bind(&plan_hash).bind("source_tenant_spoof").bind(&schema)
@@ -297,6 +383,29 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
          SET revoked_at=clock_timestamp() WHERE record_id=$1",
     )
     .bind(record_id).execute(&reader).await.is_err(), "Start reader must not revoke grants");
+
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "REVOKE SELECT(id,tenant_id,url,final_url,content_type,status_code,
+                       raw_html,raw_html_bytes,content_hash)
+             ON raw.pages FROM {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    assert!(sqlx::query(insert)
+        .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+        .bind(&context_key).bind(&plan_hash).bind("source_issuer_without_raw_read")
+        .bind(&schema).bind(&payload_hash).bind(page_id).bind(page_hash)
+        .execute(&issuer).await.is_err(),
+        "source issuer must have direct authenticated raw-html read capability");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT SELECT(id,tenant_id,url,final_url,content_type,status_code,
+                      raw_html,raw_html_bytes,content_hash)
+             ON raw.pages TO {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
 
     sqlx::query(
         "UPDATE pipeline.operation_dag_external_source_attestations_v1

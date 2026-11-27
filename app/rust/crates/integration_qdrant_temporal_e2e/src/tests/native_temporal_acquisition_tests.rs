@@ -322,9 +322,10 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
 /// business root and a separately persisted source-issuer record. Neither
 /// the private intent nor a user-authored provenance string can mint one.
 ///
-/// This test deliberately simulates issuance from a tenant-attributed raw
-/// snapshot; it does not claim a production authenticated HTML-to-DTO
-/// transformer, a user session, or published siteArchitect Start capability.
+/// The independently credentialed native source issuer loads a real,
+/// tenant-attributed `raw.pages` HTML snapshot, derives exact strict ACQ-01
+/// bytes, and inserts the attestation. This does not claim a deployed user
+/// session, published siteArchitect Start API, or acceptance of all 52 steps.
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
@@ -332,6 +333,9 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     use acquisition::operation_owner_schema_json::acquisition_owner_schemas;
     use acquisition::operations::{ClassifySourcePage, ClassifySourcePageInput};
     use acquisition::source_relevance::PageUtilityClassifierOutput;
+    use acquisition::trusted_source_transform_v1::{
+        classify_source_page_payload_from_pinned_html_v1, CapturedHtmlPageV1,
+    };
     use operation_protocol::{
         operation_dag_parent_workflow_id_v2, owner_content_hash, Operation,
         OperationDagReceiptV1, PlanHash, SiteLabExpectedStartV1,
@@ -346,6 +350,14 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         context_key: &'a str,
         expected: &'a SiteLabExpectedStartV1,
         expires_at_unix_seconds: u64,
+    }
+    #[derive(serde::Serialize)]
+    struct ExactSourceIssueRequest<'a> {
+        schema_revision: u16,
+        run: &'a operation_protocol::OperationDagRunV6,
+        context_key: &'a str,
+        source_page_id: i64,
+        expires_at_unix_seconds: i64,
     }
     fn expected_for(run: &operation_protocol::OperationDagRunV6) -> SiteLabExpectedStartV1 {
         SiteLabExpectedStartV1 {
@@ -370,12 +382,75 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     let context = format!("acq-{}", Uuid::new_v4().simple());
     let record_id = Uuid::new_v4();
     let provenance = format!("source-record-v1:{record_id}");
-    let payload = serde_json::to_vec(&ClassifySourcePageInput {
-        url: "https://ci-native-source.example.test/directory".into(),
-        title: "Captured directory page".into(),
-        raw_text: "All countries".into(),
-    })
+
+    // A genuine raw.pages snapshot is the only source for the typed input.
+    // A caller-supplied JSON payload cannot assert HTML fidelity by itself.
+    let pg = PostgresHarness::start()
+        .await
+        .expect("disposable PostgreSQL source and business issuers");
+    mixed_v2_install_native_admissions(&pg.pool).await;
+    sqlx::raw_sql(include_str!(
+        "../../../../../db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql"
+    ))
+    .execute(&pg.pool)
+    .await
+    .expect("install independent source attestation migration on disposable PG");
+
+    let source_url = "https://ci-native-source.example.test/directory";
+    let raw_html = "<html><head><title>Captured directory page</title></head><body><main><p>All countries</p></main></body></html>";
+    let raw_hash = owner_content_hash(raw_html.as_bytes());
+    sqlx::query(
+        "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
+         VALUES ($1,'ES','tourist','BY')",
+    )
+    .bind(&context)
+    .execute(&pg.pool)
+    .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id) VALUES ($1,$2)",
+    )
+    .bind(&context)
+    .bind(tenant)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let source_page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages
+            (url,final_url,domain,dtype,tenant_id,status_code,content_type,
+             raw_html,raw_html_bytes,content_hash)
+         VALUES ($1,$1,'ci-native-source.example.test','government',$2,200,'text/html',
+                 $3,$4,$5)
+         RETURNING id",
+    )
+    .bind(source_url)
+    .bind(tenant)
+    .bind(raw_html)
+    .bind(i32::try_from(raw_html.len()).unwrap())
+    .bind(&raw_hash)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    let transformed = classify_source_page_payload_from_pinned_html_v1(&CapturedHtmlPageV1 {
+        page_id: source_page_id,
+        url: source_url.into(),
+        final_url: Some(source_url.into()),
+        content_type: Some("text/html".into()),
+        status_code: Some(200),
+        raw_html: Some(raw_html.into()),
+        raw_html_bytes: Some(i32::try_from(raw_html.len()).unwrap()),
+        content_hash: Some(raw_hash.clone()),
+    })
+    .expect("derive strict typed Acquisition payload from captured HTML bytes");
+    assert_eq!(transformed.raw_content_hash, raw_hash);
+    assert_eq!(transformed.payload_hash, owner_content_hash(&transformed.payload));
+    let payload = transformed.payload;
+    let strict_payload: ClassifySourcePageInput = serde_json::from_slice(&payload).unwrap();
+    assert_eq!(strict_payload.url, source_url);
+    assert_eq!(strict_payload.title, "Captured directory page");
+    assert_eq!(strict_payload.raw_text, "All countries");
+    // Two independent digests: immutable captured HTML and strict JSON DTO.
+    assert_ne!(owner_content_hash(&payload), raw_hash);
     let (mut run, routes) =
         acquisition_native_v2_case(ClassifySourcePage::contract(), payload.clone(), &build_id);
     run.plan
@@ -422,50 +497,6 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         &expected_for(&run),
     )
     .expect("full typed Acquisition preflight before native operator Start");
-
-    let pg = PostgresHarness::start()
-        .await
-        .expect("disposable PostgreSQL source and business issuers");
-    mixed_v2_install_native_admissions(&pg.pool).await;
-    sqlx::raw_sql(include_str!(
-        "../../../../../db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql"
-    ))
-    .execute(&pg.pool)
-    .await
-    .expect("install independent source attestation migration on disposable PG");
-
-    // The raw snapshot's content digest is independent of the transformed
-    // typed JSON payload digest; this test never equates the two.
-    let raw_html = "<html><title>Captured directory page</title>All countries</html>";
-    let raw_hash = owner_content_hash(raw_html.as_bytes());
-    sqlx::query(
-        "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
-         VALUES ($1,'ES','tourist','BY')",
-    )
-    .bind(&context)
-    .execute(&pg.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id) VALUES ($1,$2)",
-    )
-    .bind(&context)
-    .bind(tenant)
-    .execute(&pg.pool)
-    .await
-    .unwrap();
-    let source_page_id: i64 = sqlx::query_scalar(
-        "INSERT INTO raw.pages(url,domain,dtype,tenant_id,raw_html,content_hash)
-         VALUES ($1,'ci-native-source.example.test','government',$2,$3,$4)
-         RETURNING id",
-    )
-    .bind("https://ci-native-source.example.test/directory")
-    .bind(tenant)
-    .bind(raw_html)
-    .bind(&raw_hash)
-    .fetch_one(&pg.pool)
-    .await
-    .unwrap();
 
     let nonce = Uuid::new_v4().simple().to_string();
     let business_role = format!("acq_business_{nonce}");
@@ -522,6 +553,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         .expect("disposable native Temporal for authorized Acquisition Start");
     let parent_bin = binary("INTEGRATION_EFFECT_DAG_WORKER_BIN");
     let acquisition_bin = binary("INTEGRATION_ACQUISITION_PURE_OWNER_BIN");
+    let source_issuer_bin = binary("INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN");
     let pg_operator_bin = binary("INTEGRATION_PG_EFFECT_WORKER_BIN");
     let _parent = ChildGuard(Some(
         Command::new(&parent_bin)
@@ -555,6 +587,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
 
     let private = MixedV2PrivateLocatorFiles::new();
     let reader_dsn = private.request("acq-start-reader-dsn", &restricted_url(&reader_role));
+    let source_issuer_dsn = private.request("acq-source-issuer-dsn", &restricted_url(&source_role));
     let deadline = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -587,6 +620,27 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             .env_remove("DATABASE_URL")
             .output()
             .expect("native exact-source single-step operator Start")
+    };
+    let issue_source = |candidate: &operation_protocol::OperationDagRunV6, label: &str| {
+        let request = private.request(
+            label,
+            &serde_json::to_string(&ExactSourceIssueRequest {
+                schema_revision: 1,
+                run: candidate,
+                context_key: &context,
+                source_page_id,
+                expires_at_unix_seconds: deadline as i64,
+            })
+            .unwrap(),
+        );
+        Command::new(&source_issuer_bin)
+            .arg("--issue-source-v1")
+            .arg(&request)
+            .env("ALEGRIA_ENABLE_ACQUISITION_SOURCE_ISSUER_V1", "true")
+            .env("ACQUISITION_SOURCE_ISSUER_DATABASE_URL_FILE", &source_issuer_dsn)
+            .env_remove("DATABASE_URL")
+            .output()
+            .expect("independent raw HTML -> typed payload source issuer executable")
     };
     let parent_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
     let intent_file = make_intent(&run, "acquisition-source-authorized-intent");
@@ -625,27 +679,59 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         .await
         .is_err());
 
-    let source_schema = &run.admitted[&"source".into()].schema;
-    sqlx::query(
-        "INSERT INTO pipeline.operation_dag_external_source_attestations_v1
-           (record_id,run_id,tenant_id,context_key,plan_hash,
-            artifact_id,artifact_schema,payload_hash,
-            source_page_id,source_page_content_hash,expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '5 minutes')",
+    // A matching UUID/hash in caller JSON is insufficient: the independent
+    // issuer must re-read the immutable raw HTML and calculate the exact
+    // typed DTO bytes itself before signing a source attestation.
+    let mut issuer_forged = run.clone();
+    issuer_forged
+        .admitted
+        .get_mut(&"source".into())
+        .unwrap()
+        .payload
+        .push(b' ');
+    let refused_issuer = issue_source(&issuer_forged, "acquisition-source-issuer-forged-dto");
+    assert!(
+        !refused_issuer.status.success(),
+        "issuer must not attest caller-mutated JSON instead of raw HTML"
+    );
+    let refused_issuer_diagnostic: serde_json::Value =
+        serde_json::from_slice(&refused_issuer.stdout).unwrap();
+    assert_eq!(
+        refused_issuer_diagnostic["status"],
+        "refused_or_outcome_unknown"
+    );
+    assert_eq!(refused_issuer_diagnostic["execution"], "not_started");
+    let unattested: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.operation_dag_external_source_attestations_v1
+         WHERE run_id = $1",
     )
-    .bind(record_id)
     .bind(Uuid::parse_str(&run.plan.scope.run_id).unwrap())
-    .bind(tenant)
-    .bind(&context)
-    .bind(run.plan.hash.as_str())
-    .bind("source")
-    .bind(sqlx::types::Json(source_schema))
-    .bind(owner_content_hash(&payload))
-    .bind(source_page_id)
-    .bind(raw_hash)
-    .execute(&source_pool)
+    .fetch_one(&pg.pool)
     .await
-    .expect("separately authenticated raw-snapshot source issuer");
+    .unwrap();
+    assert_eq!(unattested, 0);
+    let issued = issue_source(&run, "acquisition-source-issuer-authentic-html");
+    assert!(
+        issued.status.success(),
+        "native raw HTML source issuer failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&issued.stdout),
+        String::from_utf8_lossy(&issued.stderr),
+    );
+    let issuer_receipt: serde_json::Value = serde_json::from_slice(&issued.stdout).unwrap();
+    assert_eq!(issuer_receipt["status"], "source_issued_from_pinned_raw_html");
+    assert_eq!(issuer_receipt["execution"], "not_started");
+    assert_eq!(issuer_receipt["record_id"], record_id.to_string());
+    assert_eq!(issuer_receipt["payload_hash"], owner_content_hash(&payload));
+    let attestations: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.operation_dag_external_source_attestations_v1
+         WHERE run_id = $1 AND source_page_id = $2",
+    )
+    .bind(Uuid::parse_str(&run.plan.scope.run_id).unwrap())
+    .bind(source_page_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(attestations, 1);
     let cannot_mint_business: bool = sqlx::query_scalar(
         "SELECT has_table_privilege(current_user,
             'pipeline.operation_dag_business_runs_v1','INSERT')",

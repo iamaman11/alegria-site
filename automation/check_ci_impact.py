@@ -303,6 +303,13 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(E2E_SHARD_RUNS["temporal_acquisition"], (
             ("acquisition_native_v2", "acquisition_native_v2_", 2),
         ))
+        self.assertEqual(
+            SUITE_OWNERS["acquisition_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN"],
+            "acquisition_source_issuer",
+        )
+        self.assertIn(
+            "acquisition_source_issuer", SUITE_OWNERS["acquisition_native_v2"]["prepare"]
+        )
         self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["runtime_binaries"], {
             "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
             "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
@@ -1111,6 +1118,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertTrue(result["mandatory_full_ci_gate"])
         self.assertEqual(result["selected_suites"], [])
         self.assertEqual(result["selected_images"], [])
+
+    def test_acquisition_source_issuer_change_selects_exact_native_temporal_e2e(self) -> None:
+        report = self.impact("app/rust/services/acquisition_source_issuer/src/main.rs")
+        self.assertIn("acquisition_native_v2", report["selected_suites"])
+        self.assertIn(
+            ("acquisition_native_v2", "acquisition_native_v2_", 2),
+            E2E_SHARD_RUNS["temporal_acquisition"],
+        )
 
     def test_temporal_source_selects_real_restart_e2e_and_worker_image(self) -> None:
         result = self.impact("app/rust/services/temporal/src/main.rs")

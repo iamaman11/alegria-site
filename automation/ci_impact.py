@@ -378,13 +378,14 @@ DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES = {
 ACQUISITION_NATIVE_V2_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
-    "-p", "temporal_pg_effects",
+    "-p", "temporal_pg_effects", "-p", "acquisition_source_issuer",
     "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
-    "--bin", "temporal_pg_effects",
+    "--bin", "temporal_pg_effects", "--bin", "acquisition_source_issuer",
 )
 ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
     "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
+    "INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN": "acquisition_source_issuer",
     # Native privileged Start adapter is already part of the v3 SHA bundle;
     # the Acquisition shard installs it without a second Rust compilation.
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
@@ -812,6 +813,7 @@ SUITE_OWNERS = {
         },
         "prefixes": (
             "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/services/acquisition_source_issuer/",
             # Its separate privileged one-step gate now checks Acquisition
             # source admission before submitting the generic Temporal DAG.
             "app/rust/services/temporal_pg_effects/",
@@ -820,7 +822,8 @@ SUITE_OWNERS = {
             "app/rust/crates/trusted_owner_catalog/",
             "app/rust/services/temporal_orchestrator/",
         ),
-        "lock_crates": {"acquisition", "operation_protocol", "trusted_owner_catalog",
+        "lock_crates": {"acquisition", "acquisition_source_issuer",
+                        "operation_protocol", "trusted_owner_catalog",
                         "temporal_acquisition_pure", "temporal_orchestrator", "temporal_pg_effects",
                         "integration_qdrant_temporal_e2e"},
         "on_unknown_global_input": True,

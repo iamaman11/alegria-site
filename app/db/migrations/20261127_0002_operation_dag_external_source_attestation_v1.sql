@@ -33,6 +33,11 @@ CREATE TABLE pipeline.operation_dag_external_source_attestations_v1 (
     source_page_id BIGINT NOT NULL REFERENCES raw.pages(id),
     source_page_content_hash TEXT NOT NULL
         CHECK (source_page_content_hash ~ '^[0-9a-f]{64}$'),
+    -- Independently derived by PostgreSQL from the actual captured HTML,
+    -- never trusted from a caller-provided content_hash or URL. A separate
+    -- deterministic source transformer must also verify BLAKE3(raw_html).
+    source_page_raw_sha256 TEXT NOT NULL
+        CHECK (source_page_raw_sha256 ~ '^[0-9a-f]{64}$'),
     issued_by NAME NOT NULL DEFAULT session_user,
     issued_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     expires_at TIMESTAMPTZ NOT NULL,
@@ -59,6 +64,7 @@ SET search_path = pg_catalog AS $$
 DECLARE
     v_business RECORD;
     v_source RECORD;
+    v_actual_raw_sha256 TEXT;
     v_now TIMESTAMPTZ;
 BEGIN
     IF pg_catalog.current_setting('transaction_isolation') <> 'read committed' THEN
@@ -103,6 +109,21 @@ BEGIN
        OR has_table_privilege(session_user,'raw.sections','UPDATE')
        OR has_table_privilege(session_user,'raw.sections','DELETE')
        OR has_table_privilege(session_user,'raw.sections','TRUNCATE')
+       -- NOINHERIT does not protect this boundary: a member could SET ROLE
+       -- to a raw writer, rewrite evidence, then RESET ROLE and issue.
+       -- Independent source issuers must be membership-free LOGIN roles.
+       OR EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles r ON r.oid = m.member
+           WHERE r.rolname = session_user)
+       OR NOT has_column_privilege(session_user,'raw.pages','id','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','tenant_id','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','url','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','final_url','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','content_type','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','status_code','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','raw_html','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','raw_html_bytes','SELECT')
+       OR NOT has_column_privilege(session_user,'raw.pages','content_hash','SELECT')
        OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
           WHERE r.rolname=session_user
             AND (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole
@@ -142,14 +163,24 @@ BEGIN
     -- Unlike the business root, raw page UPDATE does not take this business
     -- advisory lock. FOR SHARE here coordinates with the snapshot mutation
     -- guard below and prevents an old-hash admission from racing a page edit.
-    SELECT p.tenant_id,p.content_hash INTO v_source
+    SELECT p.tenant_id,p.content_hash,p.raw_html,p.raw_html_bytes INTO v_source
       FROM raw.pages p WHERE p.id=NEW.source_page_id FOR SHARE;
     IF NOT FOUND OR v_source.tenant_id IS DISTINCT FROM NEW.tenant_id
        OR v_source.content_hash IS DISTINCT FROM NEW.source_page_content_hash
-       OR v_source.content_hash !~ '^[0-9a-f]{64}$' THEN
+       OR v_source.content_hash !~ '^[0-9a-f]{64}$'
+       OR v_source.raw_html IS NULL
+       OR v_source.raw_html_bytes IS DISTINCT FROM
+          octet_length(v_source.raw_html) THEN
         RAISE EXCEPTION 'external source lacks matching tenant-owned raw snapshot'
             USING ERRCODE='AV001';
     END IF;
+    v_actual_raw_sha256 := encode(public.digest(v_source.raw_html,'sha256'),'hex');
+    IF NEW.source_page_raw_sha256 IS NOT NULL
+       AND NEW.source_page_raw_sha256 <> v_actual_raw_sha256 THEN
+        RAISE EXCEPTION 'external source raw HTML SHA256 mismatch'
+            USING ERRCODE='AV001';
+    END IF;
+    NEW.source_page_raw_sha256 := v_actual_raw_sha256;
     -- A signed caller's supplied "issued_at" is not authority. The actual
     -- database issuance instant always wins; ten-minute expiry is finite.
     NEW.issued_at := v_now;
@@ -201,5 +232,7 @@ COMMENT ON TABLE pipeline.operation_dag_external_source_attestations_v1 IS
     'Privileged issuer-owned raw snapshot + exact payload identity for native Temporal V2 External inputs; SELECT-only Start role, no public grants';
 COMMENT ON COLUMN pipeline.operation_dag_external_source_attestations_v1.payload_hash IS
     'BLAKE3 hex64 of the exact typed admitted JSON bytes, independently checked by operation_protocol; distinct from raw_page_content_hash';
+COMMENT ON COLUMN pipeline.operation_dag_external_source_attestations_v1.source_page_raw_sha256 IS
+    'PostgreSQL SHA256 of actual raw.pages.raw_html bytes at issuance; not an issuer-supplied value. Does not replace BLAKE3 verification by trusted Rust source transformer';
 
 COMMIT;

@@ -194,6 +194,10 @@ TYPED_OPERATION_JSON_BOUNDARIES = frozenset({
     # provider-neutral operation_protocol remains denied for arbitrary JSON
     # payloads, including owner_schema_v3.rs and all sibling modules.
     "app/rust/crates/operation_protocol/src/owner_schema_json.rs",
+    # Exact one-field opaque Start-request wire decoder. It has no provider,
+    # SQL issuer, Temporal Start or authorization authority; all policy and
+    # one-use checks remain JSON-free in one_step_request_grant_v1.rs.
+    "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
 })
 
 # Only the acquisition V1 replay-compatibility *unit fixture* may serialize
@@ -201,6 +205,14 @@ TYPED_OPERATION_JSON_BOUNDARIES = frozenset({
 # legacy `source_relevance` stay JSON-boundary-free; no crate-wide waiver.
 ACQUISITION_OWNER_JSON_TEST_BOUNDARIES = frozenset({
     "app/rust/crates/acquisition/src/operations_json.rs",
+})
+
+# This one separate, SQL-restricted Acquisition issuer decodes its operator-
+# private immutable source request and emits a redacted issuance diagnostic.
+# The HTML transformer, pure owner and generic Temporal operator remain denied
+# raw JSON parsing; no broad service or crate permission is introduced.
+ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES = frozenset({
+    "app/rust/services/acquisition_source_issuer/src/issue_json.rs",
 })
 
 # Newly isolated owner-local *pure* DTO wire and test boundaries. These exact
@@ -258,6 +270,7 @@ def is_allowed_json_boundary(path: Path) -> bool:
                | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES
                | TYPED_OPERATION_JSON_BOUNDARIES
                | ACQUISITION_OWNER_JSON_TEST_BOUNDARIES
+               | ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES
                | PURE_OWNER_LOCAL_JSON_BOUNDARIES
                | SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES
                | DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES):

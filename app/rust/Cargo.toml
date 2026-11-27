@@ -43,6 +43,7 @@ members = [
   "crates/temporal_gateway",
   "services/temporal",
   "services/temporal_acquisition_pure",
+  "services/acquisition_source_issuer",
   "services/temporal_orchestrator",
   "services/temporal_pg_effects",
   "services/temporal_qdrant_effects",

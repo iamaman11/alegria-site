@@ -7,3 +7,4 @@ pub mod operation_owner_schema_json;
 pub mod operations;
 pub mod pdf_parser;
 pub mod source_relevance;
+pub mod trusted_source_transform_v1;

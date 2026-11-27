@@ -11,6 +11,7 @@ ego-tree = { workspace = true }
 lopdf = { workspace = true }
 regex = { workspace = true }
 scraper = { workspace = true }
+url = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { version = "1.2.3" }
