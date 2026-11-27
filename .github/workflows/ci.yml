@@ -71,7 +71,10 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Pin Rust for workspace metadata only
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+          components: rustfmt
 
       - name: Enforce source-document layout even when every owner is not applicable
         run: python3 automation/check_docs_layout.py
@@ -226,8 +229,11 @@ jobs:
       - name: Install native audit/build tools
         run: bash automation/install_ci_native_tools.sh ripgrep protoc
 
-      - name: Pin the same stable Rust toolchain as the verify job
-        uses: dtolnay/rust-toolchain@stable
+      - name: Pin the same Rust toolchain as the verify job
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+          components: rustfmt
 
       - name: Cache Rust compiler outputs across independent target directories
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -439,7 +445,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -498,7 +506,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -557,7 +567,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -614,7 +626,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -676,7 +690,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -736,7 +752,9 @@ jobs:
           ref: ${{ github.sha }}
       - name: Install Rust test compiler dependencies
         run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -794,7 +812,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -852,7 +872,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -966,7 +988,9 @@ jobs:
             // compare_physical_build_options.verify_pr_source_provenance().
             core.info(`PHYSICAL_STUDY_GREEN_PR_RUN=FOUND sha=${expected} run=${green.id} historical_checkout_tree=UNVERIFIED`);
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -1065,7 +1089,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -1143,7 +1169,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -1209,7 +1237,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
       - run: bash automation/install_ci_native_tools.sh protoc
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -1989,7 +2019,9 @@ jobs:
 
       - name: Pin Rust for full workspace tests
         if: needs.impact.outputs.cargo_scope == 'full'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Reuse trusted main Rust compiler objects for full workspace tests
         if: needs.impact.outputs.cargo_scope == 'full'
@@ -2373,7 +2405,9 @@ jobs:
         with:
           python-version: "3.15"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
@@ -2480,7 +2514,9 @@ jobs:
 
       - name: Pin stable Rust toolchain
         if: steps.cache_scope.outputs.needed == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Install shared Rust compiler-object cache
         if: steps.cache_scope.outputs.needed == 'true'
@@ -2575,7 +2611,9 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Pin Cargo metadata toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Select Worker image through the shared impact owner registry
         id: select
@@ -2661,7 +2699,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Pin Rust for exact Cargo dependency metadata
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Prepare exact-source dependency-scoped Worker Docker context
         env:

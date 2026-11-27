@@ -8,6 +8,7 @@ from pathlib import Path
 import ast
 import re
 import textwrap
+import tomllib
 from ci_impact import (
     CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS, E2E_RUNNER_PARTITIONS,
     E2E_PG_SHARDS, E2E_OUTBOX_SHARDS, NON_WORKER_DELIVERY_INPUTS,
@@ -36,6 +37,26 @@ assert set(OWNERS) == set(CI_PR_OWNERS) and len(OWNERS) == len(CI_PR_OWNERS)
 
 def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    toolchain = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]
+    version = toolchain["channel"]
+    # Cargo's test objects are keyed by rustc version. A moving `stable`
+    # invalidated every trusted-main sccache object between CI #450 and #689.
+    # Pin the actual compiler in both developer Cargo and every CI job; a
+    # deliberate version bump requires a new accepted-main cache prime.
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+    assert toolchain["profile"] == "minimal" and "rustfmt" in toolchain["components"]
+    rust_action = "dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc"
+    action_lines = workflow.splitlines()
+    action_indices = [i for i, line in enumerate(action_lines) if "dtolnay/rust-toolchain@" in line]
+    assert len(action_indices) >= 10
+    for index in action_indices:
+        line = action_lines[index]
+        assert rust_action in line
+        indent = line[:len(line) - len(line.lstrip())]
+        with_indent = indent + ("  " if line.strip().startswith("- uses:") else "")
+        assert action_lines[index + 1] == with_indent + "with:"
+        assert action_lines[index + 2] == with_indent + f'  toolchain: "{version}"'
+    assert "dtolnay/rust-toolchain@stable" not in workflow
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
     v3_topology_guard = "python3 infra/temporal/check_v3_evaluation_topology.py"
     assert fast.count(v3_topology_guard) == 1
