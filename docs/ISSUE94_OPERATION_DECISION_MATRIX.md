@@ -16,6 +16,37 @@ Paths are repository-relative and checked by the audit script.
 
 ## Приёмка по доказательствам (текущий срез Draft PR #95)
 
+### Цель siteArchitect: все пользовательские операции, а не пять демонстраций
+
+Решение владельца проекта от 27.11.2026: `Site Lab` переименован в
+**siteArchitect**; любой предметный шаг, пригодный для пользователя, должен
+быть независимо доступен для выбора, полного typed authoring, ValidateOnly,
+разрешённого Temporal Start, статуса, диагностики и получения результата.
+Произвольная композиция должна пользоваться **тем же** проверенным DAG,
+а не новым прямым RPC к PostgreSQL, Qdrant, Neo4j или поставщику данных.
+
+В базовой матрице **41 потенциально пользовательская строка** (29 KEEP +
+12 SPLIT) и **11 INTERNAL**, которые не следует искусственно превращать в
+видимые инструменты. SPLIT может дать несколько новых независимых контрактов,
+поэтому конечное количество настоящих пользовательских операций уточняется
+по реализованным owner boundaries, а не объявляется равным 41 или 52 заранее.
+Обязательная цель — покрыть **каждую** из 41 строк реальными готовыми
+контрактами (или документированным отказом от первоначальной классификации),
+не считать пять pure-операций завершением программы.
+
+Для каждого исполняемого контракта необходимы: точные Rust Input/Output/Failure
+DTO и структурный owner-issued schema descriptor; независимые owner build,
+deployment/readiness и `ValidateOnly`; one-step Temporal History, tenant/ACL,
+budget и effect admission; реальный typed owner receipt и source attestation
+там, где есть внешние эффекты; успешный/отрицательный E2E и replay на точном
+SHA. Только после этого siteArchitect может показывать статус **готово к
+исполнению**. Предварительный каталог и structural preview не равны работе.
+
+До прохождения этой приёмки показатели остаются фактическими: пять
+установленных pure-операций, два acquisition owner-only контракта,
+**0/52 fully accepted**. Переименование интерфейса не изменяет ни эти
+числа, ни сохранённые Temporal History или SQL authority identities.
+
 ### Новая проверяемая структурная граница (после исходного baseline)
 
 Новый owner-local код `seo_application::operation_adapter::owner_dto_schema`
@@ -50,7 +81,7 @@ root-owned каталога, а входной self-sealed pin сверяетс�
 эффектная Temporal Child Route. Записанный в trusted catalog `build_id`
 должен быть дополнительно подтверждён как идентичность действительно
 запущенного owner Worker; один правильный SHA-подобный текст сам по себе
-не удостоверяет запущенный бинарник. Параметр `parameter_schema` Site Lab
+не удостоверяет запущенный бинарник. Параметр `parameter_schema` siteArchitect
 не эквивалентен полной owner DTO-схеме и не выдаёт admission.
 
 Новый opt-in `AlegriaPureOperationDagV3Workflow` / `alegria-pure-dag-v5`
@@ -92,7 +123,7 @@ python3 automation/audit_operation_inventory.py --format json
 `ACQ-01` и `ACQ-02` дополнительно выделены в `acquisition::operations` как
 строгие типизированные *owner-only* pure-контракты: DTO не изменяют
 десериализацию исторических Temporal V1 payload. **Они не включены** в
-`semantic_extraction_registry`, Site Lab или пользовательский Temporal
+`semantic_extraction_registry`, siteArchitect или пользовательский Temporal
 исполнитель и потому не прибавляются к пяти установленным операциям.
 Для `EX-03` исполнена только pure-часть SPLIT, не внешний Qdrant enrichment.
 
@@ -134,9 +165,9 @@ ACQ/EX/TR (в `proto_runtime_payload_store/registered_payload_impls.rs`
 Новый динамический DAG использует **один provider-free Rust-протокол**
 `operation_protocol::Operation<Input, Output, Failure>` и проверяемую
 `OperationContract`/pinned fingerprint; формат JSON применяется для
-редактируемого Site Lab authoring и конкретных сериализованных данных.
+редактируемого siteArchitect authoring и конкретных сериализованных данных.
 Проверку конкретных DTO выполняет владелец, а не неограниченный словарь
-внутри orchestration. Site Lab remote owner требует отдельного
+внутри orchestration. siteArchitect remote owner требует отдельного
 `ValidateOnly`; JSON schema от автора сама по себе не даёт права запуска.
 
 **Остающийся P0:** `OperationContract::fingerprint()` включает ID/revisions,

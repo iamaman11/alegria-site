@@ -66,7 +66,7 @@ struct Cli {
 /// A native, offline authoring surface. This subcommand never starts a
 /// workflow, opens a provider connection or grants owner admission.
 #[derive(Subcommand, Debug)]
-enum SiteLabCommand {
+enum SiteArchitectCommand {
     /// Show the trusted, installed operation catalog and declared contracts.
     Tools,
     /// Inspect one installed operation and optionally check its typed settings.
@@ -126,12 +126,14 @@ enum SiteLabCommand {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Serve model-controlled Site Lab authoring tools over local MCP stdio.
-    McpSiteLab,
+    /// Serve siteArchitect authoring tools over local MCP stdio.
+    #[command(name = "mcp-site-architect")]
+    McpSiteArchitect,
     /// Compose and inspect site hypotheses without rebuilding the application.
-    SiteLab {
+    #[command(name = "site-architect")]
+    SiteArchitect {
         #[command(subcommand)]
-        action: SiteLabCommand,
+        action: SiteArchitectCommand,
     },
     /// Retrieve the next pending typed LLM request for manual execution.
     LlmNext {

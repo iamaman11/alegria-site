@@ -5,8 +5,8 @@ mod fact_verifier_json;
 mod analytics_client;
 
 include!("cli/types.rs");
-include!("cli/site_lab.rs");
-include!("cli/mcp_site_lab.rs");
+include!("cli/site_architect.rs");
+include!("cli/mcp_site_architect.rs");
 include!("cli/report_helpers.rs");
 include!("cli/contract_gates.rs");
 include!("cli/static_site.rs");

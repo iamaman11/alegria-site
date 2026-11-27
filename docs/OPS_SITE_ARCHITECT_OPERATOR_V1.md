@@ -1,4 +1,10 @@
-# Лаборатория сайта: MCP для ChatGPT, типизированные рецепты и проверка результатов (recipe v2)
+# siteArchitect: MCP для ChatGPT, типизированные рецепты и проверка результатов (recipe v2)
+
+`siteArchitect` — публичное имя прежней лаборатории сайта. CLI использует
+`site-architect`, а MCP публикует только `site_architect_*` и серверное имя
+`alegria-siteArchitect`. Исторические имена Rust/Temporal/SQL (`site_lab_*`,
+`SiteLab*`, `SITE_LAB_SINGLE_V2_*`) сохранены для совместимости с уже
+записанными Workflow History и операторскими контрактами. Это не второй DAG.
 
 ## Зачем
 
@@ -11,13 +17,13 @@
 Команды штатного бинарника `cli_tools` (запускать из корня репозитория):
 
 ```bash
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab tools
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab operation --id semantic.entity_spans --revision 1
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab one-step --recipe-file docs/site_lab_single_step_v1.json
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file docs/site_lab_recipe_v1.json
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --first-file docs/site_lab_recipe_v1.json --second-file docs/site_lab_recipe_v1_alternative.json
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab inspect --plan-file saved-plan.json --receipt-file saved-v2-receipt.json
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect tools
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect operation --id semantic.entity_spans --revision 1
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect one-step --recipe-file docs/site_architect_single_step_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect check --recipe-file docs/site_architect_recipe_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect diff --first-file docs/site_architect_recipe_v1.json --second-file docs/site_architect_recipe_v1_alternative.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect inspect --plan-file saved-plan.json --receipt-file saved-v2-receipt.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
 ```
 
 `operation` выбирает **строго установленную** версию операции по `--id` и
@@ -39,7 +45,7 @@ Temporal Start, server History, независимого допуска и эф�
 зафиксированные хеши команды и источника. Это **не** разрешение на Start.
 
 Тот же инспектор и просмотр одного шага доступны через новые локальные MCP
-инструменты `site_lab_operation` и `site_lab_one_step`. После их добавления
+инструменты `site_architect_operation` и `site_architect_one_step`. После их добавления
 локальный MCP предлагает **12 инструментов** управления и read-only анализа,
 а не 12 работающих внешних SEO API. Двенадцатый инструмент читает только
 ограниченный статус V2 через отдельно запущенного Unix-оператора. Удалённая
@@ -50,7 +56,7 @@ receipt остаются P0.
 
 Новый независимый оператор вызывается отдельной командой
 `temporal_dataforseo --issue-stub-admission /path/to/private-locator.json`,
-а не из `site_lab_one_step`. Он требует явного
+а не из `site_architect_one_step`. Он требует явного
 `ALEGRIA_ENABLE_DATAFORSEO_STUB_OPERATOR_V1=true`, доверенный build ID,
 локальный Temporal endpoint/namespace и отдельный закрытый файл SQL-учётных
 данных. Локатор содержит только UUID бизнес-запуска и точные server Workflow
@@ -80,7 +86,7 @@ Worker между записанным POST и GET, затем проверяе�
 Для ChatGPT/скриптов допустим **один ограниченный JSON из stdin** без промежуточного файла:
 
 ```bash
-cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file - < docs/site_lab_recipe_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect check --recipe-file - < docs/site_architect_recipe_v1.json
 ```
 
 То же работает с `diff`, `inspect` и `compare-results`. Если команда получает несколько файлов, только один аргумент может быть `-`; иначе возвращаются JSON `code: stdin_reused` и exit code 2. Бюджеты остаются прежними: рецепт 256 KiB, каждый сохранённый план/receipt 512 KiB. Открываемые пути в ошибках не раскрываются.
@@ -91,16 +97,16 @@ cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --r
 
 ```bash
 cargo build --manifest-path app/rust/Cargo.toml -p cli_tools
-./app/rust/target/debug/cli_tools mcp-site-lab
+./app/rust/target/debug/cli_tools mcp-site-architect
 ```
 
-MCP-клиент должен **запустить этот бинарник как подпроцесс** с аргументом `mcp-site-lab` и общаться по JSON-RPC 2.0 (один JSON на строку). Это не открытый интернет-MCP endpoint и не означает, что удалённый ChatGPT уже подключён: если клиент не умеет локальный stdio, потребуется отдельно разрешённый и аутентифицированный мост. Никаких ключей поставщиков, маршрутов или произвольных файлов этот MCP-адаптер не принимает. `stdout` отведён только под протокол, сообщения ограничены 3 MiB (чтобы вместить два типизированных плана и две квитанции по 512 KiB плюс JSON-оболочку); ошибки не копируют параметры.
+MCP-клиент должен **запустить этот бинарник как подпроцесс** с аргументом `mcp-site-architect` и общаться по JSON-RPC 2.0 (один JSON на строку). Это не открытый интернет-MCP endpoint и не означает, что удалённый ChatGPT уже подключён: если клиент не умеет локальный stdio, потребуется отдельно разрешённый и аутентифицированный мост. Никаких ключей поставщиков, маршрутов или произвольных файлов этот MCP-адаптер не принимает. `stdout` отведён только под протокол, сообщения ограничены 3 MiB (чтобы вместить два типизированных плана и две квитанции по 512 KiB плюс JSON-оболочку); ошибки не копируют параметры.
 
 **Дополнительные серверные ограничения:** каждый рецепт и пакет редактирования не более 256 KiB, не более 128 изменений за вызов, общий авторский запрос не более 516 KiB; идентификаторы scope не более 128 байт. Лимиты проверяются исполняемым MCP, даже если клиент игнорирует JSON Schema. Черновик, который после редактирования превысил бюджет, не возвращается и не сохраняется. Диагностические поля ошибок сохраняют типизированный `code` и безопасный идентификатор обычного шага, но не копируют произвольные пользовательские ID, URL и строки внутренних валидаторов. **Сам редактируемый рецепт возвращается клиенту целиком**, поэтому пароль, API-ключ или иной секрет никогда нельзя помещать в его `parameters`: полномочия провайдера принадлежат отдельному owner. Более крупный транспортный лимит 3 MiB предназначен только для ограниченных пар сохранённых результатов, а не для произвольных сценариев.
 
 ### Штатное расширение каталога владельцами
 
-`cli_tools` и Temporal Orchestrator теперь используют **один загрузчик доверенного каталога** и один `TEMPORAL_OPERATION_DAG_CATALOG_PATH`. Если каталог установлен, `site-lab tools` и MCP `site_lab_tools` показывают его реальные owner-контракты наряду с пятью базовыми semantic-операциями. Ни MCP-запрос, ни рецепт не могут указать путь к каталогу или определить Workflow Type/Task Queue.
+`cli_tools` и Temporal Orchestrator теперь используют **один загрузчик доверенного каталога** и один `TEMPORAL_OPERATION_DAG_CATALOG_PATH`. Если каталог установлен, `site-architect tools` и MCP `site_architect_tools` показывают его реальные owner-контракты наряду с пятью базовыми semantic-операциями. Ни MCP-запрос, ни рецепт не могут указать путь к каталогу или определить Workflow Type/Task Queue.
 
 Файл устанавливается оператором под `/etc/alegria/`, принадлежит root, не является симлинком и не доступен на запись группе/остальным; все родительские каталоги также проверяются. Вне Unix загрузчик отказывает. Каталог не более 1 MiB, загружается при запуске процесса. Если переменная задана, но доверие/формат нарушены, запуск **останавливается**, а не переключается на произвольный JSON.
 
@@ -112,22 +118,22 @@ MCP предоставляет двенадцать инструментов с�
 
 | MCP-инструмент | Результат |
 | --- | --- |
-| `site_lab_tools` | Действительно установленные операции: владелец, версия, входы, выходы, эффекты, схема продвинутых настроек, readiness |
-| `site_lab_operation` | Одноимённая операция по точной версии: её параметры, порты и локальная типизация либо честное требование владельческого ValidateOnly; эффект не запускается |
-| `site_lab_one_step` | Рецепт из ровно одного шага: проверка типизированных связей и параметров тем же валидатором, без Temporal Start и без выдачи допуска |
-| `site_lab_run_status` | Безопасный статус ровно одного реального одношагового Temporal V2-run по каноническому UUID через доверенного Unix-оператора; без передачи tenant, SQL, пути или права на Start |
-| `site_lab_new` | Пустой рецепт v2 с `tenant_id` и `run_id` |
-| `site_lab_edit` | Новый рецепт после *атомарного пакета* `changes`: `add_step`, `remove_step`, `set_operation`, `set_parameters`, `set_input`, `remove_input`, `set_after`, `upsert_source`, `remove_source` |
-| `site_lab_check` | Проверка существующим V2 DAG-валидатором, точные ошибки, fingerprint и порядок шагов, без запуска |
-| `site_lab_diff` | Сравнение двух сценариев, включая типизированные параметры, без подмены SEO-метрик |
-| `site_lab_connections` | Подсказки подходящих выходов предыдущих шагов и источников для каждого входного порта по совпадению версии и типа; полная проверка остаётся за `site_lab_check` |
-| `site_lab_inspect` | Локальная проверка **полных JSON-объектов** сохранённых sealed V2 плана и receipt на согласованность с установленным каталогом; только диагностические идентификаторы, размеры и хеши, без исходных данных |
-| `site_lab_compare_results` | Сравнение двух полных пар `first:{plan,receipt}` и `second:{plan,receipt}` при совпадении исходных байтов и tenant; только структурные различия результатов, **не** доказательство SEO-эффективности |
-| `site_lab_evidence` | Группировка типизированных наблюдений и гипотез о потребностях; SERP-сниппеты, зеркала и пересказы не считаются независимыми первичными источниками. Только `insufficient_evidence` либо `multi_source_candidate_unattested`, **без аттестации источников** |
+| `site_architect_tools` | Действительно установленные операции: владелец, версия, входы, выходы, эффекты, схема продвинутых настроек, readiness |
+| `site_architect_operation` | Одноимённая операция по точной версии: её параметры, порты и локальная типизация либо честное требование владельческого ValidateOnly; эффект не запускается |
+| `site_architect_one_step` | Рецепт из ровно одного шага: проверка типизированных связей и параметров тем же валидатором, без Temporal Start и без выдачи допуска |
+| `site_architect_run_status` | Безопасный статус ровно одного реального одношагового Temporal V2-run по каноническому UUID через доверенного Unix-оператора; без передачи tenant, SQL, пути или права на Start |
+| `site_architect_new` | Пустой рецепт v2 с `tenant_id` и `run_id` |
+| `site_architect_edit` | Новый рецепт после *атомарного пакета* `changes`: `add_step`, `remove_step`, `set_operation`, `set_parameters`, `set_input`, `remove_input`, `set_after`, `upsert_source`, `remove_source` |
+| `site_architect_check` | Проверка существующим V2 DAG-валидатором, точные ошибки, fingerprint и порядок шагов, без запуска |
+| `site_architect_diff` | Сравнение двух сценариев, включая типизированные параметры, без подмены SEO-метрик |
+| `site_architect_connections` | Подсказки подходящих выходов предыдущих шагов и источников для каждого входного порта по совпадению версии и типа; полная проверка остаётся за `site_architect_check` |
+| `site_architect_inspect` | Локальная проверка **полных JSON-объектов** сохранённых sealed V2 плана и receipt на согласованность с установленным каталогом; только диагностические идентификаторы, размеры и хеши, без исходных данных |
+| `site_architect_compare_results` | Сравнение двух полных пар `first:{plan,receipt}` и `second:{plan,receipt}` при совпадении исходных байтов и tenant; только структурные различия результатов, **не** доказательство SEO-эффективности |
+| `site_architect_evidence` | Группировка типизированных наблюдений и гипотез о потребностях; SERP-сниппеты, зеркала и пересказы не считаются независимыми первичными источниками. Только `insufficient_evidence` либо `multi_source_candidate_unattested`, **без аттестации источников** |
 
-Каждый вызов редактирования получает и возвращает весь рецепт: скрытой сессии и отдельной БД нет. После `site_lab_new` можно одним `site_lab_edit` добавить источники и несколько шагов, связать их типизированными портами и изменить параметры. `site_lab_connections` поможет увидеть кандидатов, но ничего не подключает без явного изменения рецепта. Если после правки сценарий ещё невалиден, ответ `draft_needs_changes` **сохраняет новый черновик**, показывает проблему и позволяет следующую правку. При необходимости независимой проверки параметров поставщика статус `draft_pending_owner_parameter_validation`, а не `draft_validated`: локальная структурная проверка не означает допуск владельца. Дублирующиеся ID или ссылка на отсутствующий шаг при редактировании дают `recipe_edit_rejected` — исходный рецепт не меняется. Удаление поставщика результата **не переподключает** зависимые шаги автоматически: ошибку обнаруживает исходный V2 валидатор. JSON Schema команды и owner schema доступны самому ChatGPT через MCP `tools/list` и `site_lab_tools`.
+Каждый вызов редактирования получает и возвращает весь рецепт: скрытой сессии и отдельной БД нет. После `site_architect_new` можно одним `site_architect_edit` добавить источники и несколько шагов, связать их типизированными портами и изменить параметры. `site_architect_connections` поможет увидеть кандидатов, но ничего не подключает без явного изменения рецепта. Если после правки сценарий ещё невалиден, ответ `draft_needs_changes` **сохраняет новый черновик**, показывает проблему и позволяет следующую правку. При необходимости независимой проверки параметров поставщика статус `draft_pending_owner_parameter_validation`, а не `draft_validated`: локальная структурная проверка не означает допуск владельца. Дублирующиеся ID или ссылка на отсутствующий шаг при редактировании дают `recipe_edit_rejected` — исходный рецепт не меняется. Удаление поставщика результата **не переподключает** зависимые шаги автоматически: ошибку обнаруживает исходный V2 валидатор. JSON Schema команды и owner schema доступны самому ChatGPT через MCP `tools/list` и `site_architect_tools`.
 
-Никаких `site_lab_run` / `temporal_start` в MCP нет: начать эффект без независимого допуска владельцев и проверки реальных источников нельзя. MCP `site_lab_inspect` и `site_lab_compare_results` принимают **сами типизированные JSON-объекты**, не пути к файлам; у CLI остаются команды `inspect` и `compare-results` для локальных файлов. `site_lab_evidence` также принимает типизированный объект `batch` с ревизией, scope, наблюдениями (source ID, original publisher/document, хеши документа и выдержки, тип primary/snippet/mirror/summary) и отдельными гипотезами. Два разных пользовательских origin ID — **не доказательство** двух независимых источников: ответ всегда `structural_only_unattested`; `source_authentication` и `owner_receipt_attestation` равны `not_checked`. Эти проверки **не удостоверяют Temporal History, подпись/подлинность owner receipt, авторизацию источника или реальный эффект провайдера** — это должен сделать отдельный доверенный слой. MCP пока не является завершённым циклом исполнения.
+Никаких `site_architect_run` / `temporal_start` в MCP нет: начать эффект без независимого допуска владельцев и проверки реальных источников нельзя. MCP `site_architect_inspect` и `site_architect_compare_results` принимают **сами типизированные JSON-объекты**, не пути к файлам; у CLI остаются команды `inspect` и `compare-results` для локальных файлов. `site_architect_evidence` также принимает типизированный объект `batch` с ревизией, scope, наблюдениями (source ID, original publisher/document, хеши документа и выдержки, тип primary/snippet/mirror/summary) и отдельными гипотезами. Два разных пользовательских origin ID — **не доказательство** двух независимых источников: ответ всегда `structural_only_unattested`; `source_authentication` и `owner_receipt_attestation` равны `not_checked`. Эти проверки **не удостоверяют Temporal History, подпись/подлинность owner receipt, авторизацию источника или реальный эффект провайдера** — это должен сделать отдельный доверенный слой. MCP пока не является завершённым циклом исполнения.
 
 ### Внешние источники: контракт, допуск и подтверждённый запуск — разные состояния
 
@@ -148,7 +154,7 @@ MCP предоставляет двенадцать инструментов с�
 
 ## Как типизированно подключать шаги
 
-В `site-lab tools` у операции опубликованы два независимых контракта:
+В `site-architect tools` у операции опубликованы два независимых контракта:
 
 - **Порты** `inputs` / `outputs` — стабильные `ArtifactTypeId` и ревизии DTO. Их проверяет существующий валидатор DAG; несовместимый порт нельзя соединить.
 - **Параметры** `parameters.json_schema` и `parameters.schema_hash` — описание возможностей владельца для ChatGPT или UI, отдельное от входных данных. Версия `operation.revision`, `contract_hash` и `schema_hash` должны фиксироваться в результате авторинга.
@@ -166,7 +172,7 @@ MCP предоставляет двенадцать инструментов с�
 
 Это **иллюстрация синтаксиса**, не доступный сегодня инструмент: `provider.hybrid_search` отсутствует в штатном каталоге. Добавлять операцию или схему из самого recipe JSON запрещено.
 
-Для операции с локально установленным Rust DTO значение `parameters` десериализуется **в конкретный тип владельца** (`typed_local`): неизвестные ключи/неверные типы отклоняются, если DTO их запрещает. JSON Schema показывает редактору допустимые поля, но не подменяет этот DTO и сама по себе не является исполняемым валидатором. Для отдельно развёрнутого владельца каталог может опубликовать `requires_owner_validate_only`: синтаксис фиксируется, однако **до независимого owner ValidateOnly нельзя считать значения проверенными, а эффект — разрешённым**. Проверка этого owner-child пока не реализована в Site Lab.
+Для операции с локально установленным Rust DTO значение `parameters` десериализуется **в конкретный тип владельца** (`typed_local`): неизвестные ключи/неверные типы отклоняются, если DTO их запрещает. JSON Schema показывает редактору допустимые поля, но не подменяет этот DTO и сама по себе не является исполняемым валидатором. Для отдельно развёрнутого владельца каталог может опубликовать `requires_owner_validate_only`: синтаксис фиксируется, однако **до независимого owner ValidateOnly нельзя считать значения проверенными, а эффект — разрешённым**. Проверка этого owner-child пока не реализована в siteArchitect.
 
 Дополнительная защита `typed_local`: введённые поля должны сохраняться при строгом DTO round-trip. Даже если сам владелец забыл `deny_unknown_fields`, **молчаливое отбрасывание** нового, вложенного или продвинутого параметра отклоняется. Значения параметров не выводятся в JSON-диагностику.
 
@@ -225,9 +231,9 @@ cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
 
 Читатель сначала сопоставляет tenant business root с отдельной SQL-governance V2, затем находит **точную серверную Temporal History** по закреплённым Workflow ID и серверному Run ID, сверяет байты Start с SQL SHA-256, доверенный каталог/план и ровно один owner-result. Для статуса завершённого одношагового V2-run дополнительно проверяет **две подлинные серверные Child Histories**: `ValidateOnly` и owner effect, их принадлежность родителю, входы и типизированные результаты. Возвращаются безопасные идентификаторы, хеши, количество шагов/результатов и один из диагностических статусов (`temporal_running`, `temporal_failed`, `temporal_completed_owner_unverified`); при отсутствии полномочий, несоответствии или чужом tenant — общий отказ `run_unavailable_or_untrusted` **без раскрытия факта существования чужого запуска**. Сырые данные источников, команды и секреты в выдачу не попадают.
 
-Статус **`temporal_completed_owner_unverified` подтверждает серверное завершение V2 parent, подлинность отдельных `ValidateOnly`/owner Child Histories и согласованность их типизированных результатов**. Он *не* означает независимо подтверждённый durable provider receipt, реальный эффект Neo4j/Qdrant/DataForSEO, пригодное SEO-доказательство, завершённое исследование потребностей или проверенную provenance. До такого утверждения нужен отдельный независимый durable owner receipt и проверка первоисточника. Читатель не возвращает сохранённые plan/receipt для `site-lab inspect` или MCP: подтверждённый серверный экспорт содержимого пока отдельное P0. Сам Start не опубликован в MCP.
+Статус **`temporal_completed_owner_unverified` подтверждает серверное завершение V2 parent, подлинность отдельных `ValidateOnly`/owner Child Histories и согласованность их типизированных результатов**. Он *не* означает независимо подтверждённый durable provider receipt, реальный эффект Neo4j/Qdrant/DataForSEO, пригодное SEO-доказательство, завершённое исследование потребностей или проверенную provenance. До такого утверждения нужен отдельный независимый durable owner receipt и проверка первоисточника. Читатель не возвращает сохранённые plan/receipt для `site-architect inspect` или MCP: подтверждённый серверный экспорт содержимого пока отдельное P0. Сам Start не опубликован в MCP.
 
-### Локальный канал `site_lab_run_status`: отдельные полномочия
+### Локальный канал `site_architect_run_status`: отдельные полномочия
 
 Для текущего read-only пилота один и тот же native Temporal/SQL-reader можно
 запустить как **отдельную локальную службу** (Unix only), без второго

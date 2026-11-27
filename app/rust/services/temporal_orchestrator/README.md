@@ -55,7 +55,7 @@ version; real owner Worker Versioning/routing evidence remains a separate
 production requirement.
 
 The provider-free `trusted_owner_catalog` loader is now shared by the Temporal
-orchestrator and Site Lab MCP/CLI. Catalog `schema_revision: 2` requires an
+orchestrator and siteArchitect MCP/CLI. Catalog `schema_revision: 2` requires an
 additional `parameter_schema` JSON object for each entry, exposed for typed
 ChatGPT authoring but **never** treated as runtime admission. Historical v1
 catalogs remain valid for pinned Temporal routes without authoring parameters.
