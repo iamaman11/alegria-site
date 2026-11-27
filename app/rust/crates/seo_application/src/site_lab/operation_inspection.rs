@@ -5,7 +5,10 @@
 use operation_protocol::OperationRef;
 use serde::Serialize;
 
-use super::{describe_tools, RecipeParameters, SiteLabCatalog, SiteLabError, ToolDescription};
+use super::{
+    describe_tools, OperationExecutionReadinessV1, RecipeParameters, SiteLabCatalog, SiteLabError,
+    ToolDescription,
+};
 
 /// A digest of the installed owner's typed parameter check, never a copy of
 /// the author's provider settings or a claim that ValidateOnly has run.
@@ -23,6 +26,9 @@ pub struct CheckedOperationParameters {
 pub struct OperationInspection {
     pub status: &'static str,
     pub tool: ToolDescription,
+    /// Matches the catalog's trusted local launch gates exactly; supplying
+    /// parameters can never elevate this to execution readiness.
+    pub execution_readiness: OperationExecutionReadinessV1,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checked_parameters: Option<CheckedOperationParameters>,
     pub input_bindings: &'static str,
@@ -70,9 +76,11 @@ pub fn inspect_operation(
         .is_some_and(|parameters| parameters.verification == "requires_owner_validate_only");
     let has_effects = !tool.effects.is_empty();
 
+    let execution_readiness = tool.execution_readiness.clone();
     Ok(OperationInspection {
         status: "registered_operation_inspection_only",
         tool,
+        execution_readiness,
         checked_parameters,
         input_bindings: "not_checked",
         // Even a pure local DTO check is not the native V2 ValidateOnly Child.

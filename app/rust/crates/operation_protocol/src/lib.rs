@@ -15,6 +15,7 @@ use thiserror::Error;
 pub mod dag_machine;
 pub mod effect_child_v4;
 pub mod external_source_attestation_v1;
+pub mod independent_user_identity_v1;
 pub mod json_budget;
 mod one_step_request_grant_json;
 pub mod one_step_request_grant_v1;
@@ -32,6 +33,13 @@ pub use external_source_attestation_v1::{
     verify_external_source_record_v1, ExternalSourceAdmissionErrorV1,
     TrustedExternalSourceRecordV1, VerifiedExternalSourceV1,
     EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+};
+pub use independent_user_identity_v1::{
+    preflight_trusted_oauth_one_step_identity_v1,
+    preflight_trusted_oauth_one_step_reservation_v1, IndependentlyProvisionedOAuthSubjectV1,
+    InstalledOAuthResourcePolicyV1, OAuthOneStepIdentityErrorV1, OAuthOneStepIdentityPreflightV1,
+    OAuthVerifierClaimsV1, MAX_OAUTH_ACCESS_TOKEN_LIFETIME_SECONDS_V1,
+    SITE_ARCHITECT_ONE_STEP_OAUTH_SCOPE_V1,
 };
 pub use json_budget::{
     enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES, DAG_MAX_NODES, DAG_MAX_RESULT_BYTES,

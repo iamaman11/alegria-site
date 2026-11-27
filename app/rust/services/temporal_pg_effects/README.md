@@ -59,6 +59,32 @@ the remote ChatGPT account was authenticated. Until an actual user-identity
 handoff and paid-provider metering are physically accepted, this remains a
 restricted **NO-GO production pilot**, regardless of green CLI/CI tests.
 
+The optional, separate **read-only reconciliation** entry point is
+`--operator-read-granted-single-v1 /absolute/private/request.json`. The
+private 0600 locator is exactly canonical compact JSON with
+`{"schema_revision":1,"request_id":"<non-nil UUID>"}`; no user, grant,
+source path, connection string, Temporal endpoint or claimed outcome is
+accepted from the locator. Set
+`ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_STATUS=true` and independently
+provision the same tenant/principal/policy/context, a strictly **separate**
+`SITE_ARCHITECT_GRANTED_V1_STATUS_DATABASE_URL_FILE` (private 0600 credentials
+for a tenant-bound SELECT-only grant reader), and
+`SITE_ARCHITECT_GRANTED_V1_RESERVER_LOGIN` (the separately installed SQL LOGIN
+that reserved the grant). The status reader may SELECT only the one-step grant
+table, must have no application DML/DDL, role membership, governance/root
+reading or grant reserve/unknown/confirm EXECUTE capabilities, and must never
+reuse `SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE` from the privileged Start
+operator. Optional *independent* server History
+attestation requires separately provisioned V2 read-only governance SQL and
+Temporal credentials (`OPERATION_DAG_READ_V2_*`); they cannot be supplied by
+the caller. This command never reserves, confirms, retries or starts anything.
+It reports the canonical SQL state separately from exact Temporal History
+evidence: `start_outcome_unknown` stays uncertain if the latter is unavailable,
+and even verified Start History is not proof of completed owner effects or
+provider receipts. This CLI is a private local operator reader, not a remote
+ChatGPT user authorization bridge. Full remote launch gates are documented in
+`docs/site_architect_authenticated_launch_acceptance_v1.md`.
+
 ### Transitional canonical tenant fencing (20261125_0007)
 
 Migration `20261125_0007_authoritative_tenant_truth_rls.sql` is a forward-only,

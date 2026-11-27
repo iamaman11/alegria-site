@@ -780,6 +780,20 @@ async fn main() -> Result<()> {
             .await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-read-granted-single-v1") {
+            let path = args.next().context(
+                "--operator-read-granted-single-v1 requires one strictly private request UUID locator",
+            )?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected one-shot read-only status arguments"
+            );
+            operator_single_step_start_v2::read_granted_single_status_from_private_locator(
+                std::path::Path::new(&path),
+            )
+            .await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-issue-business-run-v1") {
             let path = args.next().context(
                 "--operator-issue-business-run-v1 requires a private JSON business intent",

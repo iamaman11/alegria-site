@@ -19,6 +19,7 @@ use thiserror::Error;
 mod evidence;
 mod operation_inspection;
 mod parameters_json;
+mod readiness;
 mod source_bridge;
 pub use evidence::{
     preview_consumer_need_evidence, ConsumerNeedAssessmentV1, ConsumerNeedEvidenceBatchV1,
@@ -32,6 +33,11 @@ pub use operation_inspection::{
 pub use parameters_json::{
     installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
     RecipeParameters, SiteLabCatalog,
+};
+pub use readiness::{
+    summarize_local_execution_readiness, OperationExecutionReadinessV1, OperationGateV1,
+    OperationReadinessSummaryV1,
+    OPERATION_EXECUTION_READINESS_SCHEMA_REVISION_V1,
 };
 pub use source_bridge::{
     bind_public_page_findings_v1, preview_serp_fetch_candidates_v1, PublicPageEvidenceInputV1,
@@ -228,6 +234,9 @@ pub struct ToolDescription {
     /// An operation's contract being registered does not grant operator
     /// admission or mean a provider is online.
     pub readiness: &'static str,
+    /// Typed per-operation launch gates. A local catalog cannot prove a
+    /// remote user, one-use grant, owner History or provider usage receipt.
+    pub execution_readiness: OperationExecutionReadinessV1,
 }
 
 /// Every registered owner contract is discoverable without adding a new
@@ -238,6 +247,8 @@ pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, 
         .catalog()
         .contracts()
         .map(|contract| {
+            let parameters = catalog.describe(&contract.reference);
+            let missing_schema = parameters.is_none();
             Ok(ToolDescription {
                 operation: contract.reference.clone(),
                 owner: contract.owner.as_str().to_owned(),
@@ -247,8 +258,10 @@ pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, 
                 effects: contract.effects.clone(),
                 idempotency: contract.idempotency,
                 contract_hash: contract.fingerprint()?.as_str().to_owned(),
-                parameters: catalog.describe(&contract.reference),
-                readiness: if catalog.describe(&contract.reference).is_none() {
+                execution_readiness:
+                    readiness::local_catalog_execution_readiness(contract, parameters.as_ref()),
+                parameters,
+                readiness: if missing_schema {
                     "missing_parameter_schema"
                 } else if contract.effects.is_empty()
                     && contract.idempotency == IdempotencyPolicy::Pure

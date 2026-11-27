@@ -20,8 +20,8 @@ use operation_protocol::{
     OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationId,
     OperationRef, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
     TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
-    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
-    OPERATION_DAG_PARENT_TYPE_V2,
+    DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -34,6 +34,7 @@ use url::Url;
 
 use sqlx::{PgPool, Row};
 
+use super::operator_v4::{fetch_exact_history, first_started_payload};
 use super::{operator_dag_governance, operator_dag_read_v2};
 
 const ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START";
@@ -48,6 +49,13 @@ const GRANTED_PRINCIPAL_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID";
 const GRANTED_POLICY_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_POLICY_ID";
 const GRANTED_CONTEXT_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY";
 const GRANTED_LIMITS_FILE_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE";
+const GRANTED_STATUS_ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_STATUS";
+const GRANTED_STATUS_DSN_FILE_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_STATUS_DATABASE_URL_FILE";
+const GRANTED_RESERVER_LOGIN_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_RESERVER_LOGIN";
+const GRANTED_STATUS_READER_DSN_ENV: &str = "OPERATION_DAG_READ_V2_DATABASE_URL_FILE";
+const GRANTED_STATUS_TEMPORAL_URL_ENV: &str = "OPERATION_DAG_READ_V2_TEMPORAL_URL";
+const GRANTED_STATUS_NAMESPACE_ENV: &str = "OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE";
+const GRANTED_STATUS_CATALOG_ENV: &str = "OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE";
 const MAX_REQUEST_FUTURE_SECONDS: u64 = 600;
 const MAX_CONTEXT_KEY_BYTES: usize = 512;
 const MAX_POLICY_ID_BYTES: usize = 128;
@@ -345,6 +353,115 @@ async fn checked_one_shot_grant_pool(expected_tenant: &str) -> Result<PgPool> {
     Ok(pool)
 }
 
+/// A status reader is NOT the Start reserver. Even a SELECT-only Start login
+/// can execute SECURITY DEFINER reserve/unknown functions, so reusing its
+/// credentials here would silently give an alleged read surface Start power.
+async fn checked_one_shot_status_pool(expected_tenant: &str) -> Result<PgPool> {
+    let path = env::var(GRANTED_STATUS_DSN_FILE_ENV)
+        .context("one-shot status requires a dedicated SELECT-only SQL LOGIN credential file")?;
+    let bytes = operator_dag_governance::read_private_operator_file(
+        Path::new(&path),
+        "one-shot status SELECT-only SQL DSN",
+    )?;
+    let dsn = String::from_utf8(bytes)?;
+    let dsn = dsn.trim_end_matches(['\r', '\n']);
+    ensure!(
+        !dsn.is_empty() && dsn.trim() == dsn,
+        "invalid dedicated one-shot status SQL DSN"
+    );
+    let pool = PgPool::connect(dsn).await?;
+    let role = sqlx::query(
+        "SELECT current_user::text AS effective,session_user::text AS login,
+                r.rolcanlogin login_enabled,r.rolinherit inherits_roles,
+                (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole
+                 OR r.rolcreatedb OR r.rolreplication) elevated,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_one_step_request_grants_v1','SELECT') can_read_grant,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_business_runs_v1','SELECT') can_read_root,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_run_governance_v2','SELECT') can_read_governance,
+                has_database_privilege(session_user,current_database(),'CREATE') can_create_db,
+                has_function_privilege(session_user,
+                 'pipeline.reserve_operation_dag_one_step_request_v1(uuid,uuid,text,text,text,text,text,uuid)',
+                 'EXECUTE') can_reserve,
+                has_function_privilege(session_user,
+                 'pipeline.mark_operation_dag_one_step_start_unknown_v1(uuid,uuid)',
+                 'EXECUTE') can_mark_unknown,
+                has_function_privilege(session_user,
+                 'pipeline.confirm_operation_dag_one_step_start_v1(uuid,uuid,text,text)',
+                 'EXECUTE') can_confirm
+         FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
+    )
+    .fetch_one(&pool)
+    .await?;
+    ensure!(
+        role.get::<String, _>("effective") == role.get::<String, _>("login")
+            && role.get::<bool, _>("login_enabled")
+            && !role.get::<bool, _>("inherits_roles")
+            && !role.get::<bool, _>("elevated")
+            && role.get::<bool, _>("can_read_grant")
+            && !role.get::<bool, _>("can_read_root")
+            && !role.get::<bool, _>("can_read_governance")
+            && !role.get::<bool, _>("can_create_db")
+            && !role.get::<bool, _>("can_reserve")
+            && !role.get::<bool, _>("can_mark_unknown")
+            && !role.get::<bool, _>("can_confirm"),
+        "one-shot status login has forbidden Start or write authority"
+    );
+    let role_membership: Option<String> = sqlx::query_scalar(
+        "SELECT parent.rolname::text FROM pg_catalog.pg_auth_members m
+         JOIN pg_catalog.pg_roles parent ON parent.oid=m.roleid
+         WHERE m.member=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=session_user)
+         LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        role_membership.is_none(),
+        "one-shot status login must not inherit or SET ROLE"
+    );
+    let direct_write: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname||'.'||c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+         WHERE n.nspname NOT IN ('information_schema') AND n.nspname !~ '^pg_'
+           AND c.relkind IN ('r','p','v','m','f')
+           AND (has_any_column_privilege(session_user,c.oid,'INSERT')
+                OR has_any_column_privilege(session_user,c.oid,'UPDATE')
+                OR has_table_privilege(session_user,c.oid,'DELETE')
+                OR has_table_privilege(session_user,c.oid,'TRUNCATE'))
+         ORDER BY n.nspname,c.relname LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        direct_write.is_none(),
+        "one-shot status login has forbidden direct table writes"
+    );
+    let create_schema: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname::text FROM pg_catalog.pg_namespace n
+         WHERE n.nspname NOT IN ('information_schema') AND n.nspname !~ '^pg_'
+           AND has_schema_privilege(session_user,n.oid,'CREATE')
+         ORDER BY n.nspname LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        create_schema.is_none(),
+        "one-shot status login must not create app SQL objects"
+    );
+    let bound_tenant: Option<String> =
+        sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+            .fetch_one(&pool)
+            .await?;
+    ensure!(
+        bound_tenant.as_deref() == Some(expected_tenant),
+        "one-shot status SQL LOGIN is not independently bound to this tenant"
+    );
+    Ok(pool)
+}
+
 async fn independently_check_one_shot_grant(
     pool: &PgPool,
     policy: &CheckedGrantPolicy,
@@ -473,6 +590,427 @@ async fn sql_commit_unknown_before_temporal_start(
             .await?;
     ensure!(accepted, "one-shot grant unknown-state write refused");
     Ok(())
+}
+
+/// A request UUID selects one SQL row. It does not grant authority to read
+/// another principal's request or supply a Temporal run/History assertion.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GrantedStartStatusLocatorV1 {
+    schema_revision: u16,
+    request_id: uuid::Uuid,
+}
+
+fn decode_granted_start_status_locator(bytes: &[u8]) -> Result<GrantedStartStatusLocatorV1> {
+    ensure!(bytes.len() <= 128, "one-shot status locator is unbounded");
+    let locator: GrantedStartStatusLocatorV1 = serde_json::from_slice(bytes)?;
+    ensure!(
+        locator.schema_revision == 1
+            && !locator.request_id.is_nil()
+            && serde_json::to_vec(&locator)?.as_slice() == bytes,
+        "one-shot status locator must be one canonical nonnil UUID-only request"
+    );
+    Ok(locator)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PersistedGrantedStartState {
+    Unclaimed,
+    Reserved,
+    StartOutcomeUnknown,
+    StartConfirmed,
+}
+
+impl PersistedGrantedStartState {
+    fn from_sql(state: &str) -> Result<Self> {
+        match state {
+            "unclaimed" => Ok(Self::Unclaimed),
+            "reserved" => Ok(Self::Reserved),
+            "start_outcome_unknown" => Ok(Self::StartOutcomeUnknown),
+            "start_confirmed" => Ok(Self::StartConfirmed),
+            _ => anyhow::bail!("unknown or unsupported SQL one-shot grant state"),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unclaimed => "unclaimed",
+            Self::Reserved => "reserved",
+            Self::StartOutcomeUnknown => "start_outcome_unknown",
+            Self::StartConfirmed => "start_confirmed",
+        }
+    }
+
+    fn requires_history_inspection(self) -> bool {
+        matches!(self, Self::StartOutcomeUnknown | Self::StartConfirmed)
+    }
+
+    fn status(self, exact_server_history: bool) -> &'static str {
+        match (self, exact_server_history) {
+            (Self::Unclaimed, _) => "grant_unclaimed",
+            (Self::Reserved, _) => "grant_reserved_outcome_unverified",
+            (Self::StartOutcomeUnknown, false) => "start_outcome_unknown",
+            (Self::StartOutcomeUnknown, true) => {
+                "temporal_start_history_verified_grant_pending_confirmation"
+            }
+            (Self::StartConfirmed, false) => "sql_grant_confirmed_history_unverified",
+            (Self::StartConfirmed, true) => "temporal_start_history_verified_grant_confirmed",
+        }
+    }
+
+    fn next_action(self, exact_server_history: bool) -> &'static str {
+        match (self, exact_server_history) {
+            (Self::Unclaimed, _) => {
+                "Request a separately authorized Start only while the SQL grant is active; this status read does not reserve or dispatch."
+            }
+            (Self::Reserved, _) => {
+                "Reservation outcome requires independent SQL reconciliation. Do not retry or dispatch Temporal Start using this consumed grant."
+            }
+            (Self::StartOutcomeUnknown, false) => {
+                "An independent governance issuer must attest exact server Temporal History, or an operator must investigate its absence. Never repeat Start for this grant."
+            }
+            (Self::StartOutcomeUnknown, true) => {
+                "Exact Temporal Start History is independently attested. A separately authorized SQL reconciler may confirm the one-use grant; this read did not change it."
+            }
+            (Self::StartConfirmed, false) => {
+                "SQL records a confirmed Start, but this read could not verify exact server History. Reconcile credentials, governance and Temporal independently; never replay."
+            }
+            (Self::StartConfirmed, true) => {
+                "Start identity is independently verified. Inspect owner History and separately attested durable provider receipt before claiming any execution result."
+            }
+        }
+    }
+}
+
+fn status_grant_actors_are_independent(
+    state: PersistedGrantedStartState,
+    issuer: &str,
+    status_reader: &str,
+    configured_reserver: &str,
+    recorded_reserver: Option<&str>,
+    reservation_nonce: Option<uuid::Uuid>,
+) -> bool {
+    !issuer.is_empty()
+        && !status_reader.is_empty()
+        && !configured_reserver.is_empty()
+        && issuer != status_reader
+        && issuer != configured_reserver
+        && status_reader != configured_reserver
+        && match state {
+            PersistedGrantedStartState::Unclaimed => {
+                recorded_reserver.is_none() && reservation_nonce.is_none()
+            }
+            PersistedGrantedStartState::Reserved
+            | PersistedGrantedStartState::StartOutcomeUnknown
+            | PersistedGrantedStartState::StartConfirmed => {
+                recorded_reserver == Some(configured_reserver)
+                    && reservation_nonce.is_some_and(|nonce| !nonce.is_nil())
+            }
+        }
+}
+
+#[derive(Serialize)]
+struct SafeGrantedStartStatusV1 {
+    schema_revision: u16,
+    operation: &'static str,
+    status: &'static str,
+    request_id: uuid::Uuid,
+    canonical_run_id: uuid::Uuid,
+    parent_workflow_id: String,
+    grant_state: &'static str,
+    authorization_currently_active: bool,
+    temporal_start_history_attestation: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_workflow_run_id: Option<String>,
+    execution: &'static str,
+    owner_admission: &'static str,
+    next_action: &'static str,
+}
+
+#[derive(Serialize)]
+struct SafeGrantedStatusRefusalV1 {
+    schema_revision: u16,
+    operation: &'static str,
+    status: &'static str,
+    code: &'static str,
+    execution: &'static str,
+    next_action: &'static str,
+}
+
+/// An opt-in PRIVATE local read, independent of Start opt-in. It does not
+/// reserve, mutate or retry a request. Unavailable Temporal/governance proof
+/// is an explicitly unverified status, never inferred success from the ACK.
+pub(super) async fn read_granted_single_status_from_private_locator(path: &Path) -> Result<()> {
+    match try_read_granted_single_status_from_private_locator(path).await {
+        Ok(report) => {
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                serde_json::to_string(&SafeGrantedStatusRefusalV1 {
+                    schema_revision: 1,
+                    operation: "site_architect_read_granted_single_v1",
+                    status: "refused",
+                    code: "grant_unavailable_or_untrusted",
+                    execution: "not_confirmed",
+                    next_action: "Ask the operator to verify the private locator, separately configured principal, tenant-bound SQL grant reader and governance credentials.",
+                })?
+            );
+            anyhow::bail!("one-shot status read refused; see redacted JSON diagnostic")
+        }
+    }
+}
+
+async fn try_read_granted_single_status_from_private_locator(
+    path: &Path,
+) -> Result<SafeGrantedStartStatusV1> {
+    ensure!(
+        env::var(GRANTED_STATUS_ENABLE_ENV).ok().as_deref() == Some("true"),
+        "one-shot status read is not independently enabled"
+    );
+    let tenant = env::var(TENANT_ENV)?;
+    let principal = env::var(GRANTED_PRINCIPAL_ENV)?;
+    let policy = env::var(GRANTED_POLICY_ENV)?;
+    let context = env::var(GRANTED_CONTEXT_ENV)?;
+    let trusted_reserver = env::var(GRANTED_RESERVER_LOGIN_ENV)?;
+    ensure!(
+        bounded_policy_identifier(&tenant)
+            && bounded_policy_identifier(&principal)
+            && bounded_policy_identifier(&policy)
+            && bounded_context_key(&context)
+            && bounded_policy_identifier(&trusted_reserver),
+        "independent one-shot status tenant/principal/reserver policy is invalid"
+    );
+    let bytes = operator_dag_governance::read_private_operator_file(
+        path,
+        "private one-shot status request locator",
+    )?;
+    let locator = decode_granted_start_status_locator(&bytes)?;
+    let pool = timeout(Duration::from_secs(15), checked_one_shot_status_pool(&tenant))
+        .await
+        .context("one-shot status SQL reader timed out")??;
+    // The independently bound SQL LOGIN, not the opaque locator, defines the
+    // tenant. Explicit principal/policy/context filters prevent a shared
+    // tenant from enumerating another user's request via a UUID.
+    let row = timeout(
+        Duration::from_secs(15),
+        sqlx::query(
+            "SELECT run_id,tenant_id,context_key,parent_workflow_id,plan_hash,state,
+                    issued_by::text AS issuer,session_user::text AS reader,
+                    reserved_by::text AS reserver,reservation_nonce,
+                    (revoked_at IS NULL AND expires_at > clock_timestamp()) AS authorization_active
+             FROM pipeline.operation_dag_one_step_request_grants_v1
+             WHERE request_id=$1 AND tenant_id=$2 AND principal_id=$3
+               AND policy_id=$4 AND context_key=$5",
+        )
+        .bind(locator.request_id)
+        .bind(&tenant)
+        .bind(&principal)
+        .bind(&policy)
+        .bind(&context)
+        .fetch_optional(&pool),
+    )
+    .await
+    .context("one-shot status grant read timed out")??
+    .context("one-shot grant unavailable under independently bound principal")?;
+    let state = PersistedGrantedStartState::from_sql(row.try_get("state")?)?;
+    let issuer = row.try_get::<String, _>("issuer")?;
+    let reader = row.try_get::<String, _>("reader")?;
+    let reserved_by = row.try_get::<Option<String>, _>("reserver")?;
+    let nonce = row.try_get::<Option<uuid::Uuid>, _>("reservation_nonce")?;
+    ensure!(
+        status_grant_actors_are_independent(
+            state,
+            &issuer,
+            &reader,
+            &trusted_reserver,
+            reserved_by.as_deref(),
+            nonce,
+        ),
+        "one-shot grant issuer/reserver or persistence state is untrusted"
+    );
+    let canonical_run_id: uuid::Uuid = row.try_get("run_id")?;
+    let workflow_id: String = row.try_get("parent_workflow_id")?;
+    let plan_hash: String = row.try_get("plan_hash")?;
+    ensure!(
+        !canonical_run_id.is_nil()
+            && workflow_id == operation_dag_parent_workflow_id_v2(&canonical_run_id.to_string())
+            && plan_hash.len() == 64
+            && plan_hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            && row.try_get::<String, _>("tenant_id")? == tenant
+            && row.try_get::<String, _>("context_key")? == context,
+        "one-shot SQL scope/parent identity differs from native workflow"
+    );
+    let attested_server_run = if state.requires_history_inspection() {
+        // A separate SELECT-only tenant login reads independently issued
+        // governance. Any credential, History or hash mismatch produces NO
+        // positive attestation; the grant remains SQL-canonical and consumed.
+        timeout(
+            Duration::from_secs(30),
+            independently_attest_granted_parent_start_history(
+                &tenant,
+                &context,
+                canonical_run_id,
+                &workflow_id,
+                &plan_hash,
+                &reader,
+                &trusted_reserver,
+            ),
+        )
+        .await
+        .ok()
+        .and_then(|result| result.ok())
+        .flatten()
+    } else {
+        None
+    };
+    let exact_server_history = attested_server_run.is_some();
+    Ok(SafeGrantedStartStatusV1 {
+        schema_revision: 1,
+        operation: "site_architect_read_granted_single_v1",
+        status: state.status(exact_server_history),
+        request_id: locator.request_id,
+        canonical_run_id,
+        parent_workflow_id: workflow_id,
+        grant_state: state.as_str(),
+        authorization_currently_active: row.try_get("authorization_active")?,
+        temporal_start_history_attestation: if exact_server_history {
+            "exact_server_history_matches_independent_sql_governance"
+        } else {
+            "unavailable_or_unverified"
+        },
+        parent_workflow_run_id: attested_server_run,
+        execution: "not_confirmed",
+        owner_admission: "not_issued_by_status",
+        next_action: state.next_action(exact_server_history),
+    })
+}
+
+async fn independently_attest_granted_parent_start_history(
+    tenant: &str,
+    context: &str,
+    canonical_run_id: uuid::Uuid,
+    workflow_id: &str,
+    plan_hash: &str,
+    status_reader_login: &str,
+    trusted_reserver_login: &str,
+) -> Result<Option<String>> {
+    let pool = operator_dag_read_v2::tenant_read_only_pool(
+        tenant,
+        GRANTED_STATUS_READER_DSN_ENV,
+        true,
+    )
+    .await?;
+    let governance_reader_login: String = sqlx::query_scalar("SELECT session_user::text")
+        .fetch_one(&pool)
+        .await?;
+    ensure!(
+        governance_reader_login != status_reader_login
+            && governance_reader_login != trusted_reserver_login,
+        "independent governance proof reader cannot reuse status or Start SQL LOGIN"
+    );
+    let root = sqlx::query(
+        "SELECT tenant_id,context_key,plan_hash,parent_workflow_id
+         FROM pipeline.operation_dag_business_runs_v1 WHERE run_id=$1",
+    )
+    .bind(canonical_run_id)
+    .fetch_optional(&pool)
+    .await?
+    .context("independently issued business root unavailable")?;
+    ensure!(
+        root.try_get::<String, _>("tenant_id")? == tenant
+            && root.try_get::<String, _>("context_key")? == context
+            && root.try_get::<String, _>("plan_hash")? == plan_hash
+            && root.try_get::<String, _>("parent_workflow_id")? == workflow_id,
+        "independent business root does not match one-shot grant"
+    );
+    let governance = sqlx::query(
+        "SELECT parent_workflow_run_id,parent_start_sha256,tenant_id,context_key,
+                plan_hash,parent_workflow_id,parent_workflow_type,parent_task_queue,
+                issued_by::text AS issuer
+         FROM pipeline.operation_dag_run_governance_v2
+         WHERE canonical_run_id=$1 ORDER BY issued_at DESC LIMIT 2",
+    )
+    .bind(canonical_run_id)
+    .fetch_all(&pool)
+    .await?;
+    if governance.is_empty() {
+        return Ok(None);
+    }
+    ensure!(governance.len() == 1, "ambiguous independent Temporal governance");
+    let attestation = &governance[0];
+    let server_run_id = attestation.try_get::<String, _>("parent_workflow_run_id")?;
+    let server_uuid = uuid::Uuid::parse_str(&server_run_id)?;
+    ensure!(
+        !server_uuid.is_nil()
+            && server_uuid.to_string() == server_run_id
+            && attestation.try_get::<String, _>("issuer")? != trusted_reserver_login
+            && attestation.try_get::<String, _>("issuer")? != status_reader_login
+            && attestation.try_get::<String, _>("tenant_id")? == tenant
+            && attestation.try_get::<String, _>("context_key")? == context
+            && attestation.try_get::<String, _>("plan_hash")? == plan_hash
+            && attestation.try_get::<String, _>("parent_workflow_id")? == workflow_id
+            && attestation.try_get::<String, _>("parent_workflow_type")?
+                == OPERATION_DAG_PARENT_TYPE_V2
+            && attestation.try_get::<String, _>("parent_task_queue")?
+                == OPERATION_DAG_PARENT_QUEUE_V2,
+        "separately issued governance does not match exact one-step identity"
+    );
+    let temporal_url = env::var(GRANTED_STATUS_TEMPORAL_URL_ENV)?;
+    checked_local_temporal_url(&temporal_url)?;
+    let namespace = env::var(GRANTED_STATUS_NAMESPACE_ENV)?;
+    ensure!(
+        bounded_policy_identifier(&namespace),
+        "invalid independent Temporal namespace"
+    );
+    let catalog_path = env::var(GRANTED_STATUS_CATALOG_ENV)?;
+    let catalog = operator_dag_governance::read_operator_owned_catalog(Path::new(&catalog_path))?;
+    let client = crate::connect_client(
+        &temporal_url,
+        format!("alegria-granted-start-history-{}", std::process::id()),
+        &namespace,
+    )
+    .await?;
+    let history = fetch_exact_history(&client, &namespace, workflow_id, &server_run_id).await?;
+    ensure!(
+        history.events.len() <= 1_000,
+        "one-step Temporal History is unbounded"
+    );
+    let payload = first_started_payload(
+        &history,
+        OPERATION_DAG_PARENT_TYPE_V2,
+        OPERATION_DAG_PARENT_QUEUE_V2,
+    )?;
+    ensure!(
+        !payload.is_empty() && payload.len() <= DAG_MAX_INPUT_BYTES,
+        "one-step Temporal parent Start payload exceeds budget"
+    );
+    let exact_sha256: String =
+        sqlx::query_scalar("SELECT encode(public.digest($1::bytea,'sha256'),'hex')")
+            .bind(&payload)
+            .fetch_one(&pool)
+            .await?;
+    ensure!(
+        exact_sha256 == attestation.try_get::<String, _>("parent_start_sha256")?,
+        "Temporal server Start bytes differ from independently issued SQL hash"
+    );
+    let run: OperationDagRunV6 = serde_json::from_slice(&payload)?;
+    ensure!(
+        run.schema_revision == 6
+            && serde_json::to_vec(&run)? == payload
+            && run.plan.scope.tenant_id == tenant
+            && run.plan.scope.run_id == canonical_run_id.to_string()
+            && run.plan.hash.as_str() == plan_hash
+            && run.plan.nodes.len() == 1
+            && run.owner_commands.len() == 1
+            && run.pinned_routes.len() == 1,
+        "Temporal parent Start differs from canonical single operation"
+    );
+    run.plan.validate(catalog.catalog())?;
+    catalog.validate_run_routes(&run)?;
+    Ok(Some(server_run_id))
 }
 
 struct OperatorConfig {
@@ -1081,6 +1619,155 @@ mod tests {
         ContractHash, ExecutionPlan, OperationNode, OperationRef, PinnedOwnerRouteV1, RunScope,
         OPERATION_DAG_RUN_SCHEMA_REVISION_V6, PLAN_SCHEMA_REVISION,
     };
+
+    #[test]
+    fn granted_status_locator_accepts_only_one_canonical_opaque_request_uuid() {
+        let canonical = br#"{"schema_revision":1,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08"}"#;
+        let checked = decode_granted_start_status_locator(canonical).unwrap();
+        assert_eq!(
+            checked.request_id.to_string(),
+            "e0813cac-2277-454e-980a-2e08110c1a08"
+        );
+        let rejected: &[&[u8]] = &[
+            br#"{"request_id":"e0813cac-2277-454e-980a-2e08110c1a08","schema_revision":1}"#,
+            br#"{"schema_revision":2,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08"}"#,
+            br#"{"schema_revision":1,"request_id":"00000000-0000-0000-0000-000000000000"}"#,
+            br#"{"schema_revision":1,"request_id":"E0813CAC-2277-454E-980A-2E08110C1A08"}"#,
+            br#"{"schema_revision":1,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08","tenant_id":"forged"}"#,
+            br#"{"schema_revision":1,"request_id":"e0813cac-2277-454e-980a-2e08110c1a08","parent_workflow_run_id":"forged"}"#,
+        ];
+        for &rejected in rejected {
+            assert!(decode_granted_start_status_locator(rejected).is_err());
+        }
+    }
+
+    #[test]
+    fn granted_start_status_never_conflates_temporal_start_with_owner_execution() {
+        let known = [
+            ("unclaimed", "grant_unclaimed"),
+            ("reserved", "grant_reserved_outcome_unverified"),
+            ("start_outcome_unknown", "start_outcome_unknown"),
+            ("start_confirmed", "sql_grant_confirmed_history_unverified"),
+        ];
+        for (sql, expected) in known {
+            let state = PersistedGrantedStartState::from_sql(sql).unwrap();
+            assert_eq!(state.as_str(), sql);
+            assert_eq!(state.status(false), expected);
+            assert_eq!(
+                state.requires_history_inspection(),
+                sql == "start_outcome_unknown" || sql == "start_confirmed"
+            );
+        }
+        let unknown = PersistedGrantedStartState::StartOutcomeUnknown;
+        assert_eq!(
+            unknown.status(true),
+            "temporal_start_history_verified_grant_pending_confirmation"
+        );
+        assert!(unknown.next_action(false).contains("Never repeat Start"));
+        assert!(unknown.next_action(true).contains("read did not change it"));
+        let confirmed = PersistedGrantedStartState::StartConfirmed;
+        assert_eq!(
+            confirmed.status(true),
+            "temporal_start_history_verified_grant_confirmed"
+        );
+        assert!(confirmed.next_action(true).contains("provider receipt"));
+        assert!(PersistedGrantedStartState::from_sql("start_submitted").is_err());
+        assert!(PersistedGrantedStartState::from_sql("completed").is_err());
+    }
+
+    #[test]
+    fn one_shot_status_reader_is_not_the_authenticated_reservation_owner() {
+        let nonce = uuid::Uuid::new_v4();
+        let valid = |state, issuer, reader, trusted_reserver, recorded, recorded_nonce| {
+            status_grant_actors_are_independent(
+                state,
+                issuer,
+                reader,
+                trusted_reserver,
+                recorded,
+                recorded_nonce,
+            )
+        };
+        assert!(valid(
+            PersistedGrantedStartState::Unclaimed,
+            "grant_issuer",
+            "status_reader",
+            "start_reserver",
+            None,
+            None
+        ));
+        for state in [
+            PersistedGrantedStartState::Reserved,
+            PersistedGrantedStartState::StartOutcomeUnknown,
+            PersistedGrantedStartState::StartConfirmed,
+        ] {
+            assert!(valid(
+                state,
+                "grant_issuer",
+                "status_reader",
+                "start_reserver",
+                Some("start_reserver"),
+                Some(nonce)
+            ));
+            for (issuer, reader, reserver, recorded) in [
+                (
+                    "grant_issuer",
+                    "status_reader",
+                    "start_reserver",
+                    Some("status_reader"),
+                ),
+                (
+                    "grant_issuer",
+                    "start_reserver",
+                    "start_reserver",
+                    Some("start_reserver"),
+                ),
+                (
+                    "start_reserver",
+                    "status_reader",
+                    "start_reserver",
+                    Some("start_reserver"),
+                ),
+                (
+                    "status_reader",
+                    "status_reader",
+                    "start_reserver",
+                    Some("start_reserver"),
+                ),
+                (
+                    "grant_issuer",
+                    "status_reader",
+                    "wrong_reserver",
+                    Some("start_reserver"),
+                ),
+            ] {
+                assert!(!valid(
+                    state,
+                    issuer,
+                    reader,
+                    reserver,
+                    recorded,
+                    Some(nonce)
+                ));
+            }
+            assert!(!valid(
+                state,
+                "grant_issuer",
+                "status_reader",
+                "start_reserver",
+                Some("start_reserver"),
+                Some(uuid::Uuid::nil())
+            ));
+        }
+        assert!(!valid(
+            PersistedGrantedStartState::Unclaimed,
+            "grant_issuer",
+            "status_reader",
+            "start_reserver",
+            Some("start_reserver"),
+            Some(nonce)
+        ));
+    }
 
     fn one_step_candidate(owner: &str) -> OperationDagRunV6 {
         let operation = OperationRef {

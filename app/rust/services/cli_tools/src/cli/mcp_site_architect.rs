@@ -305,6 +305,12 @@ fn mcp_site_architect_tools() -> Value {
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
+            "name":"site_architect_run_one", "title":"Check a single-operation launch request",
+            "description":"Fail-closed launch handoff for one typed operation. Checks the recipe locally and reports that the authenticated ChatGPT OAuth resource server is NOT configured for this stdio adapter. This read-only tool never reserves a grant, authenticates a caller, runs owner ValidateOnly or starts Temporal; no caller-provided principal, bearer, grant or transport authority is accepted.",
+            "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
             "name":"site_architect_run_status", "title":"Read an independently authorized Temporal operation status",
             "description":"Inspect exactly one native V2 operation by canonical business run UUID through an independently installed read-only tenant-bound Unix operator. No caller-supplied tenant, file, socket, SQL, Temporal endpoint or provider authority. Requires a preconfigured separate Unix UID and private operator bridge. Server Temporal History is checked; provider receipt and source authentication are NOT independently attested. Never starts, retries or signals a Workflow.",
             "inputSchema":mcp_object_schema(json!({
@@ -654,6 +660,7 @@ fn mcp_site_architect_call(
         name,
         "site_architect_operation"
             | "site_architect_one_step"
+            | "site_architect_run_one"
             | "site_architect_new"
             | "site_architect_edit"
             | "site_architect_check"
@@ -718,6 +725,39 @@ fn mcp_site_architect_call(
             }
             Ok(input) => match site_architect_one_step_preview(&input.recipe, catalog) {
                 Ok(preview) => (preview, false),
+                Err(problem) => (problem, true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        // The stdio MCP transport has no authenticated ChatGPT OAuth access
+        // token. A tenant_id inside a recipe is data, NOT a tenant ACL. Never
+        // reinterpret an arbitrary argument, environment variable or recipe
+        // hash as the missing authenticated principal / one-use grant.
+        // Reuse the exact native one-step preflight for helpful diagnostics,
+        // then fail closed without any Temporal, SQL or provider side effect.
+        "site_architect_run_one" => match serde_json::from_value::<McpOneRecipe>(args) {
+            Ok(input) if mcp_site_architect_authoring_payload_too_large(&input.recipe) =>
+            {
+                (site_architect_problem("one_step_recipe_too_large", "One-step recipe exceeds the 256 KiB authoring limit.", "Reduce the recipe input before checking this operation."), true)
+            }
+            Ok(input) => match site_architect_one_step_preview(&input.recipe, catalog) {
+                Ok(preview) => (json!({
+                    "status":"launch_blocked",
+                    "code":"authenticated_start_gateway_not_configured",
+                    "request_kind":"one_step",
+                    "local_recipe_preflight":"completed_preview_only",
+                    "preflight":preview,
+                    "authenticated_chatgpt_principal":"unavailable_in_stdio_transport",
+                    "tenant_authorization":"not_checked",
+                    "one_use_grant":"not_reserved",
+                    "source_attestation":"not_checked",
+                    "owner_validate_only":"not_run",
+                    "operator_admission":"not_issued",
+                    "temporal_start":"not_attempted",
+                    "temporal_history_attestation":"not_checked",
+                    "execution":"not_started",
+                    "next_action":"Configure an independently trusted HTTP OAuth 2.1 PKCE resource server which validates the access token issuer, audience, expiry and scopes; bind the verified ChatGPT principal to tenant ACL, a budgeted one-use grant, exact inputs and owner ValidateOnly before enabling mutating Temporal Start. No launch was requested from Temporal."
+                }), true),
                 Err(problem) => (problem, true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
@@ -856,7 +896,7 @@ fn mcp_site_architect_message(
             json!({"protocolVersion":SITE_LAB_MCP_PROTOCOL,
                 "capabilities":{"tools":{"listChanged":false}},
                 "serverInfo":{"name":"alegria-siteArchitect","version":env!("CARGO_PKG_VERSION")},
-                "instructions":"Read-only siteArchitect: trusted catalog, typed DAG authoring, saved-receipt inspection and an optional independently credentialed server-Temporal-History status reader. No user authorization issuer, one-use grant consume, Temporal Start, provider effects or admission is exposed."})
+                "instructions":"Read-only siteArchitect: trusted catalog, typed DAG authoring, a fail-closed one-step launch request diagnostic, saved-receipt inspection and an optional independently credentialed server-Temporal-History status reader. A trusted ChatGPT OAuth resource server is NOT configured in stdio MCP. No user authorization issuer, one-use grant consume, Temporal Start, provider effects or admission is exposed."})
         }
         "ping" => json!({}),
         "tools/list" => mcp_site_architect_tools(),
@@ -989,7 +1029,7 @@ mod site_architect_mcp_tests {
             replies[0]["result"]["capabilities"]["tools"]["listChanged"],
             false
         );
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 13);
         assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().all(|tool| {
             tool["name"].as_str().is_some_and(|name| name.starts_with("site_architect_"))
         }));
@@ -1000,6 +1040,7 @@ mod site_architect_mcp_tests {
         for name in [
             "site_architect_operation",
             "site_architect_one_step",
+            "site_architect_run_one",
             "site_architect_run_status",
             "site_architect_connections",
             "site_architect_inspect",
@@ -1023,6 +1064,14 @@ mod site_architect_mcp_tests {
         assert_eq!(readiness["counts"]["installed_versioned_operations"], 5);
         assert_eq!(readiness["counts"]["user_start_verified_by_this_adapter"], 0);
         assert_eq!(readiness["mcp_start_exposed"], false);
+        assert_eq!(
+            readiness["one_step_launch_request"]["status"],
+            "blocked_authenticated_start_gateway_not_configured"
+        );
+        assert_eq!(
+            readiness["one_step_launch_request"]["mutating_temporal_start"],
+            false
+        );
         assert_eq!(
             readiness["launch_gates"]["budget_and_one_use_grant"],
             "not_proven_here"
@@ -1120,6 +1169,77 @@ mod site_architect_mcp_tests {
         let bad = tool_call("site_architect_one_step", json!({"recipe":secret_settings}));
         assert_eq!(bad["result"]["isError"], true);
         assert!(!bad.to_string().contains("SENTINEL-PRIVATE-KEY"));
+    }
+
+    #[test]
+    fn mcp_run_one_reports_no_authenticated_gateway_and_never_starts() {
+        let tool = mcp_site_architect_tools()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "site_architect_run_one")
+            .unwrap()
+            .clone();
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool["annotations"]["openWorldHint"], false);
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+
+        let recipe = json!({
+            "schema_revision":2,
+            "scope":{"tenant_id":"caller-supplied-is-not-an-acl","run_id":"one-step"},
+            "sources":{"mentions":{"schema":{"id":"semantic.entity_span_input","revision":1},"provenance":"unverified:test"}},
+            "steps":[{"id":"extract","operation":{"id":"semantic.entity_spans","revision":1},
+                "inputs":{"input":{"source":"external","artifact":"mentions"}},"parameters":{}}]
+        });
+
+        let response = tool_call("site_architect_run_one", json!({"recipe":recipe.clone()}));
+        let result = &response["result"]["structuredContent"];
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(result["status"], "launch_blocked");
+        assert_eq!(result["code"], "authenticated_start_gateway_not_configured");
+        assert_eq!(result["local_recipe_preflight"], "completed_preview_only");
+        assert_eq!(result["preflight"]["status"], "single_step_preview_only");
+        assert_eq!(result["authenticated_chatgpt_principal"], "unavailable_in_stdio_transport");
+        assert_eq!(result["tenant_authorization"], "not_checked");
+        assert_eq!(result["one_use_grant"], "not_reserved");
+        assert_eq!(result["owner_validate_only"], "not_run");
+        assert_eq!(result["temporal_start"], "not_attempted");
+        assert_eq!(result["execution"], "not_started");
+
+        // None of these strings may be upgraded into authority by supplying
+        // them as tool-call arguments. Reject them rather than ignore them.
+        for property in [
+            "principal_id", "tenant_id", "bearer_token", "grant_id", "temporal_url",
+            "operator_socket_path", "source_path", "authenticated_context",
+        ] {
+            let mut args = json!({"recipe":recipe.clone()});
+            args[property] = json!("SENTINEL-FORGED-AUTHORITY");
+            let rejected = tool_call("site_architect_run_one", args);
+            assert_eq!(rejected["result"]["isError"], true);
+            assert_eq!(
+                rejected["result"]["structuredContent"]["code"],
+                "invalid_tool_arguments",
+                "{property} must never be interpreted as authority"
+            );
+            assert!(!rejected.to_string().contains("SENTINEL-FORGED-AUTHORITY"));
+        }
+
+        let mut no_steps = recipe.clone();
+        no_steps["steps"] = json!([]);
+        let zero = tool_call("site_architect_run_one", json!({"recipe":no_steps}));
+        assert_eq!(zero["result"]["structuredContent"]["code"], "one_step_required");
+
+        let mut two_steps = recipe.clone();
+        two_steps["steps"].as_array_mut().unwrap().push(recipe["steps"][0].clone());
+        let two = tool_call("site_architect_run_one", json!({"recipe":two_steps}));
+        assert_eq!(two["result"]["structuredContent"]["code"], "one_step_required");
+
+        let mut token_in_settings = recipe;
+        token_in_settings["steps"][0]["parameters"] =
+            json!({"bearer_token":"SENTINEL-PRIVATE-KEY"});
+        let rejected = tool_call("site_architect_run_one", json!({"recipe":token_in_settings}));
+        assert_eq!(rejected["result"]["isError"], true);
+        assert!(!rejected.to_string().contains("SENTINEL-PRIVATE-KEY"));
     }
 
     fn safe_owner_report(canonical_run_id: uuid::Uuid) -> Value {

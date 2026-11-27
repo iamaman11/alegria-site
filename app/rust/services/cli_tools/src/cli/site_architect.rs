@@ -175,44 +175,30 @@ fn site_architect_operation_inspection(
 fn site_architect_launch_readiness(
     operations: &[seo_application::site_lab::ToolDescription],
 ) -> Value {
-    let schema_installed = operations
-        .iter()
-        .filter(|operation| operation.parameters.is_some())
-        .count();
-    let local_typed_parameters = operations
-        .iter()
-        .filter(|operation| {
-            operation
-                .parameters
-                .as_ref()
-                .is_some_and(|parameters| parameters.verification == "typed_local")
-        })
-        .count();
-    let requires_remote_validate_only = operations
-        .iter()
-        .filter(|operation| {
-            operation
-                .parameters
-                .as_ref()
-                .is_some_and(|parameters| {
-                    parameters.verification == "requires_owner_validate_only"
-                })
-        })
-        .count();
+    let verified_catalog =
+        seo_application::site_lab::summarize_local_execution_readiness(operations);
     json!({
         "status":"catalog_and_authoring_only",
+        "typed_operation_readiness":&verified_catalog,
         "counts":{
-            "installed_versioned_operations":operations.len(),
-            "with_parameter_schema":schema_installed,
-            "with_local_typed_parameter_check":local_typed_parameters,
-            "requiring_independent_owner_validate_only":requires_remote_validate_only,
-            "user_start_verified_by_this_adapter":0
+            "installed_versioned_operations":verified_catalog.installed_versioned_operations,
+            "with_parameter_schema":verified_catalog.installed_versioned_operations - verified_catalog.with_missing_parameter_definition,
+            "with_local_typed_parameter_check":verified_catalog.with_installed_parameter_definition,
+            "requiring_independent_owner_validate_only":verified_catalog.requiring_independent_owner_parameter_validation,
+            "user_start_verified_by_this_adapter":verified_catalog.user_start_verified
         },
         "composition":{
             "single_operation":"typed_preview_only",
             "multi_operation":"typed_dag_preview_only",
             "selection_order":"caller_selected_subject_to_typed_input_dependencies",
             "execution_order":"not_verified"
+        },
+        "one_step_launch_request":{
+            "tool":"site_architect_run_one",
+            "status":"blocked_authenticated_start_gateway_not_configured",
+            "scope":"one_typed_recipe_step",
+            "mutating_temporal_start":false,
+            "authenticated_oauth_resource_server":"not_installed_in_stdio_adapter"
         },
         "launch_gates":{
             "authenticated_chatgpt_principal_and_tenant_acl":"not_proven_here",

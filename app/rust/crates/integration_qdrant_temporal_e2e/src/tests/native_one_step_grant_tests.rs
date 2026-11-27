@@ -52,6 +52,11 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         request_id: Uuid,
         intent: ExactStartIntent<'a>,
     }
+    #[derive(serde::Serialize)]
+    struct GrantedStatusLocator {
+        schema_revision: u16,
+        request_id: Uuid,
+    }
     let expected_for = |run: &operation_protocol::OperationDagRunV6| SiteLabExpectedStartV1 {
         schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
         plan_hash: run.plan.hash.clone(),
@@ -162,6 +167,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let issuer_role = format!("grant_issuer_{nonce}");
     let operator_role = format!("grant_operator_{nonce}");
     let reader_role = format!("grant_reader_{nonce}");
+    let status_role = format!("grant_status_{nonce}");
     const PASSWORD: &str = "disposable_native_one_step_grant_password";
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {business_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
@@ -170,8 +176,9 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
          CREATE ROLE {issuer_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {operator_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {reader_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
-         GRANT CONNECT ON DATABASE alegria TO {business_role},{source_role},{approver_role},{issuer_role},{operator_role},{reader_role};
-         GRANT USAGE ON SCHEMA pipeline TO {business_role},{source_role},{approver_role},{issuer_role},{operator_role},{reader_role};
+         CREATE ROLE {status_role} LOGIN NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOREPLICATION PASSWORD '{PASSWORD}';
+         GRANT CONNECT ON DATABASE alegria TO {business_role},{source_role},{approver_role},{issuer_role},{operator_role},{reader_role},{status_role};
+         GRANT USAGE ON SCHEMA pipeline TO {business_role},{source_role},{approver_role},{issuer_role},{operator_role},{reader_role},{status_role};
          GRANT USAGE ON SCHEMA raw TO {source_role};
          GRANT INSERT ON pipeline.operation_dag_business_runs_v1 TO {business_role};
          GRANT INSERT,UPDATE(revoked_at) ON pipeline.operation_dag_external_source_attestations_v1 TO {source_role};
@@ -183,6 +190,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
          GRANT SELECT ON pipeline.operation_dag_business_runs_v1,
              pipeline.operation_dag_external_source_attestations_v1 TO {reader_role};
          GRANT SELECT ON pipeline.operation_dag_one_step_request_grants_v1 TO {operator_role};
+         GRANT SELECT ON pipeline.operation_dag_one_step_request_grants_v1 TO {status_role};
          GRANT EXECUTE ON FUNCTION pipeline.one_step_limits_valid_v1(jsonb)
              TO {approver_role},{issuer_role};
          GRANT EXECUTE ON FUNCTION pipeline.one_step_expected_valid_v1(jsonb,text)
@@ -192,13 +200,63 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
          GRANT EXECUTE ON FUNCTION pipeline.mark_operation_dag_one_step_start_unknown_v1(uuid,uuid)
              TO {operator_role};
          GRANT EXECUTE ON FUNCTION pipeline.confirm_operation_dag_one_step_start_v1(uuid,uuid,text,text)
-             TO {operator_role};"
+             TO {operator_role};
+         REVOKE EXECUTE ON FUNCTION pipeline.reserve_operation_dag_one_step_request_v1(uuid,uuid,text,text,text,text,text,uuid)
+             FROM {status_role};
+         REVOKE EXECUTE ON FUNCTION pipeline.mark_operation_dag_one_step_start_unknown_v1(uuid,uuid)
+             FROM {status_role};
+         REVOKE EXECUTE ON FUNCTION pipeline.confirm_operation_dag_one_step_start_v1(uuid,uuid,text,text)
+             FROM {status_role};"
     )))
     .execute(&pg.pool).await.expect("DBA provisions separately credentialed grant owners");
-    for role in [&business_role, &source_role, &approver_role, &issuer_role, &operator_role, &reader_role] {
+    for role in [&business_role, &source_role, &approver_role, &issuer_role, &operator_role, &reader_role, &status_role] {
         sqlx::query("INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)")
             .bind(role).bind(tenant).execute(&pg.pool).await.unwrap();
     }
+    // The grant issuer intentionally has NO raw namespace capability. Its
+    // privilege probe must use pg_catalog OIDs, not require a new USAGE grant.
+    let issuer_raw_usage: bool = sqlx::query_scalar(
+        "SELECT has_schema_privilege($1::name,'raw','USAGE')",
+    )
+    .bind(&issuer_role)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    let source_raw_usage: bool = sqlx::query_scalar(
+        "SELECT has_schema_privilege($1::name,'raw','USAGE')",
+    )
+    .bind(&source_role)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert!(!issuer_raw_usage && source_raw_usage,
+        "grant issuer must inspect raw DML ACL by catalog OID without raw schema USAGE");
+    let (status_select, status_insert, status_update, status_reserve,
+        status_unknown, status_confirm): (bool, bool, bool, bool, bool, bool) = sqlx::query_as(
+        "SELECT has_table_privilege($1::name,
+                    'pipeline.operation_dag_one_step_request_grants_v1','SELECT'),
+                has_table_privilege($1::name,
+                    'pipeline.operation_dag_one_step_request_grants_v1','INSERT'),
+                has_table_privilege($1::name,
+                    'pipeline.operation_dag_one_step_request_grants_v1','UPDATE'),
+                has_function_privilege($1::name,
+                    'pipeline.reserve_operation_dag_one_step_request_v1(uuid,uuid,text,text,text,text,text,uuid)',
+                    'EXECUTE'),
+                has_function_privilege($1::name,
+                    'pipeline.mark_operation_dag_one_step_start_unknown_v1(uuid,uuid)',
+                    'EXECUTE'),
+                has_function_privilege($1::name,
+                    'pipeline.confirm_operation_dag_one_step_start_v1(uuid,uuid,text,text)',
+                    'EXECUTE')",
+    )
+    .bind(&status_role)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert!(status_select && !status_insert && !status_update
+        && !status_reserve && !status_unknown && !status_confirm,
+        "private status login must be SELECT-only and unable to reserve, mutate or confirm Start");
+    assert_ne!(status_role, operator_role, "status reader must not reuse the reserver SQL LOGIN");
     let prefix = "postgres://postgres:postgres_password@";
     assert!(pg.database_url.starts_with(prefix));
     let role_dsn = |role: &str| pg.database_url.replacen(
@@ -272,6 +330,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let request_dsn = private.request("request-issuer-dsn", &role_dsn(&issuer_role));
     let operator_dsn = private.request("one-use-operator-dsn", &role_dsn(&operator_role));
     let reader_dsn = private.request("one-use-read-only-dsn", &role_dsn(&reader_role));
+    let status_dsn = private.request("one-use-status-select-only-dsn", &role_dsn(&status_role));
     let limits_path = private.request("one-use-operator-max-limits", &serde_json::to_string(&maximum_limits).unwrap());
     let deadline = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 240;
@@ -304,6 +363,55 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         String::from_utf8_lossy(&issue_request.stdout), String::from_utf8_lossy(&issue_request.stderr));
     let issued: serde_json::Value = serde_json::from_slice(&issue_request.stdout).unwrap();
     assert_eq!(issued["status"], "one_step_request_issued_not_started");
+    let (grant_state, actual_issuer, actual_approver): (String, String, String) =
+        sqlx::query_as(
+            "SELECT g.state, g.issued_by::text, a.approved_by::text
+             FROM pipeline.operation_dag_one_step_request_grants_v1 g
+             JOIN pipeline.operation_dag_one_step_request_approvals_v1 a
+               ON a.authorization_event_id=g.authorization_event_id
+             WHERE g.request_id=$1",
+        )
+        .bind(request_id)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(grant_state, "unclaimed", "issuance is not a Temporal Start");
+    assert_eq!(actual_issuer, issuer_role);
+    assert_eq!(actual_approver, approver_role);
+    assert_ne!(actual_issuer, actual_approver,
+        "SQL grant issuance and user approval require different LOGINs");
+
+    // Status is a third, independently bound SELECT-only SQL LOGIN, distinct
+    // from both issuer and Start reserver. The opaque UUID cannot reserve or
+    // attest execution, and reserved_by is matched to the separately pinned
+    // reserver SQL identity, never to the status reader's identity.
+    let status_locator = private.request("approved-grant-status-locator", &serde_json::to_string(
+        &GrantedStatusLocator { schema_revision: 1, request_id },
+    ).unwrap());
+    let read_grant_as = |principal: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
+        .arg("--operator-read-granted-single-v1").arg(&status_locator)
+        .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_STATUS", "true")
+        .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
+        .env("SITE_ARCHITECT_GRANTED_V1_STATUS_DATABASE_URL_FILE", &status_dsn)
+        .env("SITE_ARCHITECT_GRANTED_V1_RESERVER_LOGIN", &operator_role)
+        .env("SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID", principal)
+        .env("SITE_ARCHITECT_GRANTED_V1_POLICY_ID", "ci-safe-zero-cost-v1")
+        .env("SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY", &context)
+        .env_remove("OPERATION_DAG_READ_V2_DATABASE_URL_FILE")
+        .env_remove("SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE")
+        .env_remove("DATABASE_URL")
+        .output().expect("native SQL one-shot grant status reader");
+    let before_start = read_grant_as("ci-authenticated-user");
+    assert!(before_start.status.success(), "status reader rejected a live unclaimed grant: stdout={} stderr={}",
+        String::from_utf8_lossy(&before_start.stdout), String::from_utf8_lossy(&before_start.stderr));
+    let before_status: serde_json::Value = serde_json::from_slice(&before_start.stdout).unwrap();
+    assert_eq!(before_status["status"], "grant_unclaimed");
+    assert_eq!(before_status["grant_state"], "unclaimed");
+    assert_eq!(before_status["execution"], "not_confirmed");
+    assert_eq!(before_status["owner_admission"], "not_issued_by_status");
+    let forged_status = read_grant_as("forged-user");
+    assert!(!forged_status.status.success(),
+        "a copied opaque status locator cannot enumerate another principal's grant");
 
     let grant_intent = private.request("approved-one-use-temporal-start", &serde_json::to_string(
         &GrantedStartIntent { schema_revision: 1, request_id, intent: ExactStartIntent {
@@ -366,4 +474,19 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     ).bind(request_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(final_state, "start_outcome_unknown",
         "without an independent History/governance issuer the Start cannot mark itself confirmed");
+    let after_start = read_grant_as("ci-authenticated-user");
+    assert!(after_start.status.success(), "status reader rejected a consumed grant: stdout={} stderr={}",
+        String::from_utf8_lossy(&after_start.stdout), String::from_utf8_lossy(&after_start.stderr));
+    let after_status: serde_json::Value = serde_json::from_slice(&after_start.stdout).unwrap();
+    assert_eq!(after_status["status"], "start_outcome_unknown");
+    assert_eq!(after_status["grant_state"], "start_outcome_unknown");
+    assert_eq!(after_status["temporal_start_history_attestation"], "unavailable_or_unverified");
+    assert_eq!(after_status["execution"], "not_confirmed",
+        "status without independent governance may never promote RPC ACK to execution proof");
+    assert_eq!(after_status["owner_admission"], "not_issued_by_status");
+    let after_status_state: String = sqlx::query_scalar(
+        "SELECT state FROM pipeline.operation_dag_one_step_request_grants_v1 WHERE request_id=$1",
+    ).bind(request_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(after_status_state, final_state,
+        "status reads cannot mutate a consumed one-shot grant or re-open Start");
 }

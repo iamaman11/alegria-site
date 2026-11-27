@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::*;
 use crate::operation_adapter::semantic_extraction_registry;
-use crate::site_lab::installed_semantic_lab_catalog;
+use crate::site_lab::{installed_semantic_lab_catalog, OperationGateV1};
 
 fn registry() -> SiteLabCatalog {
     installed_semantic_lab_catalog(
@@ -70,6 +70,39 @@ fn individual_operation_inspection_returns_exact_installed_metadata_without_exec
     assert_eq!(report.executable_owner, "not_verified");
     assert_eq!(report.provider_connectivity, "not_checked");
     assert_eq!(report.execution, "not_started");
+    assert_eq!(report.execution_readiness, report.tool.execution_readiness);
+    assert_eq!(report.execution_readiness.schema_revision, 1);
+    assert_eq!(report.execution_readiness.status, "catalog_preview_only");
+    assert_eq!(
+        report.execution_readiness.parameter_contract,
+        OperationGateV1::DefinitionInstalled
+    );
+    assert_eq!(
+        report.execution_readiness.typed_output_contract,
+        OperationGateV1::DefinitionInstalled
+    );
+    assert_eq!(
+        report.execution_readiness.owner_validate_only_history,
+        OperationGateV1::NotVerified
+    );
+    assert_eq!(
+        report.execution_readiness.authenticated_principal_tenant_acl,
+        OperationGateV1::NotVerified
+    );
+    assert_eq!(
+        report.execution_readiness.bounded_one_use_request_grant,
+        OperationGateV1::NotVerified
+    );
+    assert_eq!(
+        report.execution_readiness.temporal_start_and_server_history,
+        OperationGateV1::NotVerified
+    );
+    assert_eq!(
+        report.execution_readiness.provider_usage_and_budget_receipt,
+        OperationGateV1::NotApplicable
+    );
+    assert!(!report.execution_readiness.user_start_verified);
+    assert!(!report.execution_readiness.group_execution_verified);
     let checked = report.checked_parameters.unwrap();
     assert_eq!(checked.status, "typed_configuration_checked");
     assert_eq!(checked.verification, "typed_local");
@@ -109,6 +142,15 @@ fn unknown_operations_and_missing_owner_schema_fail_closed() {
     assert_eq!(report.tool.readiness, "missing_parameter_schema");
     assert_eq!(report.executable_owner, "not_verified");
     assert_eq!(
+        report.execution_readiness.parameter_contract,
+        OperationGateV1::DefinitionMissing
+    );
+    assert_eq!(
+        report.execution_readiness.provider_usage_and_budget_receipt,
+        OperationGateV1::NotVerified
+    );
+    assert!(!report.execution_readiness.user_start_verified);
+    assert_eq!(
         inspect_operation(&catalog, &unknown, Some(&RecipeParameters::default()))
             .err()
             .expect("parameter schema required")
@@ -144,6 +186,19 @@ fn remote_owner_settings_need_validate_only_and_new_settings_change_digest() {
     assert_eq!(first.owner_validate_only, "required_not_run");
     assert_eq!(first.operator_admission, "not_issued_by_inspection");
     assert_eq!(first.executable_owner, "not_verified");
+    assert_eq!(
+        first.execution_readiness.parameter_contract,
+        OperationGateV1::IndependentOwnerValidationRequired
+    );
+    assert_eq!(
+        first.execution_readiness.provider_usage_and_budget_receipt,
+        OperationGateV1::NotVerified
+    );
+    assert_eq!(
+        first.execution_readiness.typed_failure_wire,
+        OperationGateV1::NotVerified
+    );
+    assert!(!first.execution_readiness.user_start_verified);
     let visible = serde_json::to_string(&first).unwrap();
     assert!(!visible.contains("east"));
     assert!(!visible.contains("west"));
@@ -168,4 +223,25 @@ fn remote_owner_settings_need_validate_only_and_new_settings_change_digest() {
             .code,
         "operation_parameters_invalid"
     );
+}
+
+#[test]
+fn every_installed_catalog_operation_stays_nonexecuting_without_independent_evidence() {
+    let catalog = registry();
+    let tools = describe_tools(&catalog).unwrap();
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let readiness = &tool.execution_readiness;
+        assert_eq!(readiness.status, "catalog_preview_only");
+        assert_eq!(
+            readiness.installed_runtime_owner_route,
+            OperationGateV1::NotVerified
+        );
+        assert_eq!(
+            readiness.bounded_one_use_request_grant,
+            OperationGateV1::NotVerified
+        );
+        assert!(!readiness.user_start_verified);
+        assert!(!readiness.group_execution_verified);
+    }
 }
