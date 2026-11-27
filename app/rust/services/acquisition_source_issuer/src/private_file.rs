@@ -21,7 +21,10 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
             io::Read,
             os::{
                 fd::{AsRawFd, FromRawFd},
-                unix::{ffi::OsStrExt, fs::{MetadataExt, PermissionsExt}},
+                unix::{
+                    ffi::OsStrExt,
+                    fs::{MetadataExt, PermissionsExt},
+                },
             },
             path::Component,
         };
@@ -53,7 +56,10 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC
             };
             let fd = unsafe { libc::openat(dir.as_raw_fd(), encoded.as_ptr(), flags) };
-            ensure!(fd >= 0, "issuer private path has unsafe or inaccessible component");
+            ensure!(
+                fd >= 0,
+                "issuer private path has unsafe or inaccessible component"
+            );
             let opened = unsafe { fs::File::from_raw_fd(fd) };
             let metadata = opened.metadata()?;
             if leaf {
@@ -62,7 +68,10 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
                     metadata.permissions().mode() & 0o077 == 0,
                     "issuer private file must have 0600/0400 permissions"
                 );
-                ensure!(metadata.len() <= 2 * 1024 * 1024, "issuer input is oversized");
+                ensure!(
+                    metadata.len() <= 2 * 1024 * 1024,
+                    "issuer input is oversized"
+                );
                 final_file = Some((opened, metadata.uid()));
             } else {
                 ensure!(metadata.is_dir(), "issuer parent must be directory");
@@ -80,8 +89,13 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
             "issuer parent is writable by group/world or has foreign owner"
         );
         let mut bytes = Vec::new();
-        file.by_ref().take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= 2 * 1024 * 1024, "issuer input grew beyond limit");
+        file.by_ref()
+            .take(2 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() <= 2 * 1024 * 1024,
+            "issuer input grew beyond limit"
+        );
         Ok(bytes)
     }
     #[cfg(not(unix))]

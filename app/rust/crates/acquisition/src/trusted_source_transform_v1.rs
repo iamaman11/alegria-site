@@ -93,8 +93,20 @@ fn is_html_content_type(value: &str) -> bool {
 fn skipped_element(name: &str) -> bool {
     matches!(
         name,
-        "script" | "style" | "template" | "svg" | "iframe" | "canvas" | "noscript"
-            | "nav" | "aside" | "footer" | "form" | "button" | "select" | "option"
+        "script"
+            | "style"
+            | "template"
+            | "svg"
+            | "iframe"
+            | "canvas"
+            | "noscript"
+            | "nav"
+            | "aside"
+            | "footer"
+            | "form"
+            | "button"
+            | "select"
+            | "option"
     )
 }
 
@@ -107,14 +119,12 @@ fn hidden_inline_style(style: Option<&str>) -> bool {
         .filter(|character| !character.is_whitespace())
         .collect::<String>()
         .to_ascii_lowercase();
-    compact.split(';').any(|declaration| {
-        declaration == "display:none" || declaration == "visibility:hidden"
-    })
+    compact
+        .split(';')
+        .any(|declaration| declaration == "display:none" || declaration == "visibility:hidden")
 }
 
-fn collect_visible_text(
-    node: NodeRef<'_, Node>,
-) -> Result<String, TrustedSourceTransformErrorV1> {
+fn collect_visible_text(node: NodeRef<'_, Node>) -> Result<String, TrustedSourceTransformErrorV1> {
     // Iterative DOM walk: untrusted deeply nested HTML must not exhaust the
     // issuer's Rust call stack. Reject excess text instead of truncating it.
     let mut pending = vec![node];

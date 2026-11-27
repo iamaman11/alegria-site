@@ -30,7 +30,8 @@ pub(super) fn issued_report(
         "artifact_id":artifact_id,
         "payload_hash":payload_hash,
         "execution":"not_started",
-    }).to_string()
+    })
+    .to_string()
 }
 
 pub(super) fn unconfirmed_report() -> String {

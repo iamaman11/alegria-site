@@ -15,8 +15,8 @@ use thiserror::Error;
 
 use crate::{
     operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    OperationDagRunV6, OperationRef, SiteLabExpectedStartV1,
-    SiteLabSingleOperationPreflightError, TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
+    OperationDagRunV6, OperationRef, SiteLabExpectedStartV1, SiteLabSingleOperationPreflightError,
+    TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
 };
 
 pub const ONE_STEP_REQUEST_GRANT_SCHEMA_REVISION_V1: u16 = 1;
@@ -217,15 +217,25 @@ pub fn preflight_issued_one_step_request_for_reservation_v1(
     }
     if !checked_limits(&independently_authenticated_policy.maximum_limits)
         || record.limits.currency_code
-            != independently_authenticated_policy.maximum_limits.currency_code
+            != independently_authenticated_policy
+                .maximum_limits
+                .currency_code
         || record.limits.max_admitted_source_bytes
-            > independently_authenticated_policy.maximum_limits.max_admitted_source_bytes
+            > independently_authenticated_policy
+                .maximum_limits
+                .max_admitted_source_bytes
         || record.limits.max_effect_dispatches
-            > independently_authenticated_policy.maximum_limits.max_effect_dispatches
+            > independently_authenticated_policy
+                .maximum_limits
+                .max_effect_dispatches
         || record.limits.max_provider_requests
-            > independently_authenticated_policy.maximum_limits.max_provider_requests
+            > independently_authenticated_policy
+                .maximum_limits
+                .max_provider_requests
         || record.limits.max_charge_minor_units
-            > independently_authenticated_policy.maximum_limits.max_charge_minor_units
+            > independently_authenticated_policy
+                .maximum_limits
+                .max_charge_minor_units
     {
         return Err(OneStepRequestGrantErrorV1::BudgetExceeded);
     }
@@ -238,13 +248,11 @@ pub fn preflight_issued_one_step_request_for_reservation_v1(
     {
         return Err(OneStepRequestGrantErrorV1::ScopeMismatch);
     }
-    let admitted_bytes = run
-        .admitted
-        .values()
-        .try_fold(0_usize, |sum, artifact| sum.checked_add(artifact.payload.len()));
+    let admitted_bytes = run.admitted.values().try_fold(0_usize, |sum, artifact| {
+        sum.checked_add(artifact.payload.len())
+    });
     if admitted_bytes.is_none_or(|sum| sum > record.limits.max_admitted_source_bytes as usize)
-        || run.plan.nodes[0].permitted_effects.len()
-            > record.limits.max_effect_dispatches as usize
+        || run.plan.nodes[0].permitted_effects.len() > record.limits.max_effect_dispatches as usize
         || run.plan.allowed_effects.len() > record.limits.max_effect_dispatches as usize
     {
         return Err(OneStepRequestGrantErrorV1::BudgetExceeded);
@@ -345,12 +353,11 @@ mod tests {
                 operation: operation.clone(),
                 inputs: BTreeMap::from([(
                     PortId::from("input"),
-                    ArtifactBinding::External { artifact: source.clone() },
+                    ArtifactBinding::External {
+                        artifact: source.clone(),
+                    },
                 )]),
-                outputs: BTreeMap::from([(
-                    PortId::from("output"),
-                    ArtifactId::from("classified"),
-                )]),
+                outputs: BTreeMap::from([(PortId::from("output"), ArtifactId::from("classified"))]),
                 after: BTreeSet::new(),
                 permitted_effects: effects,
             }],
@@ -386,14 +393,8 @@ mod tests {
         let expected = SiteLabExpectedStartV1 {
             schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
-            command_hashes: BTreeMap::from([(
-                instance,
-                owner_content_hash(&command_bytes),
-            )]),
-            source_payload_hashes: BTreeMap::from([(
-                source,
-                owner_content_hash(&source_bytes),
-            )]),
+            command_hashes: BTreeMap::from([(instance, owner_content_hash(&command_bytes))]),
+            source_payload_hashes: BTreeMap::from([(source, owner_content_hash(&source_bytes))]),
         };
         let limits = OneStepResourceLimitsV1 {
             max_admitted_source_bytes: 1024,
@@ -428,7 +429,9 @@ mod tests {
             maximum_limits: limits,
         };
         (
-            OpaqueOneStepRequestLocatorV1 { request_id: REQUEST_ID.into() },
+            OpaqueOneStepRequestLocatorV1 {
+                request_id: REQUEST_ID.into(),
+            },
             grant,
             run,
             routes,
@@ -439,7 +442,12 @@ mod tests {
     #[test]
     fn locator_has_only_one_canonical_field_and_never_carries_authority() {
         let bytes = format!(r#"{{"request_id":"{REQUEST_ID}"}}"#);
-        assert_eq!(decode_opaque_one_step_request_locator_v1(bytes.as_bytes()).unwrap().request_id, REQUEST_ID);
+        assert_eq!(
+            decode_opaque_one_step_request_locator_v1(bytes.as_bytes())
+                .unwrap()
+                .request_id,
+            REQUEST_ID
+        );
         for bad in [
             format!(r#"{{"request_id":"{}"}}"#, REQUEST_ID.to_uppercase()),
             format!(r#"{{"request_id":"{REQUEST_ID}","tenant_id":"tenant-a"}}"#),
@@ -449,7 +457,13 @@ mod tests {
             r#"{"request_id":"00000000-0000-0000-0000-000000000000"}"#.into(),
             r#"{"request_id":"../tmp/intent.json"}"#.into(),
         ] {
-            assert!(matches!(decode_opaque_one_step_request_locator_v1(bad.as_bytes()), Err(OneStepRequestGrantErrorV1::InvalidLocator)), "unexpected accepted locator: {bad}");
+            assert!(
+                matches!(
+                    decode_opaque_one_step_request_locator_v1(bad.as_bytes()),
+                    Err(OneStepRequestGrantErrorV1::InvalidLocator)
+                ),
+                "unexpected accepted locator: {bad}"
+            );
         }
     }
 
@@ -458,7 +472,8 @@ mod tests {
         let (locator, grant, run, routes, policy) = fixture();
         let proof = preflight_issued_one_step_request_for_reservation_v1(
             &locator, &grant, &run, &routes, &policy, NOW,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(proof.request_id(), REQUEST_ID);
     }
 
@@ -466,50 +481,120 @@ mod tests {
     fn subject_tenant_context_acl_and_operation_must_all_match() {
         let (locator, grant, run, routes, policy) = fixture();
         for other_policy in [
-            { let mut p = policy.clone(); p.principal_id = "other".into(); p },
-            { let mut p = policy.clone(); p.tenant_id = "tenant-b".into(); p },
-            { let mut p = policy.clone(); p.policy_id = "unapproved".into(); p },
-            { let mut p = policy.clone(); p.context_key = "other".into(); p },
+            {
+                let mut p = policy.clone();
+                p.principal_id = "other".into();
+                p
+            },
+            {
+                let mut p = policy.clone();
+                p.tenant_id = "tenant-b".into();
+                p
+            },
+            {
+                let mut p = policy.clone();
+                p.policy_id = "unapproved".into();
+                p
+            },
+            {
+                let mut p = policy.clone();
+                p.context_key = "other".into();
+                p
+            },
         ] {
-            assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-                &locator, &grant, &run, &routes, &other_policy, NOW
-            ), Err(OneStepRequestGrantErrorV1::UnauthorizedPrincipal)));
+            assert!(matches!(
+                preflight_issued_one_step_request_for_reservation_v1(
+                    &locator,
+                    &grant,
+                    &run,
+                    &routes,
+                    &other_policy,
+                    NOW
+                ),
+                Err(OneStepRequestGrantErrorV1::UnauthorizedPrincipal)
+            ));
         }
         let mut cross_run = grant.clone();
         cross_run.canonical_run_id = "2478e012-c4c9-472e-912a-6551112a0c55".into();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &cross_run, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::ScopeMismatch)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator, &cross_run, &run, &routes, &policy, NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::ScopeMismatch)
+        ));
         let mut other_operation = grant.clone();
         other_operation.operation.id = OperationId::from("arbitrary.remote.execute");
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &other_operation, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::ScopeMismatch)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &other_operation,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::ScopeMismatch)
+        ));
         let mut empty_actor = grant.clone();
         empty_actor.authenticated_principal_id.clear();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &empty_actor, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &empty_actor,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)
+        ));
         let mut control_bearing_context = grant.clone();
         control_bearing_context.context_key.push('\n');
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &control_bearing_context, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &control_bearing_context,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)
+        ));
     }
 
     #[test]
     fn expired_revoked_consumed_and_ambiguous_requests_fail_closed() {
         let (locator, mut grant, run, routes, policy) = fixture();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &run, &routes, &policy, NOW - 100
-        ), Err(OneStepRequestGrantErrorV1::NotYetValid)));
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &run, &routes, &policy, NOW + 90
-        ), Err(OneStepRequestGrantErrorV1::Expired)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &run,
+                &routes,
+                &policy,
+                NOW - 100
+            ),
+            Err(OneStepRequestGrantErrorV1::NotYetValid)
+        ));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &run,
+                &routes,
+                &policy,
+                NOW + 90
+            ),
+            Err(OneStepRequestGrantErrorV1::Expired)
+        ));
         grant.revoked_at_unix_seconds = Some(NOW);
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::Revoked)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator, &grant, &run, &routes, &policy, NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::Revoked)
+        ));
         grant.revoked_at_unix_seconds = None;
         for state in [
             OneStepRequestIssuanceStateV1::Reserved,
@@ -518,65 +603,139 @@ mod tests {
             OneStepRequestIssuanceStateV1::StartConfirmed,
         ] {
             grant.state = state;
-            assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-                &locator, &grant, &run, &routes, &policy, NOW
-            ), Err(OneStepRequestGrantErrorV1::AlreadyClaimedOrUnknown)));
+            assert!(matches!(
+                preflight_issued_one_step_request_for_reservation_v1(
+                    &locator, &grant, &run, &routes, &policy, NOW
+                ),
+                Err(OneStepRequestGrantErrorV1::AlreadyClaimedOrUnknown)
+            ));
         }
         grant.state = OneStepRequestIssuanceStateV1::Unclaimed;
         grant.expires_at_unix_seconds = NOW + 700;
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator, &grant, &run, &routes, &policy, NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)
+        ));
     }
 
     #[test]
     fn command_source_route_and_budget_tampering_refused() {
         let (locator, grant, run, routes, policy) = fixture();
         let mut changed_command = run.clone();
-        changed_command.owner_commands.values_mut().next().unwrap().command_bytes.push(b'x');
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &changed_command, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))));
+        changed_command
+            .owner_commands
+            .values_mut()
+            .next()
+            .unwrap()
+            .command_bytes
+            .push(b'x');
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &changed_command,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))
+        ));
         let mut changed_source = run.clone();
-        changed_source.admitted.values_mut().next().unwrap().payload.push(b'x');
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &changed_source, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))));
+        changed_source
+            .admitted
+            .values_mut()
+            .next()
+            .unwrap()
+            .payload
+            .push(b'x');
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &changed_source,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))
+        ));
         let mut changed_route = run.clone();
         changed_route.pinned_routes[0].task_queue = "attacker".into();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &changed_route, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &changed_route,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))
+        ));
         let mut over_budget = grant.clone();
         over_budget.limits.max_charge_minor_units += 1;
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &over_budget, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::BudgetExceeded)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &over_budget,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::BudgetExceeded)
+        ));
         let mut insufficient_source_budget = grant.clone();
         insufficient_source_budget.limits.max_admitted_source_bytes = 1;
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &insufficient_source_budget, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::BudgetExceeded)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &insufficient_source_budget,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::BudgetExceeded)
+        ));
         let mut forged_currency = grant.clone();
         forged_currency.limits.currency_code = "usd".into();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &forged_currency, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &forged_currency,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::InvalidIssuerRecord)
+        ));
 
         let mut oversized_effect_envelope = run.clone();
-        oversized_effect_envelope.plan.allowed_effects.insert(
-            EffectId::from("acquisition.extra.unused.effect"),
-        );
-        oversized_effect_envelope.plan = oversized_effect_envelope.plan
+        oversized_effect_envelope
+            .plan
+            .allowed_effects
+            .insert(EffectId::from("acquisition.extra.unused.effect"));
+        oversized_effect_envelope.plan = oversized_effect_envelope
+            .plan
             .seal(routes.catalog())
             .expect("a valid plan can include a second allowed but unused effect");
         let mut independently_pinned_grant = grant.clone();
-        independently_pinned_grant.expected.plan_hash =
-            oversized_effect_envelope.plan.hash.clone();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &independently_pinned_grant, &oversized_effect_envelope,
-            &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::BudgetExceeded)));
+        independently_pinned_grant.expected.plan_hash = oversized_effect_envelope.plan.hash.clone();
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &independently_pinned_grant,
+                &oversized_effect_envelope,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::BudgetExceeded)
+        ));
     }
 
     #[test]
@@ -585,32 +744,62 @@ mod tests {
         let other_locator = OpaqueOneStepRequestLocatorV1 {
             request_id: "0e2dddf2-0f45-46ed-89dd-3dce7e8b247d".into(),
         };
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &other_locator, &grant, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::InvalidLocator)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &other_locator,
+                &grant,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::InvalidLocator)
+        ));
 
         let mut forged_grant = grant.clone();
-        forged_grant.expected.command_hashes.values_mut().next().unwrap().replace_range(
-            ..,
-            &owner_content_hash(b"attacker-controlled-command"),
-        );
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &forged_grant, &run, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))));
+        forged_grant
+            .expected
+            .command_hashes
+            .values_mut()
+            .next()
+            .unwrap()
+            .replace_range(.., &owner_content_hash(b"attacker-controlled-command"));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &forged_grant,
+                &run,
+                &routes,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))
+        ));
 
         let mut two_steps = run.clone();
         two_steps.plan.nodes.push(two_steps.plan.nodes[0].clone());
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &two_steps, &routes, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::ScopeMismatch)));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator, &grant, &two_steps, &routes, &policy, NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::ScopeMismatch)
+        ));
     }
 
     #[test]
     fn unregistered_routes_never_authorize() {
         let (locator, grant, run, _routes, policy) = fixture();
         let unknown_catalog = TrustedRouteCatalog::default();
-        assert!(matches!(preflight_issued_one_step_request_for_reservation_v1(
-            &locator, &grant, &run, &unknown_catalog, &policy, NOW
-        ), Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))));
+        assert!(matches!(
+            preflight_issued_one_step_request_for_reservation_v1(
+                &locator,
+                &grant,
+                &run,
+                &unknown_catalog,
+                &policy,
+                NOW
+            ),
+            Err(OneStepRequestGrantErrorV1::SealedPlanMismatch(_))
+        ));
     }
 }

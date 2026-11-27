@@ -7,10 +7,14 @@
 //! External input bytes are derived *here* from the pinned HTML, never
 //! accepted from the caller's claimed payload hash or title.
 
-mod private_file;
 mod issue_json;
+mod private_file;
 
-use std::{env, path::Path, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    env,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use acquisition::{
     operations::{acquisition_pure_contracts, ClassifySourcePage},
@@ -19,9 +23,7 @@ use acquisition::{
     },
 };
 use anyhow::{ensure, Context, Result};
-use operation_protocol::{
-    ArtifactBinding, ArtifactId, Operation, OperationDagRunV6, PortId,
-};
+use operation_protocol::{ArtifactBinding, ArtifactId, Operation, OperationDagRunV6, PortId};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -46,18 +48,29 @@ struct CheckedSource<'a> {
 }
 
 fn checked_record_id(provenance: &str) -> Result<Uuid> {
-    let value = provenance.strip_prefix("source-record-v1:")
+    let value = provenance
+        .strip_prefix("source-record-v1:")
         .context("Acquisition issuer requires an existing source-record identity")?;
     let id = Uuid::parse_str(value).context("source-record identity is not UUID")?;
-    ensure!(!id.is_nil() && id.to_string() == value, "source-record UUID must be canonical and nonnil");
+    ensure!(
+        !id.is_nil() && id.to_string() == value,
+        "source-record UUID must be canonical and nonnil"
+    );
     Ok(id)
 }
 
 fn validate_source_intent(intent: &SourceIssuanceIntentV1, now: i64) -> Result<CheckedSource<'_>> {
-    ensure!(intent.schema_revision == 1, "unsupported source issuance intent revision");
-    ensure!(intent.source_page_id > 0, "source requires a persistent positive page ID");
     ensure!(
-        !intent.context_key.is_empty() && intent.context_key.len() <= 512
+        intent.schema_revision == 1,
+        "unsupported source issuance intent revision"
+    );
+    ensure!(
+        intent.source_page_id > 0,
+        "source requires a persistent positive page ID"
+    );
+    ensure!(
+        !intent.context_key.is_empty()
+            && intent.context_key.len() <= 512
             && intent.context_key == intent.context_key.trim()
             && !intent.context_key.chars().any(char::is_control),
         "source requires one bounded business context"
@@ -101,9 +114,16 @@ fn validate_source_intent(intent: &SourceIssuanceIntentV1, now: i64) -> Result<C
         Some(ArtifactBinding::External { artifact }) => artifact,
         _ => anyhow::bail!("Acquisition input must be an external pinned artifact"),
     };
-    let planned = intent.run.plan.external_artifacts.get(artifact_id)
+    let planned = intent
+        .run
+        .plan
+        .external_artifacts
+        .get(artifact_id)
         .context("source external artifact missing from immutable plan")?;
-    let admitted = intent.run.admitted.get(artifact_id)
+    let admitted = intent
+        .run
+        .admitted
+        .get(artifact_id)
         .context("source artifact missing from immutable admission")?;
     ensure!(
         installed.inputs.get(&PortId::from("input")) == Some(&planned.schema)
@@ -114,20 +134,31 @@ fn validate_source_intent(intent: &SourceIssuanceIntentV1, now: i64) -> Result<C
         "source artifact does not match native Acquisition typed schema and scope"
     );
     let record_id = checked_record_id(&admitted.provenance)?;
-    Ok(CheckedSource { artifact_id, record_id })
+    Ok(CheckedSource {
+        artifact_id,
+        record_id,
+    })
 }
 
 fn now_unix_seconds() -> Result<i64> {
-    Ok(i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())?)
+    Ok(i64::try_from(
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+    )?)
 }
 
 async fn restricted_source_pool() -> Result<PgPool> {
-    let path = env::var(DSN_FILE_ENV).context("missing private source-issuer SQL credential file")?;
+    let path =
+        env::var(DSN_FILE_ENV).context("missing private source-issuer SQL credential file")?;
     let bytes = private_file::read_private_file(Path::new(&path))?;
     let raw = String::from_utf8(bytes).context("source issuer DSN is not UTF-8")?;
     let dsn = raw.trim_end_matches(['\r', '\n']);
-    ensure!(!dsn.is_empty() && dsn.trim() == dsn, "source issuer DSN invalid");
-    let pool = PgPool::connect(dsn).await.context("source issuer SQL connection unavailable")?;
+    ensure!(
+        !dsn.is_empty() && dsn.trim() == dsn,
+        "source issuer DSN invalid"
+    );
+    let pool = PgPool::connect(dsn)
+        .await
+        .context("source issuer SQL connection unavailable")?;
     let role = sqlx::query(
         "SELECT current_user::text effective, session_user::text login,
                 r.rolcanlogin login_enabled, r.rolinherit inherits_roles,
@@ -147,7 +178,9 @@ async fn restricted_source_pool() -> Result<PgPool> {
                 has_table_privilege(session_user,
                   'raw.pages','TRUNCATE') can_truncate_raw
          FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
-    ).fetch_one(&pool).await?;
+    )
+    .fetch_one(&pool)
+    .await?;
     ensure!(
         role.get::<String, _>("effective") == role.get::<String, _>("login")
             && role.get::<bool, _>("login_enabled")
@@ -171,8 +204,13 @@ async fn restricted_source_pool() -> Result<PgPool> {
          JOIN pg_catalog.pg_roles granted ON granted.oid=m.roleid
          WHERE m.member=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=session_user)
          LIMIT 1",
-    ).fetch_optional(&pool).await?;
-    ensure!(membership.is_none(), "source issuer SQL LOGIN must not SET ROLE");
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(
+        membership.is_none(),
+        "source issuer SQL LOGIN must not SET ROLE"
+    );
     Ok(pool)
 }
 
@@ -181,9 +219,9 @@ async fn issue_source(
     intent: &SourceIssuanceIntentV1,
     checked: &CheckedSource<'_>,
 ) -> Result<String> {
-    let tenant: String = sqlx::query_scalar(
-        "SELECT pipeline.current_session_tenant_v1()"
-    ).fetch_one(&mut **transaction).await?
+    let tenant: String = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+        .fetch_one(&mut **transaction)
+        .await?
         .context("source issuer SQL login is not tenant authenticated")?;
     ensure!(
         tenant == intent.run.plan.scope.tenant_id,
@@ -210,14 +248,22 @@ async fn issue_source(
     };
     let derived = classify_source_page_payload_from_pinned_html_v1(&captured)
         .context("pinned raw HTML failed strict typed Acquisition derivation")?;
-    let admitted = intent.run.admitted.get(checked.artifact_id)
+    let admitted = intent
+        .run
+        .admitted
+        .get(checked.artifact_id)
         .context("typed source not admitted")?;
     ensure!(
         admitted.payload == derived.payload,
         "caller-proposed operation bytes differ from independently derived raw HTML"
     );
-    let schema = &intent.run.plan.external_artifacts.get(checked.artifact_id)
-        .context("planned source schema missing")?.schema;
+    let schema = &intent
+        .run
+        .plan
+        .external_artifacts
+        .get(checked.artifact_id)
+        .context("planned source schema missing")?
+        .schema;
     let inserted = sqlx::query(
         "INSERT INTO pipeline.operation_dag_external_source_attestations_v1
             (record_id,run_id,tenant_id,context_key,plan_hash,artifact_id,
@@ -238,7 +284,10 @@ async fn issue_source(
     .execute(&mut **transaction)
     .await
     .context("separately credentialed source record issuance refused")?;
-    ensure!(inserted.rows_affected() == 1, "issuer inserted no source proof");
+    ensure!(
+        inserted.rows_affected() == 1,
+        "issuer inserted no source proof"
+    );
     Ok(derived.payload_hash)
 }
 
@@ -253,13 +302,19 @@ async fn execute(path: &Path) -> Result<()> {
     let pool = restricted_source_pool().await?;
     let mut transaction = pool.begin().await?;
     let payload_hash = issue_source(&mut transaction, &intent, &checked).await?;
-    transaction.commit().await.context("durable source issuance commit failed")?;
-    println!("{}", issue_json::issued_report(
-        &intent.run.plan.scope.run_id,
-        checked.record_id,
-        checked.artifact_id,
-        &payload_hash,
-    ));
+    transaction
+        .commit()
+        .await
+        .context("durable source issuance commit failed")?;
+    println!(
+        "{}",
+        issue_json::issued_report(
+            &intent.run.plan.scope.run_id,
+            checked.record_id,
+            checked.artifact_id,
+            &payload_hash,
+        )
+    );
     Ok(())
 }
 
@@ -271,7 +326,8 @@ async fn main() -> Result<()> {
     let target = args.next();
     ensure!(
         command.as_deref() == Some(std::ffi::OsStr::new("--issue-source-v1"))
-            && target.is_some() && args.next().is_none(),
+            && target.is_some()
+            && args.next().is_none(),
         "usage: acquisition_source_issuer --issue-source-v1 /absolute/private/intent.json"
     );
     match execute(Path::new(target.as_ref().expect("target present"))).await {
@@ -294,7 +350,8 @@ mod tests {
         let valid = "source-record-v1:0e2dddf2-0f45-46ed-89dd-3dce7e8b247d";
         assert_eq!(checked_record_id(valid).unwrap().to_string(), &valid[17..]);
         for invalid in [
-            "", "source-record-v1:",
+            "",
+            "source-record-v1:",
             "source-record-v1:00000000-0000-0000-0000-000000000000",
             "source-record-v1:0E2DDDF2-0F45-46ED-89DD-3DCE7E8B247D",
             "source-record-v1:0e2dddf2-0f45-46ed-89dd-3dce7e8b247d-more",

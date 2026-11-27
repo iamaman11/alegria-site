@@ -125,7 +125,10 @@ fn refuses_empty_visible_body_and_oversize_html_without_truncation() {
         classify_source_page_payload_from_pinned_html_v1(&snapshot(only_hidden)).unwrap_err(),
         TrustedSourceTransformErrorV1::NoVisibleContent
     );
-    let oversized = format!("<html><body><main>{}</main></body></html>", "a".repeat(2_097_152));
+    let oversized = format!(
+        "<html><body><main>{}</main></body></html>",
+        "a".repeat(2_097_152)
+    );
     assert_eq!(
         classify_source_page_payload_from_pinned_html_v1(&snapshot(&oversized)).unwrap_err(),
         TrustedSourceTransformErrorV1::RawHtmlTooLarge
@@ -134,7 +137,8 @@ fn refuses_empty_visible_body_and_oversize_html_without_truncation() {
 
 #[test]
 fn utf8_captured_byte_count_is_not_character_count() {
-    let html = "<html><head><title>Кухни</title></head><body><main>Кухни на заказ</main></body></html>";
+    let html =
+        "<html><head><title>Кухни</title></head><body><main>Кухни на заказ</main></body></html>";
     let mut page = snapshot(html);
     page.raw_html_bytes = Some(i32::try_from(html.chars().count()).unwrap());
     assert_eq!(

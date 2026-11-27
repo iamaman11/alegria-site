@@ -691,10 +691,14 @@ mod tests {
     #[test]
     fn source_sql_evidence_requires_distinct_issuer_and_canonical_raw_identity() {
         let hash = "a".repeat(64);
-        assert!(
-            checked_source_record_sql_metadata("source_issuer", "start_reader", 14, &hash, &hash)
-                .is_ok()
-        );
+        assert!(checked_source_record_sql_metadata(
+            "source_issuer",
+            "start_reader",
+            14,
+            &hash,
+            &hash
+        )
+        .is_ok());
         for (issuer, reader, page, digest) in [
             ("start_reader", "start_reader", 14, hash.as_str()),
             ("", "start_reader", 14, hash.as_str()),
@@ -714,16 +718,14 @@ mod tests {
                 "must reject missing or self-issued source metadata"
             );
         }
-        assert!(
-            checked_source_record_sql_metadata(
-                "source_issuer",
-                "start_reader",
-                14,
-                &hash,
-                "BAD_SHA256"
-            )
-            .is_err()
-        );
+        assert!(checked_source_record_sql_metadata(
+            "source_issuer",
+            "start_reader",
+            14,
+            &hash,
+            "BAD_SHA256"
+        )
+        .is_err());
     }
 
     #[test]

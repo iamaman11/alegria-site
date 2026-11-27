@@ -36,14 +36,14 @@ pub use external_source_attestation_v1::{
 pub use json_budget::{
     enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES, DAG_MAX_NODES, DAG_MAX_RESULT_BYTES,
 };
+pub use one_step_request_grant_json::decode_opaque_one_step_request_locator_v1;
 pub use one_step_request_grant_v1::{
     preflight_issued_one_step_request_for_reservation_v1,
     IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestGrantErrorV1,
-    OneStepRequestIssuanceStateV1, OneStepRequestReservationPreflightV1,
-    OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, TrustedOneStepRequestGrantV1,
+    OneStepRequestIssuanceStateV1, OneStepRequestReservationPreflightV1, OneStepResourceLimitsV1,
+    OpaqueOneStepRequestLocatorV1, TrustedOneStepRequestGrantV1,
     ONE_STEP_REQUEST_GRANT_MAX_LIFETIME_SECONDS_V1, ONE_STEP_REQUEST_GRANT_SCHEMA_REVISION_V1,
 };
-pub use one_step_request_grant_json::decode_opaque_one_step_request_locator_v1;
 pub use owner_dispatch::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
     operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2, owner_child_workflow_id,
