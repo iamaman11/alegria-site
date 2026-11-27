@@ -2,9 +2,9 @@ use std::io::Read;
 
 use seo_application::operation_adapter::semantic_extraction_registry;
 use seo_application::site_lab::{
-    compare_executions, describe_tools, diff_recipes, inspect_execution,
+    compare_executions, describe_tools, diff_recipes, inspect_execution, inspect_operation,
     installed_semantic_lab_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
-    SiteLabCatalog, SiteRecipe,
+    OperationRef, RecipeParameters, SiteLabCatalog, SiteRecipe,
 };
 
 const SITE_LAB_SAVED_MAX_BYTES: u64 = 512 * 1024;
@@ -77,6 +77,101 @@ fn site_lab_read_recipe(path: &str) -> std::result::Result<SiteRecipe, Value> {
             "Use the versioned SiteRecipe JSON format; unknown fields are forbidden.",
         )
     })
+}
+
+/// Individual settings use the same 256 KiB authoring bound as a recipe.
+/// Never include the supplied bytes in the error or diagnostic response.
+fn site_lab_read_parameters(path: &str) -> std::result::Result<RecipeParameters, Value> {
+    let reader = site_lab_open_input(path).map_err(|_| {
+        site_lab_problem(
+            "parameters_file_unavailable",
+            "Cannot open the requested operation settings input.",
+            "Provide a readable JSON object or '-' for bounded stdin.",
+        )
+    })?;
+    let bytes = site_lab_bounded_bytes(reader, SITE_LAB_RECIPE_MAX_BYTES).map_err(|_| {
+        site_lab_problem(
+            "parameters_read_failed",
+            "Cannot read operation settings.",
+            "Check file access and retry.",
+        )
+    })?;
+    if bytes.len() as u64 > SITE_LAB_RECIPE_MAX_BYTES {
+        return Err(site_lab_problem(
+            "parameters_too_large",
+            "Operation settings exceed the 256 KiB authoring limit.",
+            "Reduce the settings payload before validation.",
+        ));
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
+        site_lab_problem(
+            "parameters_invalid_json",
+            "Operation settings must be a JSON object.",
+            "Use the exact installed owner's parameter JSON schema.",
+        )
+    })?;
+    if !value.is_object() {
+        return Err(site_lab_problem(
+            "parameters_not_object",
+            "Operation settings must be a JSON object.",
+            "Use the exact installed owner's parameter JSON schema.",
+        ));
+    }
+    Ok(value.into())
+}
+
+/// Do not reflect provider settings, unknown operation IDs, source locators,
+/// or user-controlled error strings into ChatGPT/CLI diagnostics.
+fn site_lab_safe_operation_problem(error: &seo_application::site_lab::SiteLabError) -> Value {
+    let problem = error.problem();
+    site_lab_problem(
+        problem.code,
+        "The requested operation or settings cannot be verified against the installed trusted catalog.",
+        problem.next_action,
+    )
+}
+
+fn site_lab_operation_inspection(
+    catalog: &SiteLabCatalog,
+    operation: &OperationRef,
+    parameters: Option<&RecipeParameters>,
+) -> std::result::Result<Value, Value> {
+    inspect_operation(catalog, operation, parameters)
+        .map(|inspection| json!(inspection))
+        .map_err(|error| site_lab_safe_operation_problem(&error))
+}
+
+/// The one-step recipe is the smallest typed DAG authoring graph, not a
+/// Temporal execution preflight or parallel single-operation executor. This
+/// reads only declarations; actual source bytes, Temporal History, owner
+/// ValidateOnly and SQL admission are absent.
+fn site_lab_one_step_preview(
+    recipe: &SiteRecipe,
+    catalog: &SiteLabCatalog,
+) -> std::result::Result<Value, Value> {
+    if recipe.steps.len() != 1 {
+        return Err(site_lab_problem(
+            "one_step_required",
+            "Individual operation check requires exactly one step in the recipe.",
+            "Use a one-step recipe or site_lab_check for a multi-step scenario.",
+        ));
+    }
+    let step = &recipe.steps[0];
+    let operation =
+        site_lab_operation_inspection(catalog, &step.operation, Some(&step.parameters))?;
+    let preview = preview_recipe(recipe, catalog)
+        .map_err(|error| site_lab_safe_operation_problem(&error))?;
+    Ok(json!({
+        "status": "single_step_preview_only",
+        "operation": operation,
+        "preview": preview,
+        "source_authentication": "not_checked",
+        "owner_validate_only": "required_not_run",
+        "operator_admission": "not_issued",
+        "temporal_history_attestation": "not_checked",
+        "execution": "not_started",
+        "next_action": "Verify exact source and command bytes through the native V2 preflight, execute independent owner ValidateOnly and obtain operator admission before any Temporal effects.",
+    }))
 }
 
 fn site_lab_print<T: serde::Serialize>(report: &T) -> Result<()> {
@@ -165,6 +260,65 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
                 "execution": "not_started",
                 "note": "Declared tools are not provider connectivity or owner admission proof.",
             }))?;
+        }
+        SiteLabCommand::Operation {
+            id,
+            revision,
+            parameters_file,
+        } => {
+            if id.trim().is_empty() || id.len() > 256 || revision == 0 {
+                site_lab_print(&site_lab_problem(
+                    "operation_reference_invalid",
+                    "Operation identifier or revision is invalid.",
+                    "Select an exact installed operation from site-lab tools.",
+                ))?;
+                return Ok(2);
+            }
+            let operation: OperationRef =
+                match serde_json::from_value(json!({"id": id, "revision": revision})) {
+                    Ok(reference) => reference,
+                    Err(_) => {
+                        site_lab_print(&site_lab_problem(
+                            "operation_reference_invalid",
+                            "Operation identifier or revision is invalid.",
+                            "Select an exact installed operation from site-lab tools.",
+                        ))?;
+                        return Ok(2);
+                    }
+                };
+            let parameters = match parameters_file.as_deref() {
+                Some(path) => match site_lab_read_parameters(path) {
+                    Ok(parameters) => Some(parameters),
+                    Err(problem) => {
+                        site_lab_print(&problem)?;
+                        return Ok(2);
+                    }
+                },
+                None => None,
+            };
+            match site_lab_operation_inspection(catalog, &operation, parameters.as_ref()) {
+                Ok(report) => site_lab_print(&report)?,
+                Err(problem) => {
+                    site_lab_print(&problem)?;
+                    return Ok(2);
+                }
+            }
+        }
+        SiteLabCommand::OneStep { recipe_file } => {
+            let recipe = match site_lab_read_recipe(&recipe_file) {
+                Ok(recipe) => recipe,
+                Err(problem) => {
+                    site_lab_print(&problem)?;
+                    return Ok(2);
+                }
+            };
+            match site_lab_one_step_preview(&recipe, catalog) {
+                Ok(report) => site_lab_print(&report)?,
+                Err(problem) => {
+                    site_lab_print(&problem)?;
+                    return Ok(2);
+                }
+            }
         }
         SiteLabCommand::Check { recipe_file } => {
             let recipe = match site_lab_read_recipe(&recipe_file) {
@@ -292,6 +446,27 @@ mod site_lab_cli_tests {
     fn native_lab_commands_are_parseable_without_runtime_configuration() {
         for args in [
             vec!["cli_tools", "site-lab", "tools"],
+            vec![
+                "cli_tools",
+                "site-lab",
+                "operation",
+                "--id",
+                "semantic.entity_spans",
+                "--revision",
+                "1",
+            ],
+            vec![
+                "cli_tools",
+                "site-lab",
+                "operation",
+                "--id",
+                "semantic.entity_spans",
+                "--revision",
+                "1",
+                "--parameters-file",
+                "-",
+            ],
+            vec!["cli_tools", "site-lab", "one-step", "--recipe-file", "-"],
             vec!["cli_tools", "site-lab", "check", "--recipe-file", "recipe.json"],
             vec!["cli_tools", "site-lab", "check", "--recipe-file", "-"],
             vec![
@@ -370,5 +545,77 @@ mod site_lab_cli_tests {
         )
         .unwrap();
         assert_eq!(oversized.len(), max + 1);
+    }
+
+    #[test]
+    fn single_operation_is_inspectable_but_not_executable() {
+        let catalog = site_lab_installed_catalog().unwrap();
+        let operation: OperationRef = serde_json::from_value(json!({
+            "id": "semantic.entity_spans", "revision": 1
+        }))
+        .unwrap();
+        let profile =
+            site_lab_operation_inspection(&catalog, &operation, Some(&RecipeParameters::default()))
+                .unwrap();
+        assert_eq!(profile["status"], "registered_operation_inspection_only");
+        assert_eq!(profile["execution"], "not_started");
+        assert_eq!(profile["provider_connectivity"], "not_checked");
+        assert_eq!(
+            profile["checked_parameters"]["status"],
+            "typed_configuration_checked"
+        );
+        assert_eq!(profile["checked_parameters"]["verification"], "typed_local");
+        assert_eq!(profile["operator_admission"], "not_issued_by_inspection");
+    }
+
+    #[test]
+    fn one_step_is_exactly_one_native_recipe_and_cannot_start_temporal() {
+        let catalog = site_lab_installed_catalog().unwrap();
+        let recipe: SiteRecipe = serde_json::from_value(json!({
+            "schema_revision":2,
+            "scope":{"tenant_id":"lab","run_id":"single-test"},
+            "sources":{"mentions":{"schema":{"id":"semantic.entity_span_input","revision":1},"provenance":"unverified:test"}},
+            "steps":[{"id":"extract","operation":{"id":"semantic.entity_spans","revision":1},
+                "inputs":{"input":{"source":"external","artifact":"mentions"}},"parameters":{}}]
+        })).unwrap();
+        let result = site_lab_one_step_preview(&recipe, &catalog).unwrap();
+        assert_eq!(result["status"], "single_step_preview_only");
+        assert_eq!(result["execution"], "not_started");
+        assert_eq!(result["source_authentication"], "not_checked");
+        assert_eq!(result["temporal_history_attestation"], "not_checked");
+        assert_eq!(result["operator_admission"], "not_issued");
+        assert_eq!(
+            result["preview"]["ordered_steps"].as_array().unwrap().len(),
+            1
+        );
+
+        let mut two_steps = recipe.clone();
+        two_steps.steps.push(recipe.steps[0].clone());
+        assert_eq!(
+            site_lab_one_step_preview(&two_steps, &catalog).unwrap_err()["code"],
+            "one_step_required"
+        );
+        let mut none = recipe;
+        none.steps.clear();
+        assert_eq!(
+            site_lab_one_step_preview(&none, &catalog).unwrap_err()["code"],
+            "one_step_required"
+        );
+    }
+
+    #[test]
+    fn individual_operation_rejects_unknown_settings_without_reflecting_secrets() {
+        let catalog = site_lab_installed_catalog().unwrap();
+        let operation: OperationRef = serde_json::from_value(json!({
+            "id": "semantic.entity_spans", "revision": 1
+        }))
+        .unwrap();
+        let parameters =
+            RecipeParameters::from(json!({"provider_token":"SENTINEL-PRIVATE-API-KEY"}));
+        let error =
+            site_lab_operation_inspection(&catalog, &operation, Some(&parameters)).unwrap_err();
+        assert_eq!(error["status"], "invalid");
+        assert_eq!(error["code"], "operation_parameters_invalid");
+        assert!(!error.to_string().contains("SENTINEL-PRIVATE-API-KEY"));
     }
 }

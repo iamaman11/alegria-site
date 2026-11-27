@@ -168,6 +168,9 @@ NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
 SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/seo_application/src/site_lab/parameters_json.rs",
     "app/rust/crates/seo_application/src/site_lab/tests.rs",
+    # Only this exact fixture test constructs parameter values; the production
+    # per-operation inspector uses the existing typed catalog and DTO gate.
+    "app/rust/crates/seo_application/src/site_lab/operation_inspection/tests.rs",
 })
 
 # A single opt-in cross-owner integration fixture constructs protected catalog
@@ -180,11 +183,14 @@ SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES = frozenset({
 # The new native DataForSEO owner has two *exact* typed wire boundaries:
 # its contract verifies immutable External/ValidateOnly command bytes, while
 # the separately deployed worker exchanges bounded loopback-only stub HTTP
-# JSON and serializes a typed owner receipt. No production paid HTTP adapter,
-# sibling domain module or future DataForSEO file inherits this exception.
+# JSON and serializes a typed owner receipt. Its separately credentialed
+# operator reads bounded exact Temporal History and operator intent JSON; that
+# boundary cannot mint provider data or authorize public provider HTTP. No
+# paid HTTP adapter, sibling domain module or future file inherits this grant.
 DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/dataforseo_contracts/src/lib.rs",
     "app/rust/services/temporal_dataforseo/src/main.rs",
+    "app/rust/services/temporal_dataforseo/src/operator.rs",
 })
 
 FORBIDDEN_PATTERNS = {

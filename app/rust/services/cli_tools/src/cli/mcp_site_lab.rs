@@ -33,6 +33,14 @@ struct McpOneRecipe {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+struct McpOneOperation {
+    operation: seo_application::site_lab::OperationRef,
+    #[serde(default)]
+    parameters: Option<seo_application::site_lab::RecipeParameters>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct McpEditRecipe {
     recipe: seo_application::site_lab::SiteRecipe,
     changes: Vec<seo_application::site_lab::RecipeChange>,
@@ -191,6 +199,21 @@ fn mcp_site_lab_tools() -> Value {
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
+            "name":"site_lab_operation", "title":"Inspect one installed operation",
+            "description":"Inspect exact versioned owner ports, advanced parameter schema and admission status. Optional parameters get local typed validation or explicitly pending remote ValidateOnly. No provider connection, actual inputs or execution; settings never echoed.",
+            "inputSchema":mcp_object_schema(json!({
+                "operation":mcp_operation_schema(),
+                "parameters":{"type":"object","description":"Optional owner-specific settings; omitted settings mean inspect only"}
+            }), &["operation"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_lab_one_step", "title":"Check one operation as a Temporal recipe",
+            "description":"Check a recipe with exactly one step using the existing typed DAG plan validator, and show exact installed owner settings and input dependencies. Authoring preview only, NOT the native Temporal Start preflight: exact source bytes, owner ValidateOnly, admission and History remain unverified.",
+            "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
             "name":"site_lab_new", "title":"Create a blank research recipe",
             "description":"Create an empty versioned SiteRecipe draft with a run scope. Add sources and steps with site_lab_edit; an empty draft cannot run.",
             "inputSchema":mcp_object_schema(json!({"tenant_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1}}), &["tenant_id","run_id"]),
@@ -252,6 +275,11 @@ fn mcp_bad_arguments(_error: impl std::fmt::Display) -> Value {
     })
 }
 
+fn mcp_site_lab_authoring_payload_too_large(payload: &impl serde::Serialize) -> bool {
+    serde_json::to_vec(payload)
+        .map_or(true, |bytes| bytes.len() > SITE_LAB_RECIPE_MAX_BYTES as usize)
+}
+
 fn mcp_edit_preview_status(preview_status: &str) -> &'static str {
     match preview_status {
         "valid_preview_only" => "draft_validated",
@@ -279,6 +307,33 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
                 _ => (mcp_bad_arguments("site_lab_tools takes an empty arguments object"), true),
             }
         }
+        "site_lab_operation" => match serde_json::from_value::<McpOneOperation>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.operation)
+                || input.parameters.as_ref().is_some_and(mcp_site_lab_authoring_payload_too_large) =>
+            {
+                (site_lab_problem("operation_settings_too_large", "Operation identifier or settings exceed the authoring limit.", "Use a bounded versioned operation reference and at most 256 KiB of JSON settings."), true)
+            }
+            Ok(input) => match site_lab_operation_inspection(
+                catalog,
+                &input.operation,
+                input.parameters.as_ref(),
+            ) {
+                Ok(inspection) => (inspection, false),
+                Err(problem) => (problem, true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        "site_lab_one_step" => match serde_json::from_value::<McpOneRecipe>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.recipe) =>
+            {
+                (site_lab_problem("one_step_recipe_too_large", "One-step recipe exceeds the 256 KiB authoring limit.", "Reduce the recipe input before checking this operation."), true)
+            }
+            Ok(input) => match site_lab_one_step_preview(&input.recipe, catalog) {
+                Ok(preview) => (preview, false),
+                Err(problem) => (problem, true),
+            },
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
         "site_lab_new" => match serde_json::from_value::<McpNewRecipe>(args) {
             Ok(input) if !input.tenant_id.trim().is_empty() && !input.run_id.trim().is_empty() => {
                 let recipe = SiteRecipe {
@@ -504,9 +559,16 @@ mod site_lab_mcp_tests {
             .map(|line| serde_json::from_slice(line).unwrap()).collect();
         assert_eq!(replies.len(), 3);
         assert_eq!(replies[0]["result"]["capabilities"]["tools"]["listChanged"], false);
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 9);
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 11);
         assert!(replies[1]["result"].to_string().len() < 24_576, "tools/list should fit a compact model context");
-        for name in ["site_lab_connections", "site_lab_inspect", "site_lab_compare_results", "site_lab_evidence"] {
+        for name in [
+            "site_lab_operation",
+            "site_lab_one_step",
+            "site_lab_connections",
+            "site_lab_inspect",
+            "site_lab_compare_results",
+            "site_lab_evidence",
+        ] {
             assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().any(|tool| tool["name"] == name));
         }
         assert_eq!(replies[2]["result"]["structuredContent"]["operations"].as_array().unwrap().len(), 5);
@@ -522,6 +584,86 @@ mod site_lab_mcp_tests {
         assert_eq!(hint["result"]["structuredContent"]["status"], "schema_candidates_only");
         assert_eq!(hint["result"]["structuredContent"]["execution"], "not_started");
         assert!(hint["result"]["structuredContent"]["ports"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mcp_operation_reports_exact_installed_metadata_without_execution() {
+        let response = tool_call("site_lab_operation", json!({
+            "operation":{"id":"semantic.entity_spans","revision":1},
+            "parameters":{}
+        }));
+        let result = &response["result"]["structuredContent"];
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(result["status"], "registered_operation_inspection_only");
+        assert_eq!(
+            result["tool"]["operation"]["id"],
+            "semantic.entity_spans"
+        );
+        assert_eq!(result["execution"], "not_started");
+        assert_eq!(result["provider_connectivity"], "not_checked");
+        assert_eq!(
+            result["checked_parameters"]["verification"],
+            "typed_local"
+        );
+
+        let unknown = tool_call("site_lab_operation", json!({
+            "operation":{"id":"unregistered_secret-SENTINEL","revision":99},
+            "parameters":{}
+        }));
+        assert_eq!(
+            unknown["result"]["structuredContent"]["code"],
+            "operation_unavailable"
+        );
+        assert_eq!(unknown["result"]["isError"], true);
+        assert!(!unknown.to_string().contains("unregistered_secret-SENTINEL"));
+    }
+
+    #[test]
+    fn mcp_one_step_is_a_native_dag_check_not_a_hidden_runner() {
+        let recipe = json!({
+            "schema_revision":2,
+            "scope":{"tenant_id":"lab","run_id":"test-single"},
+            "sources":{"mentions":{"schema":{"id":"semantic.entity_span_input","revision":1},"provenance":"unverified:test"}},
+            "steps":[{"id":"extract","operation":{"id":"semantic.entity_spans","revision":1},
+                "inputs":{"input":{"source":"external","artifact":"mentions"}},"parameters":{}}]
+        });
+        let checked = tool_call("site_lab_one_step", json!({"recipe":recipe.clone()}));
+        let report = &checked["result"]["structuredContent"];
+        assert_eq!(checked["result"]["isError"], false);
+        assert_eq!(report["status"], "single_step_preview_only");
+        assert_eq!(report["execution"], "not_started");
+        assert_eq!(report["owner_validate_only"], "required_not_run");
+        assert_eq!(report["operator_admission"], "not_issued");
+        assert_eq!(report["temporal_history_attestation"], "not_checked");
+
+        let mut empty = recipe.clone();
+        empty["steps"] = json!([]);
+        let rejected = tool_call("site_lab_one_step", json!({"recipe":empty}));
+        assert_eq!(rejected["result"]["isError"], true);
+        assert_eq!(
+            rejected["result"]["structuredContent"]["code"],
+            "one_step_required"
+        );
+
+        let mut secret_settings = recipe;
+        secret_settings["steps"][0]["parameters"] = json!({"provider_token":"SENTINEL-PRIVATE-KEY"});
+        let bad = tool_call("site_lab_one_step", json!({"recipe":secret_settings}));
+        assert_eq!(bad["result"]["isError"], true);
+        assert!(!bad.to_string().contains("SENTINEL-PRIVATE-KEY"));
+    }
+
+    #[test]
+    fn mcp_individual_operation_limits_authored_parameters_to_256_kib() {
+        let too_large = tool_call("site_lab_operation", json!({
+            "operation":{"id":"semantic.entity_spans","revision":1},
+            "parameters":{"untrusted_value":"x".repeat(256 * 1024)}
+        }));
+        assert_eq!(too_large["result"]["isError"], true);
+        assert_eq!(
+            too_large["result"]["structuredContent"]["code"],
+            "operation_settings_too_large"
+        );
+        assert!(too_large.to_string().len() < 2048);
     }
 
     fn evidence_observation(id: &str, kind: &str, origin: &str, document: &str) -> Value {

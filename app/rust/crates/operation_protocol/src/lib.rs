@@ -44,9 +44,11 @@ pub use owner_validation::{
 
 mod site_lab_preflight;
 pub use site_lab_preflight::{
-    preflight_unadmitted_site_lab_v2_start, preview_unadmitted_site_lab_v2_start,
+    preflight_unadmitted_single_operation_v2_start, preflight_unadmitted_site_lab_v2_start,
+    preview_unadmitted_single_operation_v2_start, preview_unadmitted_site_lab_v2_start,
     SiteLabExpectedStartV1, SiteLabPreviewInputV1, SiteLabPreviewOutputV1, SiteLabPreviewStepV1,
-    SiteLabStartPreflightError, SiteLabUnadmittedPreflightV1, SiteLabUnadmittedStartPreviewV1,
+    SiteLabSingleOperationPreflightError, SiteLabStartPreflightError,
+    SiteLabUnadmittedPreflightV1, SiteLabUnadmittedStartPreviewV1,
     SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1, SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1,
 };
 

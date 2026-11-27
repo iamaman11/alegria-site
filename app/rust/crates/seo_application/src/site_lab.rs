@@ -9,14 +9,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     owner_content_hash, ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId,
-    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, OperationRef,
+    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode,
     PlanError, PlanHash, PortId, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
-pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1, RunScope};
+pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1, OperationRef, RunScope};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod evidence;
+mod operation_inspection;
 mod parameters_json;
 mod source_bridge;
 pub use evidence::{
@@ -24,6 +25,9 @@ pub use evidence::{
     ConsumerNeedEvidenceError, ConsumerNeedEvidencePointerV1, ConsumerNeedEvidencePreviewV1,
     ConsumerNeedEvidenceStatusV1, ConsumerNeedHypothesisV1, ConsumerNeedObservationV1,
     NeedEvidenceRepresentationV1, NeedEvidenceSourceV1, NEED_EVIDENCE_SCHEMA_REVISION_V1,
+};
+pub use operation_inspection::{
+    inspect_operation, CheckedOperationParameters, OperationInspection,
 };
 pub use parameters_json::{
     installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
@@ -332,6 +336,14 @@ impl SiteLabError {
             Self::StepParameters { .. } => (
                 "operation_parameters_invalid",
                 "Correct this step using the installed operation's exact typed parameter schema.",
+            ),
+            Self::InvalidParameters(ParameterError::MissingSchema) => (
+                "operation_parameter_schema_missing",
+                "Install this owner's trusted parameter contract; recipe JSON cannot supply it.",
+            ),
+            Self::InvalidParameters(ParameterError::MismatchedContract) => (
+                "operation_parameter_contract_mismatch",
+                "Refresh the trusted operation catalog; do not reinterpret a stale parameter schema.",
             ),
             Self::InvalidParameters(_) | Self::ParameterEncoding => (
                 "operation_parameters_invalid",

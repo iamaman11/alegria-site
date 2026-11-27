@@ -69,6 +69,24 @@ struct Cli {
 enum SiteLabCommand {
     /// Show the trusted, installed operation catalog and declared contracts.
     Tools,
+    /// Inspect one installed operation and optionally check its typed settings.
+    Operation {
+        /// Exact installed operation identifier, not a provider URL or route.
+        #[arg(long)]
+        id: String,
+        /// Version of the exact installed operation contract.
+        #[arg(long)]
+        revision: u32,
+        /// Optional provider settings JSON object, or '-' for bounded stdin.
+        #[arg(long)]
+        parameters_file: Option<String>,
+    },
+    /// Check a recipe containing exactly one operation, without running it.
+    OneStep {
+        /// Single-step recipe JSON, or '-' for one bounded stdin payload.
+        #[arg(long)]
+        recipe_file: String,
+    },
     /// Validate a versioned recipe without running or authenticating sources.
     Check {
         /// Recipe JSON path, or '-' for one bounded stdin JSON payload.

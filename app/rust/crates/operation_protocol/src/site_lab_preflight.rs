@@ -115,6 +115,57 @@ pub enum SiteLabStartPreflightError {
     InvalidRun(#[from] GenericDagError),
 }
 
+/// An individual tool probe is the **same** immutable Temporal V2 run with
+/// exactly one operation. It must never fork an alternative direct-to-provider
+/// executor, nor manufacture business/source authority from user input.
+#[derive(Debug, Error)]
+pub enum SiteLabSingleOperationPreflightError {
+    #[error("single-operation inspection requires exactly one V2 DAG node, found {count}")]
+    StepCount { count: usize },
+    #[error(transparent)]
+    NativePreflight(#[from] SiteLabStartPreflightError),
+}
+
+fn check_single_operation_shape(
+    run: &OperationDagRunV6,
+) -> Result<(), SiteLabSingleOperationPreflightError> {
+    if run.plan.nodes.len() != 1 {
+        return Err(SiteLabSingleOperationPreflightError::StepCount {
+            count: run.plan.nodes.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Test an installed operation in isolation by checking a *one-node* DAG V2.
+/// The owner's actual command bytes, source envelopes, route, contract and
+/// expected hashes must already exist in a typed `OperationDagRunV6`.
+///
+/// The expected hashes MUST be supplied separately by the trusted authoring
+/// boundary, not minted here from the same possibly forged request. Passing
+/// this check only proves byte/route consistency; it does not start Temporal,
+/// authenticate sources, or grant the owner's independent effect admission.
+pub fn preflight_unadmitted_single_operation_v2_start(
+    run: &OperationDagRunV6,
+    installed_routes: &TrustedRouteCatalog,
+    expected: &SiteLabExpectedStartV1,
+) -> Result<SiteLabUnadmittedPreflightV1, SiteLabSingleOperationPreflightError> {
+    check_single_operation_shape(run)?;
+    preflight_unadmitted_site_lab_v2_start(run, installed_routes, expected).map_err(Into::into)
+}
+
+/// Show one tool's exact typed inputs, outputs, trusted route, effects and
+/// pending ValidateOnly without starting its Temporal child. A subsequent
+/// authorized Start must reuse this *same* V2 DAG and native validation.
+pub fn preview_unadmitted_single_operation_v2_start(
+    run: &OperationDagRunV6,
+    installed_routes: &TrustedRouteCatalog,
+    expected: &SiteLabExpectedStartV1,
+) -> Result<SiteLabUnadmittedStartPreviewV1, SiteLabSingleOperationPreflightError> {
+    check_single_operation_shape(run)?;
+    preview_unadmitted_site_lab_v2_start(run, installed_routes, expected).map_err(Into::into)
+}
+
 /// Fail closed if any command/source payload bytes, source declaration, owner route, operation
 /// contract, plan pin or expected digest changed between typed authoring and
 /// the proposed V2 Start. The existing machine still requires every owner's
@@ -315,4 +366,258 @@ pub fn preview_unadmitted_site_lab_v2_start(
         execution_order,
         steps,
     })
+}
+
+#[cfg(test)]
+mod single_operation_tests {
+    use super::*;
+    use crate::{
+        AdmittedArtifactV1, ArtifactTypeId, ExecutionPlan, ExternalArtifact, OperationContract,
+        OperationId, OperationNode, OwnerCommandWireV1, RunScope,
+        OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
+    };
+
+    fn fixture(
+        effectful: bool,
+    ) -> (OperationDagRunV6, TrustedRouteCatalog, SiteLabExpectedStartV1) {
+        let scope = RunScope {
+            tenant_id: "tenant-a".into(),
+            run_id: "00000000-0000-0000-0000-000000000001".into(),
+        };
+        let source_schema = ArtifactSchema {
+            id: ArtifactTypeId::from("web.public_fetch_request"),
+            revision: 1,
+        };
+        let output_schema = ArtifactSchema {
+            id: ArtifactTypeId::from("web.page_snapshot"),
+            revision: 1,
+        };
+        let effects = if effectful {
+            BTreeSet::from([EffectId::from("web.public_page.read")])
+        } else {
+            BTreeSet::new()
+        };
+        let contract = OperationContract {
+            reference: OperationRef {
+                id: OperationId::from("web.public_page.fetch"),
+                revision: 1,
+            },
+            owner: OperationOwnerId::from("web_fetch.owner"),
+            inputs: BTreeMap::from([(PortId::from("request"), source_schema.clone())]),
+            outputs: BTreeMap::from([(PortId::from("snapshot"), output_schema)]),
+            invalidates: BTreeSet::new(),
+            effects: effects.clone(),
+            idempotency: if effectful {
+                IdempotencyPolicy::AtMostOnce
+            } else {
+                IdempotencyPolicy::Pure
+            },
+        };
+        let contract_hash = contract.fingerprint().unwrap();
+        let mut routes = TrustedRouteCatalog::default();
+        routes
+            .register(
+                contract.clone(),
+                PinnedOwnerRouteV1 {
+                    operation: contract.reference.clone(),
+                    owner: contract.owner.clone(),
+                    contract_hash: contract_hash.clone(),
+                    workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+                    task_queue: "web-fetch-isolated-owner".into(),
+                    build_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                },
+            )
+            .unwrap();
+
+        let source_id = ArtifactId::from("single-input");
+        let instance = OperationInstanceId::from("fetch-one-page");
+        let plan = ExecutionPlan {
+            schema_revision: PLAN_SCHEMA_REVISION,
+            scope: scope.clone(),
+            allowed_effects: effects.clone(),
+            external_artifacts: BTreeMap::from([(
+                source_id.clone(),
+                ExternalArtifact {
+                    schema: source_schema.clone(),
+                    scope: scope.clone(),
+                    provenance: "operator-owned-url-request".into(),
+                },
+            )]),
+            pinned_contracts: Vec::new(),
+            nodes: vec![OperationNode {
+                instance: instance.clone(),
+                operation: contract.reference.clone(),
+                inputs: BTreeMap::from([(
+                    PortId::from("request"),
+                    ArtifactBinding::External {
+                        artifact: source_id.clone(),
+                    },
+                )]),
+                outputs: BTreeMap::from([(
+                    PortId::from("snapshot"),
+                    ArtifactId::from("single-output"),
+                )]),
+                after: BTreeSet::new(),
+                permitted_effects: effects,
+            }],
+            hash: PlanHash::from("unsealed"),
+        }
+        .seal(routes.catalog())
+        .unwrap();
+        let source_payload = b"typed-url-input-not-authorized".to_vec();
+        let command_bytes = b"typed-provider-command-not-authorized".to_vec();
+        let run = OperationDagRunV6 {
+            schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+            plan,
+            admitted: BTreeMap::from([(
+                source_id.clone(),
+                AdmittedArtifactV1 {
+                    schema: source_schema,
+                    scope,
+                    provenance: "operator-owned-url-request".into(),
+                    payload: source_payload.clone(),
+                },
+            )]),
+            owner_commands: BTreeMap::from([(
+                instance.clone(),
+                OwnerCommandWireV1 {
+                    operation: contract.reference.clone(),
+                    owner: contract.owner,
+                    contract_hash,
+                    command_bytes: command_bytes.clone(),
+                },
+            )]),
+            pinned_routes: routes
+                .trusted_snapshot_for([&contract.reference])
+                .unwrap(),
+        };
+        let expected = SiteLabExpectedStartV1 {
+            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+            plan_hash: run.plan.hash.clone(),
+            command_hashes: BTreeMap::from([(instance, owner_content_hash(&command_bytes))]),
+            source_payload_hashes: BTreeMap::from([(
+                source_id,
+                owner_content_hash(&source_payload),
+            )]),
+        };
+        (run, routes, expected)
+    }
+
+    #[test]
+    fn one_step_is_the_actual_v2_dag_and_remains_unadmitted() {
+        let (run, routes, expected) = fixture(true);
+        let preview = preview_unadmitted_single_operation_v2_start(&run, &routes, &expected)
+            .expect("native V2 authoring check supports an effectful single-operation plan");
+        assert_eq!(preview.execution_order.len(), 1);
+        assert_eq!(preview.steps.len(), 1);
+        assert_eq!(preview.preflight.execution, "not_started");
+        assert_eq!(preview.preflight.owner_admission, "not_issued");
+        assert_eq!(preview.preflight.source_authentication, "not_checked");
+        assert_eq!(preview.steps[0].owner_validate_only, "required_not_observed");
+        assert_eq!(preview.steps[0].effect_dispatch, "not_started");
+        assert_eq!(preview.steps[0].idempotency, IdempotencyPolicy::AtMostOnce);
+        assert_eq!(preview.steps[0].permitted_effects.len(), 1);
+        let safe_diagnostics = serde_json::to_string(&preview).unwrap();
+        assert!(!safe_diagnostics.contains("typed-provider-command-not-authorized"));
+        assert!(!safe_diagnostics.contains("typed-url-input-not-authorized"));
+        assert!(!safe_diagnostics.contains("operator-owned-url-request"));
+    }
+
+    #[test]
+    fn one_step_rejects_empty_or_multi_step_v2_plans() {
+        let (mut run, routes, expected) = fixture(false);
+        run.plan.nodes.clear();
+        assert!(matches!(
+            preflight_unadmitted_single_operation_v2_start(&run, &routes, &expected),
+            Err(SiteLabSingleOperationPreflightError::StepCount { count: 0 })
+        ));
+        let (mut run, routes, expected) = fixture(false);
+        run.plan.nodes.push(run.plan.nodes[0].clone());
+        assert!(matches!(
+            preview_unadmitted_single_operation_v2_start(&run, &routes, &expected),
+            Err(SiteLabSingleOperationPreflightError::StepCount { count: 2 })
+        ));
+    }
+
+    #[test]
+    fn one_step_rejects_mutated_bytes_routes_and_expected_pins() {
+        let (run, routes, expected) = fixture(false);
+        let mut changed_command = run.clone();
+        changed_command
+            .owner_commands
+            .get_mut(&OperationInstanceId::from("fetch-one-page"))
+            .unwrap()
+            .command_bytes
+            .push(b'!');
+        assert!(matches!(
+            preflight_unadmitted_single_operation_v2_start(&changed_command, &routes, &expected),
+            Err(SiteLabSingleOperationPreflightError::NativePreflight(
+                SiteLabStartPreflightError::CommandDigestMismatch(_)
+            ))
+        ));
+
+        let mut changed_source = run.clone();
+        changed_source
+            .admitted
+            .get_mut(&ArtifactId::from("single-input"))
+            .unwrap()
+            .payload
+            .push(b'!');
+        assert!(matches!(
+            preview_unadmitted_single_operation_v2_start(&changed_source, &routes, &expected),
+            Err(SiteLabSingleOperationPreflightError::NativePreflight(
+                SiteLabStartPreflightError::SourceDigestMismatch(_)
+            ))
+        ));
+
+        let mut forged_route = run.clone();
+        forged_route.pinned_routes[0].task_queue = "attacker-queue".into();
+        assert!(matches!(
+            preflight_unadmitted_single_operation_v2_start(&forged_route, &routes, &expected),
+            Err(SiteLabSingleOperationPreflightError::NativePreflight(
+                SiteLabStartPreflightError::InvalidRun(_)
+            ))
+        ));
+
+        let mut forged_expectation = expected;
+        forged_expectation.plan_hash = PlanHash::from("forged-plan-hash");
+        assert!(matches!(
+            preflight_unadmitted_single_operation_v2_start(&run, &routes, &forged_expectation),
+            Err(SiteLabSingleOperationPreflightError::NativePreflight(
+                SiteLabStartPreflightError::InvalidExpectation
+            ))
+        ));
+
+        let unknown_routes = TrustedRouteCatalog::default();
+        let locally_computed_expectation = site_lab_expected_start(&run);
+        assert!(matches!(
+            preview_unadmitted_single_operation_v2_start(
+                &run,
+                &unknown_routes,
+                &locally_computed_expectation,
+            ),
+            Err(SiteLabSingleOperationPreflightError::NativePreflight(
+                SiteLabStartPreflightError::InvalidRun(_)
+            ))
+        ));
+    }
+
+    fn site_lab_expected_start(run: &OperationDagRunV6) -> SiteLabExpectedStartV1 {
+        SiteLabExpectedStartV1 {
+            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+            plan_hash: run.plan.hash.clone(),
+            command_hashes: run
+                .owner_commands
+                .iter()
+                .map(|(instance, command)| {
+                    (instance.clone(), owner_content_hash(&command.command_bytes))
+                })
+                .collect(),
+            source_payload_hashes: run
+                .admitted
+                .iter()
+                .map(|(id, source)| (id.clone(), owner_content_hash(&source.payload)))
+                .collect(),
+        }
+    }
 }

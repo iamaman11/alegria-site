@@ -104,6 +104,15 @@ DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS = frozenset({
     "reqwest", "temporalio-sdk", "temporalio-client",
     "temporalio-common", "temporalio-macros",
 })
+# The independently credentialed History-attestation issuer may inspect only
+# server Temporal History. It never inherits the owner's reqwest/provider HTTP
+# authority (nor its worker SDK/task execution capabilities).
+DATAFORSEO_ISSUER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "operator.rs").resolve(),
+})
+DATAFORSEO_ISSUER_DIRECT_EXTERNAL_SDKS = frozenset({
+    "temporalio-client", "temporalio-common",
+})
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
 COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
 # SDKs may be used by these dedicated adapter crates, never by domain code.
@@ -465,6 +474,9 @@ def dataforseo_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str
     return exact_temporal_sdk_source_allowed(
         file_path, pattern, exact_files=DATAFORSEO_OWNER_SOURCE_FILES,
         sdk_set=DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_ISSUER_SOURCE_FILES,
+        sdk_set=DATAFORSEO_ISSUER_DIRECT_EXTERNAL_SDKS,
     )
 
 

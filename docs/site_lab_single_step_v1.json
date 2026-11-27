@@ -1,0 +1,21 @@
+{
+  "schema_revision": 2,
+  "scope": {
+    "tenant_id": "example",
+    "run_id": "hypothesis-single-001"
+  },
+  "sources": {
+    "mentions": {
+      "schema": { "id": "semantic.entity_span_input", "revision": 1 },
+      "provenance": "example:unverified-mentions"
+    }
+  },
+  "steps": [
+    {
+      "id": "extract",
+      "operation": { "id": "semantic.entity_spans", "revision": 1 },
+      "parameters": {},
+      "inputs": { "input": { "source": "external", "artifact": "mentions" } }
+    }
+  ]
+}

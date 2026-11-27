@@ -290,6 +290,64 @@ fn mixed_v2_independent_fixture_for(
     (run, routes)
 }
 
+/// A single Qdrant step must use the SAME native V2 parent, typed owner
+/// ValidateOnly, independent History issuer and real provider receipt as a
+/// multi-owner recipe. It is not a second executor or a special RPC path.
+#[cfg(feature = "e2e")]
+fn mixed_v2_one_step_qdrant_fixture_for(
+    run_id: Uuid,
+    tenant: &str,
+    context: String,
+    admission: Uuid,
+    keyword: String,
+    build_id: &str,
+) -> (
+    operation_protocol::OperationDagRunV6,
+    operation_protocol::TrustedRouteCatalog,
+) {
+    use operation_protocol::{ContractCatalog, Operation, TrustedRouteCatalog};
+    use qdrant_contracts::QdrantKeywordProjectionContractV2;
+
+    let (mut run, original_routes) = mixed_v2_independent_fixture_for(
+        run_id,
+        tenant,
+        context,
+        Uuid::new_v4(),
+        admission,
+        keyword,
+        build_id,
+    );
+    let contract = QdrantKeywordProjectionContractV2::contract();
+    run.plan
+        .nodes
+        .retain(|node| node.instance.as_str() == "qdrant_external_upsert");
+    run.plan
+        .external_artifacts
+        .retain(|id, _| id.as_str() == "external_vector_command");
+    run.admitted
+        .retain(|id, _| id.as_str() == "external_vector_command");
+    run.owner_commands
+        .retain(|id, _| id.as_str() == "qdrant_external_upsert");
+    run.plan.allowed_effects = contract.effects.clone();
+    let mut contracts = ContractCatalog::default();
+    contracts.register::<QdrantKeywordProjectionContractV2>().unwrap();
+    run.plan = run.plan.seal(&contracts).expect("single typed Qdrant operation seals");
+    let route = original_routes
+        .trusted_snapshot_for([&contract.reference])
+        .expect("Qdrant owner route installed for one-step execution")
+        .into_iter()
+        .next()
+        .unwrap();
+    let mut routes = TrustedRouteCatalog::default();
+    routes.register(contract.clone(), route).unwrap();
+    run.pinned_routes = routes.trusted_snapshot_for([&contract.reference]).unwrap();
+    run.plan
+        .validate(routes.catalog())
+        .expect("one-step DAG uses the unchanged trusted V2 operation checker");
+    routes.validate_run_routes(&run).expect("one-step immutable route snapshot");
+    (run, routes)
+}
+
 /// A TRUE typed Produced edge: the PostgreSQL owner returns the bytes of a
 /// durable precomputed projection under `projection.vector_projection@1`.
 /// The Qdrant owner receives those exact output bytes via Temporal's child
@@ -1686,11 +1744,13 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let revoked_id = Uuid::new_v4();
     let invalid_id = Uuid::new_v4();
     let foreign_id = Uuid::new_v4();
+    let single_id = Uuid::new_v4();
     let contexts = [format!("native-v2-produced-{produced_id}"),
         format!("native-v2-parallel-{parallel_id}"),
         format!("native-v2-revoked-before-start-{revoked_id}"),
         format!("native-v2-invalid-{invalid_id}"),
-        format!("native-v2-foreign-{foreign_id}")];
+        format!("native-v2-foreign-{foreign_id}"),
+        format!("native-v2-one-step-{single_id}")];
     for context in &contexts {
         sqlx::query(
             "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
@@ -1709,6 +1769,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let invalid_q_admission = Uuid::new_v4();
     let foreign_pg_admission = Uuid::new_v4();
     let foreign_q_admission = Uuid::new_v4();
+    let single_q_admission = Uuid::new_v4();
     let produced_keyword = format!("v2-pg-produced-{produced_q_admission}");
     let parallel_keyword = format!("v2-pg-parallel-{parallel_q_admission}");
     let revoked_keyword = format!("v2-pg-revoked-{revoked_q_admission}");
@@ -1762,6 +1823,14 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     foreign_wire.command_bytes = foreign_bytes.clone();
     foreign_run.admitted.get_mut(&"external_vector_command".into()).unwrap().payload = foreign_bytes;
 
+    let (single_run, single_routes) = mixed_v2_one_step_qdrant_fixture_for(
+        single_id, tenant, contexts[5].clone(), single_q_admission,
+        format!("v2-single-step-{single_q_admission}"), &build_id,
+    );
+    assert_eq!(single_run.plan.nodes.len(), 1);
+    assert_eq!(single_run.owner_commands.len(), 1);
+    assert_eq!(single_run.pinned_routes.len(), 1);
+
     mixed_v7_seed_pg_vector_projection_source(
         &pg.pool, produced_id, tenant, &contexts[0], &produced_keyword, &produced_vector,
     ).await;
@@ -1787,17 +1856,19 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     for (run, routes) in [(&produced_run, &produced_routes),
         (&parallel_run, &parallel_routes), (&revoked_run, &revoked_routes),
         (&invalid_run, &invalid_routes),
-        (&foreign_run, &foreign_routes)] {
+        (&foreign_run, &foreign_routes), (&single_run, &single_routes)] {
         routes.validate_run_routes(run).expect("V2 trusted per-owner routes");
     }
     let catalog = mixed_v2_install_ci_trusted_catalog(&[
         (&produced_run, &produced_routes), (&parallel_run, &parallel_routes),
         (&revoked_run, &revoked_routes),
         (&invalid_run, &invalid_routes), (&foreign_run, &foreign_routes),
+        (&single_run, &single_routes),
     ]);
     let produced_issuer_catalog = mixed_v6_governance_issuer_catalog(&produced_run, &produced_routes);
     let parallel_issuer_catalog = mixed_v6_governance_issuer_catalog(&parallel_run, &parallel_routes);
     let revoked_issuer_catalog = mixed_v6_governance_issuer_catalog(&revoked_run, &revoked_routes);
+    let single_issuer_catalog = mixed_v6_governance_issuer_catalog(&single_run, &single_routes);
     let private_locators = MixedV2PrivateLocatorFiles::new();
     let base_roles = mixed_v6_native_owner_roles(&pg, tenant).await;
     let roles = mixed_v2_native_roles(&pg, tenant, &base_roles).await;
@@ -2355,6 +2426,145 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         eprintln!("CI_MIXED_V2_NATIVE_REAL_{case}_PG_TEMPORAL_QDRANT=PASS");
         let _ = routes;
     }
+
+    // Positive SINGLE-operation proof, inside the SAME physical Temporal,
+    // PostgreSQL and Qdrant harness and with the SAME production V2 workers.
+    // No direct provider shortcut: only one Qdrant owner ValidateOnly Child,
+    // one independently admitted effect Child, and one durable real receipt.
+    let one_parent_id = operation_dag_parent_workflow_id_v2(&single_id.to_string());
+    let one_parent = client.start_workflow(
+        UntypedWorkflow::new(OPERATION_DAG_PARENT_TYPE_V2),
+        RawValue::from_value(&single_run, &PayloadConverter::serde_json()),
+        WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE_V2, one_parent_id.clone()).build(),
+    ).await.expect("start one-step V2 recipe through the same real Temporal coordinator");
+    let one_parent_run = one_parent.info().run_id.clone().unwrap();
+    mixed_v2_authorize_business_root(
+        &roles, &single_run, &contexts[5], &one_parent_id,
+    ).await;
+    let one_governance_request = private_locators.request(
+        "v2-one-step-governance",
+        &serde_json::json!({
+            "canonical_run_id": single_id,
+            "context_key": contexts[5],
+            "parent_workflow_id": one_parent_id,
+            "parent_workflow_run_id": one_parent_run,
+            "expires_in_seconds": 600,
+        }).to_string(),
+    );
+    let one_governance = Command::new(&pg_bin)
+        .arg("--operator-admit-dag-run-v2")
+        .arg(&one_governance_request)
+        .env("ALEGRIA_ENABLE_OPERATION_DAG_GOVERNANCE_OPERATOR_V2", "true")
+        .env("OPERATION_DAG_GOVERNANCE_V2_OPERATOR_DATABASE_URL", &roles.governance_issuer_url)
+        .env("OPERATION_DAG_GOVERNANCE_TENANT_ID", tenant)
+        .env("OPERATION_DAG_GOVERNANCE_TEMPORAL_URL", &temporal.temporal_url)
+        .env("OPERATION_DAG_GOVERNANCE_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env("OPERATION_DAG_GOVERNANCE_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
+        .env_remove("DATABASE_URL")
+        .output().expect("run independent one-step V2 governance issuer");
+    assert!(one_governance.status.success(),
+        "one-step native governance: stdout={} stderr={}",
+        String::from_utf8_lossy(&one_governance.stdout),
+        String::from_utf8_lossy(&one_governance.stderr));
+    let (one_child_id, one_child_run) = timeout(Duration::from_secs(70), async {
+        loop {
+            let history = one_parent.fetch_history(
+                WorkflowFetchHistoryOptions::builder().build(),
+            ).into_events().await.expect("read real one-step V2 History");
+            let validation_initiated = history.iter().filter(|event| matches!(
+                &event.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                    if a.workflow_id.starts_with("alegria-owner-validate-v1-")
+            )).count();
+            let validation_completed = history.iter().find_map(|event| {
+                matches!(event.attributes.as_ref(),
+                    Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(_)))
+                    .then_some(event.event_id)
+            });
+            let effect_started = history.iter().find_map(|event| {
+                let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(a)) =
+                    &event.attributes else { return None; };
+                let actual = a.workflow_execution.as_ref()?;
+                actual.workflow_id.starts_with("alegria-owner-operation-v2-").then_some((
+                    actual.workflow_id.clone(), actual.run_id.clone(), event.event_id,
+                ))
+            });
+            if let (Some(validated_at), Some((child_id, run_id, started_at))) =
+                (validation_completed, effect_started)
+            {
+                assert_eq!(validation_initiated, 1,
+                    "a one-step recipe must start exactly one typed ValidateOnly Child");
+                assert!(validated_at < started_at,
+                    "one owner effect cannot start before its single ValidateOnly completion");
+                break (child_id, run_id);
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.expect("one-step Temporal ValidateOnly/owner Child did not start");
+    let q_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1",
+    ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(q_before, 0, "one-step provider effect cannot precede independent issuer");
+    let one_q_request = private_locators.request("v2-one-step-qdrant-issuer", &serde_json::json!({
+        "admission_id": single_q_admission,
+        "canonical_run_id": single_id,
+        "parent_workflow_id": one_parent_id,
+        "parent_workflow_run_id": one_parent_run,
+        "child_workflow_id": one_child_id,
+        "child_workflow_run_id": one_child_run,
+        "expires_in_seconds": 300,
+    }).to_string());
+    let one_q_issuer = Command::new(&qdrant_bin)
+        .arg("--operator-issue-v3")
+        .arg(&one_q_request)
+        .env("ALEGRIA_ENABLE_QDRANT_GENERIC_OPERATOR_V1", "true")
+        .env("ALEGRIA_ENABLE_QDRANT_GENERIC_V2_OPERATOR_V1", "true")
+        .env("QDRANT_GENERIC_OPERATOR_DATABASE_URL_FILE", &roles.qdrant_operator_secret)
+        .env("QDRANT_GENERIC_OPERATOR_TENANT_ID", tenant)
+        .env("QDRANT_GENERIC_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
+        .env("QDRANT_GENERIC_OPERATOR_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env("QDRANT_GENERIC_OPERATOR_TRUSTED_BUILD_ID", &build_id)
+        .env_remove("DATABASE_URL")
+        .output().expect("run independently History-attested one-step Qdrant operator");
+    assert!(one_q_issuer.status.success(),
+        "one-step Qdrant issuer: stdout={} stderr={}",
+        String::from_utf8_lossy(&one_q_issuer.stdout),
+        String::from_utf8_lossy(&one_q_issuer.stderr));
+    let one_completion = timeout(Duration::from_secs(90),
+        one_parent.get_result(WorkflowGetResultOptions::default()),
+    ).await.expect("real single-operation V2 recipe never completed")
+        .expect("real one-step Temporal/Qdrant owner failed");
+    let one_receipt: OperationDagReceiptV1 =
+        one_completion.to_value(&PayloadConverter::serde_json());
+    assert_eq!(one_receipt.plan_hash, single_run.plan.hash);
+    assert_eq!(one_receipt.order.len(), 1);
+    assert_eq!(one_receipt.order[0].as_str(), "qdrant_external_upsert");
+    assert_eq!(one_receipt.owner_results.len(), 1);
+    let one_command: qdrant_contracts::QdrantKeywordProjectionCommandV1 =
+        serde_json::from_slice(&single_run.owner_commands[&"qdrant_external_upsert".into()]
+            .command_bytes).unwrap();
+    let one_sha: String = sqlx::query_scalar(
+        "SELECT command_sha256 FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1",
+    ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
+    assert!(vector_qdrant::projection_commands::projection_readback_exact(
+        "seo_keyword_clusters_4", &single_q_admission.to_string(), "keyword_cluster",
+        &format!("tenant/{tenant}/context/{}/keyword/{}",
+            contexts[5], one_command.keyword_key),
+        &one_command.vector, &serde_json::json!({
+            "tenant_id": tenant,
+            "context_key": contexts[5],
+            "keyword_key": one_command.keyword_key,
+            "operator_admission_id": single_q_admission.to_string(),
+            "approved_command_sha256": one_sha,
+        }),
+    ).await.expect("read back actual one-step Qdrant provider effect"));
+    let one_effects: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1),
+                (SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts WHERE admission_id=$1)",
+    ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(one_effects, (1, 1),
+        "one operation produces exactly one durable effect attempt and receipt");
+    eprintln!("CI_MIXED_V2_NATIVE_SINGLE_OPERATION_TEMPORAL_QDRANT=PASS");
 
     // A structurally legal plan with either malformed concrete bytes or an
     // exact-shape foreign-tenant DTO must fail at Qdrant ValidateChild before

@@ -12,11 +12,55 @@
 
 ```bash
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab tools
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab operation --id semantic.entity_spans --revision 1
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab one-step --recipe-file docs/site_lab_single_step_v1.json
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab check --recipe-file docs/site_lab_recipe_v1.json
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab diff --first-file docs/site_lab_recipe_v1.json --second-file docs/site_lab_recipe_v1_alternative.json
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab inspect --plan-file saved-plan.json --receipt-file saved-v2-receipt.json
 cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-lab compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
 ```
+
+`operation` выбирает **строго установленную** версию операции по `--id` и
+`--revision`; для отдельной проверки настроек допустим дополнительный
+`--parameters-file /path/to/settings.json` или `--parameters-file -`.
+Команда показывает точные типы портов, объявленные владельцем продвинутые
+параметры и отпечаток проверенной конфигурации, но не возвращает значения
+секретов. Локальный Rust DTO проверяется типизированно; для внешнего владельца
+JSON-объект получает только `schema_shape_checked_only` до настоящего
+`ValidateOnly` Child. Каталог, наличие контракта или URL провайдера сами по
+себе **не** доказывают работоспособность, подключение или полномочия.
+
+`one-step` принимает обычный `SiteRecipe`, но требует ровно **один шаг**.
+Он использует тот же текущий план/валидатор, что и многозвенный рецепт, и
+возвращает `single_step_preview_only`: без исходных заверенных байтов,
+Temporal Start, server History, независимого допуска и эффекта. Полный
+предстартовый V2-контроль уже имеет узкую одношаговую обёртку
+`preflight_unadmitted_single_operation_v2_start`, которой нужны отдельные
+зафиксированные хеши команды и источника. Это **не** разрешение на Start.
+
+Тот же инспектор и просмотр одного шага доступны через новые локальные MCP
+инструменты `site_lab_operation` и `site_lab_one_step`. После их добавления
+локальный MCP предлагает **11 инструментов** управления и read-only анализа,
+а не 11 работающих внешних SEO API. Удалённое подключение ChatGPT, серверный
+старт, проверенная выдача run-result по `run_id` остаются отдельными P0.
+
+### Изолированный оператор DataForSEO — только локальная заглушка
+
+Новый независимый оператор вызывается отдельной командой
+`temporal_dataforseo --issue-stub-admission /path/to/private-locator.json`,
+а не из `site_lab_one_step`. Он требует явного
+`ALEGRIA_ENABLE_DATAFORSEO_STUB_OPERATOR_V1=true`, доверенный build ID,
+локальный Temporal endpoint/namespace и отдельный закрытый файл SQL-учётных
+данных. Локатор содержит только UUID бизнес-запуска и точные server Workflow
+ID/Run ID родителя и owner-child с ограниченным временем допуска. Оператор
+сам читает реальные Temporal Histories родителя, Child и всех ValidateOnly,
+проверяет независимую SQL-governance, фиксирует допуск в транзакции и лишь
+после COMMIT посылает Signal. Signal никогда не является допуском сам по себе.
+
+Проверка остаётся **test-only/stub-only**: отдельный owner допускает HTTP
+POST/GET лишь к локальному фиктивному серверу на `127.0.0.1`; его receipt
+имеет `StubFixtureOnly` и не может считаться SEO-свидетельством. Платных
+запросов, доверенного удалённого ChatGPT Start или production cutover нет.
 
 Для ChatGPT/скриптов допустим **один ограниченный JSON из stdin** без промежуточного файла:
 
@@ -47,11 +91,13 @@ MCP-клиент должен **запустить этот бинарник к�
 
 **Чтобы добавить нового поставщика, не требуется пересобирать MCP или ядро DAG**: независимо развёрнутый владелец публикует версионированный контракт и схему в защищённом файле, оператор обновляет каталог и перезапускает MCP/Orchestrator. Это не разрешение на эффекты — отдельный owner `ValidateOnly`, аутентификация источников и допуск Temporal по-прежнему обязательны.
 
-MCP предоставляет девять инструментов составления сценария, оценки независимости свидетельств и локальной проверки сохранённых результатов; это **не** девять внешних SEO API:
+MCP предоставляет одиннадцать инструментов составления сценария, индивидуальной проверки операций, оценки независимости свидетельств и локальной проверки сохранённых результатов; это **не** одиннадцать внешних SEO API:
 
 | MCP-инструмент | Результат |
 | --- | --- |
 | `site_lab_tools` | Действительно установленные операции: владелец, версия, входы, выходы, эффекты, схема продвинутых настроек, readiness |
+| `site_lab_operation` | Одноимённая операция по точной версии: её параметры, порты и локальная типизация либо честное требование владельческого ValidateOnly; эффект не запускается |
+| `site_lab_one_step` | Рецепт из ровно одного шага: проверка типизированных связей и параметров тем же валидатором, без Temporal Start и без выдачи допуска |
 | `site_lab_new` | Пустой рецепт v2 с `tenant_id` и `run_id` |
 | `site_lab_edit` | Новый рецепт после *атомарного пакета* `changes`: `add_step`, `remove_step`, `set_operation`, `set_parameters`, `set_input`, `remove_input`, `set_after`, `upsert_source`, `remove_source` |
 | `site_lab_check` | Проверка существующим V2 DAG-валидатором, точные ошибки, fingerprint и порядок шагов, без запуска |

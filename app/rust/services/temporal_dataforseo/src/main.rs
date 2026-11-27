@@ -35,6 +35,8 @@ use temporalio_sdk::{
 use url::Url;
 use uuid::Uuid;
 
+mod operator;
+
 fn non_retryable(error: impl std::fmt::Display) -> ActivityError {
     ActivityError::application(ApplicationFailure::non_retryable(std::io::Error::other(
         error.to_string(),
@@ -739,13 +741,18 @@ async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(arg) = args.next() {
         ensure!(
-            arg == "--replay-history",
+            arg == "--replay-history" || arg == "--issue-stub-admission",
             "unknown DataForSEO owner command"
         );
-        let file = args.next().context("--replay-history needs JSON file")?;
+        let file = args.next().context("DataForSEO command requires one file")?;
         ensure!(args.next().is_none(), "unexpected replay arguments");
-        replay_history(Path::new(&file)).await?;
-        println!("CI_TEMPORAL_DATAFORSEO_OWNER_REPLAY=PASS");
+        if arg == "--issue-stub-admission" {
+            operator::issue_from_file(Path::new(&file)).await?;
+            println!("CI_TEMPORAL_DATAFORSEO_OPERATOR_ISSUED=PASS");
+        } else {
+            replay_history(Path::new(&file)).await?;
+            println!("CI_TEMPORAL_DATAFORSEO_OWNER_REPLAY=PASS");
+        }
         return Ok(());
     }
     run_worker().await
