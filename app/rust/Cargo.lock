@@ -3272,8 +3272,6 @@ name = "operation_protocol"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "prost",
- "prost-types",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6316,6 +6314,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "operation_protocol",
+ "prost",
+ "prost-types",
  "serde",
  "serde_json",
 ]

@@ -8,7 +8,8 @@ protocol into an unvalidated JSON/protobuf transport.
 
   .proto -> prost-generated legacy Temporal V1 payloads (fixed replay schema)
   operation_protocol -> owner-neutral typed Rust DAG V2 (canonical model)
-  owner_schema_v3 -> additive validated descriptor pin, never an in-place V2 history edit
+  owner_schema_v3 -> additive opaque bounded descriptor pin, never V2 edit
+  trusted_owner_catalog -> optional Protobuf FileDescriptorSet syntax check
   JSON -> checked authoring/serialized artifact envelope at named adapters
   Temporal pure V3 -> historical Serde replay; V4 -> opt-in strict ingress
   Temporal pure V5 -> new schema-pinned input, independent queue and replay
@@ -173,11 +174,11 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     if "serde_json::Value" in protocol or "contracts::" in protocol or "prost::" in protocol:
         failures.append("domain operation_protocol must not depend on dynamic JSON or legacy protobuf DTOs")
     cargo = sources["operation_protocol_cargo"]
-    # Protobuf *descriptor* parsing is allowed, to validate a bounded
-    # FileDescriptorSet, but transport/owner DTO codegen must remain outside
-    # the generic DAG protocol. `prost`/`prost-types` are not owner DTOs.
-    if re.search(r"^\s*(?:contracts|prost-build)\s*=", cargo, re.MULTILINE):
-        failures.append("provider-neutral operation_protocol cannot depend on legacy protobuf DTOs or build-time IDL")
+    # Even prost_types is a forbidden transitive dependency: any protobuf
+    # decoder in operation_protocol would pull it into every pure domain
+    # owner (including truth_domain) through the generic DAG protocol.
+    if re.search(r"^\s*(?:contracts|prost|prost-types|prost-build)\s*=", cargo, re.MULTILINE):
+        failures.append("provider-neutral operation_protocol must not depend on protobuf crates")
 
     owner_schema = sources["owner_schema_v3"]
     require(protocol, r"pub\s+use\s+owner_schema_v3::\{",
@@ -205,8 +206,9 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             "owner JSON descriptor parser decodes supplied schema bytes", failures)
     require(descriptor_parser, r"values\.insert\(key,\s*value\)\.is_some\(\)",
             "owner JSON descriptor parser rejects recursively duplicate keys", failures)
-    require(owner_schema, r"FileDescriptorSet::decode\(self\.descriptor_bytes\.as_slice\(\)\)",
-            "V3 parses the actual Protobuf descriptor set bytes", failures)
+    if re.search(r"\b(?:prost|prost_types)::|FileDescriptorSet::decode\(",
+                 protocol + owner_schema):
+        failures.append("protobuf descriptor decoding must remain outside provider-neutral operation_protocol")
     require(owner_schema, r"JsonSchema2020_12\s*=>\s*\{",
             "V3 schema validation checks the declared format", failures)
     require(descriptor_parser, r"Value::Bool\(false\)",
@@ -216,6 +218,14 @@ def check_sources(sources: dict[str, str]) -> list[str]:
     # bytes. A schema installed by the native owner is a distinct trust root
     # from a client's optional requested pin or parameter schema.
     trusted_catalog = sources["trusted_owner_catalog"]
+    require(trusted_catalog, r"FileDescriptorSet::decode\(",
+            "trusted owner catalog parses Protobuf descriptors at installation boundary", failures)
+    require(trusted_catalog, r"fn\s+verify_installed_protobuf_descriptors\(",
+            "Protobuf syntax validation is an explicit trusted installation step", failures)
+    if trusted_catalog.count("verify_installed_protobuf_descriptors(") < 3:
+        failures.append("both effectful and pure trusted owner schema installations validate Protobuf descriptors")
+    require(owner_schema, r"OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet\s*=>\s*\{\s*\}",
+            "provider-neutral V3 keeps Protobuf descriptor opaque after bounded validation", failures)
     require(trusted_catalog, r"owner_schemas:\s*BTreeMap<OperationRef,\s*PinnedOwnerOperationSchemaV3>",
             "trusted owner bundle stores pinned owner structural schemas", failures)
     require(trusted_catalog, r"fn\s+verify_caller_schema\(",

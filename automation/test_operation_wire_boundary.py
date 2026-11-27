@@ -161,13 +161,52 @@ class OperationWireBoundaryTests(unittest.TestCase):
         )
         self.assertIn("owner JSON descriptor parser rejects recursively duplicate keys", failures)
 
-    def test_v3_protobuf_schema_must_decode_real_descriptor_bytes(self) -> None:
+    def test_provider_neutral_dag_must_not_pull_prost_into_domain_owners(self) -> None:
         failures = self.mutated(
-            "owner_schema_v3",
-            "FileDescriptorSet::decode(self.descriptor_bytes.as_slice())",
-            "FileDescriptorSet::decode(&[][..])",
+            "operation_protocol_cargo",
+            '[dependencies]',
+            '[dependencies]\nprost-types = { workspace = true }',
         )
-        self.assertIn("V3 parses the actual Protobuf descriptor set bytes", failures)
+        self.assertIn("provider-neutral operation_protocol must not depend on protobuf crates", failures)
+
+    def test_protobuf_schema_decoder_must_stay_at_trusted_install_boundary(self) -> None:
+        changed = dict(self.baseline)
+        changed["owner_schema_v3"] += "\nlet _ = FileDescriptorSet::decode(b\"invalid\");\n"
+        self.assertIn(
+            "protobuf descriptor decoding must remain outside provider-neutral operation_protocol",
+            check_sources(changed),
+        )
+
+    def test_trusted_catalog_cannot_skip_protobuf_descriptor_decode(self) -> None:
+        failures = self.mutated(
+            "trusted_owner_catalog",
+            "FileDescriptorSet::decode(",
+            "FileDescriptorSet::default(",
+        )
+        self.assertIn("trusted owner catalog parses Protobuf descriptors at installation boundary", failures)
+
+    def test_both_trusted_catalog_registration_modes_validate_protobuf(self) -> None:
+        source = self.baseline["trusted_owner_catalog"]
+        self.assertGreaterEqual(source.count("verify_installed_protobuf_descriptors("), 3)
+        marker = "verify_installed_protobuf_descriptors("
+        count = 0
+        pos = 0
+        while True:
+            index = source.find(marker, pos)
+            if index == -1:
+                break
+            count += 1
+            if count == 3:
+                changed = dict(self.baseline)
+                changed["trusted_owner_catalog"] = (
+                    source[:index] + "skip_validation(" + source[index + len(marker):]
+                )
+                self.assertIn(
+                    "both effectful and pure trusted owner schema installations validate Protobuf descriptors",
+                    check_sources(changed),
+                )
+                break
+            pos = index + len(marker)
 
     def test_trusted_schema_registry_cannot_drop_the_owner_pin(self) -> None:
         failures = self.mutated(

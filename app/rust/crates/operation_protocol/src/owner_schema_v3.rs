@@ -8,8 +8,6 @@
 
 use std::collections::BTreeMap;
 
-use prost::Message;
-use prost_types::FileDescriptorSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -58,26 +56,10 @@ impl OwnerDtoDescriptorV3 {
                 crate::owner_schema_json::validate_json_schema_2020_12(&self.descriptor_bytes)
                     .map_err(|_| OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)?;
             }
-            OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet => {
-                let descriptors = FileDescriptorSet::decode(self.descriptor_bytes.as_slice())
-                    .map_err(|_| OwnerSchemaErrorV3::InvalidProtobufDescriptor)?;
-                if descriptors.file.is_empty()
-                    || descriptors.file.iter().any(|file| {
-                        file.name.as_deref().is_none_or(str::is_empty)
-                            || (file.message_type.is_empty() && file.enum_type.is_empty())
-                            || file
-                                .message_type
-                                .iter()
-                                .any(|message| message.name.as_deref().is_none_or(str::is_empty))
-                            || file.enum_type.iter().any(|enumeration| {
-                                enumeration.name.as_deref().is_none_or(str::is_empty)
-                                    || enumeration.value.is_empty()
-                            })
-                    })
-                {
-                    return Err(OwnerSchemaErrorV3::InvalidProtobufDescriptor);
-                }
-            }
+            // A provider-neutral contract cannot link the Protobuf SDK: this
+            // is only a bounded opaque carrier. The independently trusted
+            // owner installation MUST decode and validate FileDescriptorSet.
+            OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet => {}
         }
         Ok(len)
     }
@@ -129,8 +111,6 @@ pub enum OwnerSchemaErrorV3 {
     DescriptorSize,
     #[error("owner JSON Schema descriptor must be unambiguous draft 2020-12 syntax with a declared root shape")]
     InvalidJsonSchemaDescriptor,
-    #[error("owner Protobuf descriptor is not a FileDescriptorSet with declared types")]
-    InvalidProtobufDescriptor,
     #[error("owner DTO descriptors exceed total operation budget")]
     TotalDescriptorSize,
     #[error("pinned owner V3 structural schema fingerprint changed")]
@@ -405,13 +385,12 @@ mod tests {
                 Err(OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)
             ));
         }
-        let mut candidate = spec(&installed);
-        candidate.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
-        candidate.failure.descriptor_bytes = b"not a descriptor set".to_vec();
-        assert!(matches!(
-            candidate.seal(&installed),
-            Err(OwnerSchemaErrorV3::InvalidProtobufDescriptor)
-        ));
+        // Opaque protobuf bytes cannot be validated in this dependency-free
+        // protocol. An independently trusted installer must reject them.
+        let mut opaque = spec(&installed);
+        opaque.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
+        opaque.failure.descriptor_bytes = b"not a descriptor set".to_vec();
+        opaque.seal(&installed).unwrap();
         let mut duplicate = spec(&installed);
         duplicate.failure.descriptor_bytes = br#"{"$schema":"https://json-schema.org/draft/2020-12/schema","properties":{"person":{"type":"object","properties":{"x":{"type":"string"},"x":{"type":"number"}}}}}"#.to_vec();
         assert!(matches!(
@@ -420,27 +399,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn v3_accepts_a_real_protobuf_file_descriptor_set_without_touching_legacy_proto() {
-        let installed = contract();
-        let descriptor = prost_types::FileDescriptorSet {
-            file: vec![prost_types::FileDescriptorProto {
-                name: Some("owner/operation.proto".to_owned()),
-                package: Some("owner.operation.v1".to_owned()),
-                message_type: vec![prost_types::DescriptorProto {
-                    name: Some("Failure".to_owned()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-        };
-        let mut schema = spec(&installed);
-        schema.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
-        schema.failure.descriptor_bytes = descriptor.encode_to_vec();
-        schema
-            .seal(&installed)
-            .unwrap()
-            .validate(&installed)
-            .unwrap();
-    }
 }

@@ -31,10 +31,17 @@ Serde wire (`Input`) и `for_serialize()` для выходного wire (`Outpu
 а также вложенные структуры и реальные `serde`-имена. **Это пока только
 пять конкретных owner DTO, не все 52 строки матрицы.**
 
-`operation_protocol::owner_schema_v3` теперь дополнительно разбирает
-ограниченные JSON Schema / Protobuf FileDescriptorSet дескрипторы до
-фиксации fingerprint; это проверка формы IDL, **не доказательство
-соответствия чужих дескрипторов их настоящим DTO**. Независимая установка
+`operation_protocol::owner_schema_v3` сохраняет owner DTO descriptors как
+ограниченные по размеру, версионированные байты; проверяет идентичности,
+порты, целостность pin/fingerprint, а для JSON Schema направляет строго
+ограниченную проверку в `owner_schema_json`. Для **Protobuf
+FileDescriptorSet** ядро сохраняет только непрозрачные байты — никаких
+`prost`/`prost-types` зависимостей у `operation_protocol` нет. Реальная
+декодировка Protobuf descriptor и отказ на повреждённые/пустые наборы
+выполняется **при доверенной установке** в `trusted_owner_catalog`, а не
+транзитивно через все domain crates. Это проверка корректности границы IDL,
+**не доказательство соответствия чужих дескрипторов их настоящим DTO**.
+Независимая установка
 версионированных схем доступна в `trusted_owner_catalog` из доверенного
 root-owned каталога, а входной self-sealed pin сверяется с установленным.
 Для `schema_revision=3` эффектные owner routes требуют собственного

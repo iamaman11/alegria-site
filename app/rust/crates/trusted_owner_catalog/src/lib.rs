@@ -11,9 +11,12 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use operation_protocol::{
     ContractCatalog, IdempotencyPolicy, OperationContract, OperationRef,
-    PinnedOwnerOperationSchemaV3, PinnedOwnerRouteV1, TrustedRouteCatalog,
+    OwnerDtoDescriptorFormatV3, PinnedOwnerOperationSchemaV3, PinnedOwnerRouteV1,
+    TrustedRouteCatalog,
     OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
+use prost::Message;
+use prost_types::FileDescriptorSet;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -174,6 +177,52 @@ fn validate_build_id(build_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Only the trusted installation boundary decodes Protobuf descriptors.
+/// The provider-neutral operation_protocol can transport their bounded,
+/// fingerprinted bytes but must not pull in the Protobuf SDK transitively.
+/// This verifies wire descriptor syntax and declared type identity, NOT the
+/// owner's implementation or a runtime permission to execute effects.
+fn verify_installed_protobuf_descriptors(pin: &PinnedOwnerOperationSchemaV3) -> Result<()> {
+    for descriptor in pin
+        .schema
+        .inputs
+        .values()
+        .chain(pin.schema.outputs.values())
+        .chain(std::iter::once(&pin.schema.failure))
+    {
+        if descriptor.format != OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet {
+            continue;
+        }
+        let descriptors = FileDescriptorSet::decode(descriptor.descriptor_bytes.as_slice())
+            .context("trusted owner Protobuf descriptor is not a decodable FileDescriptorSet")?;
+        anyhow::ensure!(
+            !descriptors.file.is_empty(),
+            "trusted owner Protobuf FileDescriptorSet cannot be empty"
+        );
+        for file in descriptors.file {
+            anyhow::ensure!(
+                file.name.as_deref().is_some_and(|name| !name.is_empty())
+                    && (!file.message_type.is_empty() || !file.enum_type.is_empty()),
+                "trusted owner Protobuf descriptor must name a file with declared types"
+            );
+            anyhow::ensure!(
+                file.message_type
+                    .iter()
+                    .all(|message| message.name.as_deref().is_some_and(|name| !name.is_empty())),
+                "trusted owner Protobuf message type must have a name"
+            );
+            anyhow::ensure!(
+                file.enum_type.iter().all(|enumeration| {
+                    enumeration.name.as_deref().is_some_and(|name| !name.is_empty())
+                        && !enumeration.value.is_empty()
+                }),
+                "trusted owner Protobuf enum type must be named with variants"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn register_trusted_entry(
     catalog: &mut TrustedRouteCatalog,
     entry: TrustedRegistrationV1,
@@ -259,6 +308,7 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
             pinned
                 .validate(&entry.contract)
                 .context("v3 effectful owner schema does not match installed contract")?;
+            verify_installed_protobuf_descriptors(pinned)?;
             schema_contracts.register_contract(entry.contract.clone())?;
             anyhow::ensure!(
                 owner_schemas
@@ -284,6 +334,7 @@ fn decode_trusted_catalog(data: &[u8]) -> Result<TrustedOwnerCatalog> {
             .owner_schema
             .validate(&entry.contract)
             .context("v3 standalone owner schema does not match installed pure contract")?;
+        verify_installed_protobuf_descriptors(&entry.owner_schema)?;
         let operation = entry.contract.reference.clone();
         schema_contracts.register_contract(entry.contract)?;
         schema_build_ids.insert(operation.clone(), entry.build_id);
@@ -371,6 +422,72 @@ mod tests {
         .unwrap()
     }
 
+    fn protobuf_failure_schema(
+        contract: &OperationContract,
+        descriptor_bytes: Vec<u8>,
+    ) -> PinnedOwnerOperationSchemaV3 {
+        let mut owner = pinned_schema(contract).schema;
+        owner.failure.format = OwnerDtoDescriptorFormatV3::ProtobufFileDescriptorSet;
+        owner.failure.descriptor_bytes = descriptor_bytes;
+        owner.seal(contract).unwrap()
+    }
+
+    fn standalone_schema_manifest(
+        contract: OperationContract,
+        pinned: PinnedOwnerOperationSchemaV3,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema_revision": 3,
+            "entries": [],
+            "schema_entries": [{
+                "contract": contract,
+                "owner_schema": pinned,
+                "build_id": "0123456789abcdef0123456789abcdef01234567"
+            }]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn protobuf_descriptors_are_decoded_at_trusted_installation_only() {
+        let contract = registered_test_owner().contract;
+        let invalid = protobuf_failure_schema(&contract, b"not a FileDescriptorSet".to_vec());
+        // The provider-neutral protocol only pins bounded opaque bytes.
+        invalid.validate(&contract).unwrap();
+        assert!(decode_trusted_catalog(&standalone_schema_manifest(
+            contract.clone(), invalid
+        ))
+        .is_err());
+
+        // A nonempty wire with only an unknown field decodes to an empty
+        // FileDescriptorSet. The provider-free size check alone accepts it.
+        let empty = protobuf_failure_schema(&contract, vec![0x10, 0x00]);
+        assert!(decode_trusted_catalog(&standalone_schema_manifest(
+            contract.clone(), empty
+        ))
+        .is_err());
+
+        let valid_set = prost_types::FileDescriptorSet {
+            file: vec![prost_types::FileDescriptorProto {
+                name: Some("owner/failure.proto".to_owned()),
+                package: Some("owner.failure.v1".to_owned()),
+                message_type: vec![prost_types::DescriptorProto {
+                    name: Some("Failure".to_owned()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+        };
+        let valid = protobuf_failure_schema(&contract, valid_set.encode_to_vec());
+        let installed = decode_trusted_catalog(&standalone_schema_manifest(
+            contract.clone(), valid.clone(),
+        ))
+        .unwrap();
+        installed
+            .verify_caller_schema(&contract.reference, &valid)
+            .unwrap();
+    }
+
     #[test]
     fn pure_owner_schema_installs_without_fabricated_effectful_route() {
         let registration = registered_test_owner();
@@ -448,6 +565,15 @@ mod tests {
         forged["entries"][0]["owner_schema"] = json!(pinned_schema(&entry.contract));
         forged["entries"][0]["owner_schema"]["schema"]["owner"] = json!("caller-not-owner");
         assert!(decode_trusted_catalog(&serde_json::to_vec(&forged).unwrap()).is_err());
+
+        let mut malformed_protobuf: Value = serde_json::from_slice(&good).unwrap();
+        malformed_protobuf["entries"][0]["owner_schema"] = json!(protobuf_failure_schema(
+            &entry.contract,
+            b"invalid FileDescriptorSet".to_vec()
+        ));
+        assert!(
+            decode_trusted_catalog(&serde_json::to_vec(&malformed_protobuf).unwrap()).is_err()
+        );
     }
 
     #[test]
