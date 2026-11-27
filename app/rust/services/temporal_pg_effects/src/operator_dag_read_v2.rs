@@ -11,9 +11,9 @@ use operation_protocol::{
     enforce_json_budget, operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2,
     owner_content_hash, owner_validation_child_workflow_id_v1, OperationDagReceiptV1,
     OperationDagRunV6, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
-    OwnerValidationResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog,
-    DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES, OPERATION_DAG_PARENT_QUEUE_V2,
-    OPERATION_DAG_PARENT_TYPE_V2, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
+    OwnerValidationResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
+    DAG_MAX_RESULT_BYTES, OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
@@ -54,7 +54,10 @@ struct SafeRunInspection {
 const OPERATION: &str = "read_operation_dag_run_v2";
 
 fn decode_canonical_run_locator(bytes: &[u8]) -> Result<RunLocator> {
-    ensure!(bytes.len() <= 256, "V2 run locator exceeds bounded UUID request");
+    ensure!(
+        bytes.len() <= 256,
+        "V2 run locator exceeds bounded UUID request"
+    );
     let locator: RunLocator = serde_json::from_slice(bytes)?;
     ensure!(
         !locator.canonical_run_id.is_nil() && serde_json::to_vec(&locator)?.as_slice() == bytes,
@@ -458,9 +461,7 @@ async fn attest_one_owner_child(
         .1
         .input
         .as_ref()
-        .and_then(|input| {
-            (input.payloads.len() == 1).then_some(input.payloads[0].data.as_slice())
-        })
+        .and_then(|input| (input.payloads.len() == 1).then_some(input.payloads[0].data.as_slice()))
         .context("ValidateOnly ChildInitiated lacks exact typed request bytes")?;
     ensure!(
         !validate_request_bytes.is_empty() && validate_request_bytes.len() <= DAG_MAX_INPUT_BYTES,
@@ -506,7 +507,8 @@ async fn attest_one_owner_child(
                 .1
                 .workflow_type
                 .as_ref()
-                .map(|typed| typed.name.as_str()) == Some(OWNER_VALIDATION_CHILD_TYPE_V1),
+                .map(|typed| typed.name.as_str())
+                == Some(OWNER_VALIDATION_CHILD_TYPE_V1),
         "ValidateOnly server ChildStarted mismatches pinned workflow identity"
     );
     let validated = parent
@@ -545,8 +547,11 @@ async fn attest_one_owner_child(
         validate_child.events.len() <= 1_000,
         "ValidateOnly own server History exceeds one-node budget"
     );
-    let validate_child_start =
-        first_started_payload(&validate_child, OWNER_VALIDATION_CHILD_TYPE_V1, &route.task_queue)?;
+    let validate_child_start = first_started_payload(
+        &validate_child,
+        OWNER_VALIDATION_CHILD_TYPE_V1,
+        &route.task_queue,
+    )?;
     ensure!(
         validate_child_start == validate_request_bytes,
         "ValidateOnly own server Start differs from parent ChildInitiated bytes"
@@ -915,19 +920,19 @@ mod tests {
                 .canonical_run_id,
             id
         );
-        assert!(
-            decode_canonical_run_locator(
-                format!("{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"forged\"}}").as_bytes()
-            )
-            .is_err()
+        assert!(decode_canonical_run_locator(
+            format!("{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"forged\"}}").as_bytes()
+        )
+        .is_err());
+        assert!(decode_canonical_run_locator(
+            format!("{{\"canonical_run_id\":\"{id}\",\"parent_workflow_run_id\":\"forged\"}}")
+                .as_bytes()
+        )
+        .is_err());
+        let uppercase_uuid = format!(
+            "{{\"canonical_run_id\":\"{}\"}}",
+            id.to_string().to_uppercase()
         );
-        assert!(
-            decode_canonical_run_locator(
-                format!("{{\"canonical_run_id\":\"{id}\",\"parent_workflow_run_id\":\"forged\"}}").as_bytes()
-            )
-            .is_err()
-        );
-        let uppercase_uuid = format!("{{\"canonical_run_id\":\"{}\"}}", id.to_string().to_uppercase());
         assert!(decode_canonical_run_locator(uppercase_uuid.as_bytes()).is_err());
         assert!(decode_canonical_run_locator(format!("{valid}\n").as_bytes()).is_err());
         assert!(decode_canonical_run_locator(&[b' '; 257]).is_err());
@@ -950,7 +955,8 @@ mod tests {
             owner_result_count: 1,
             result_blake3: Some("c".repeat(64)),
             governance_currently_active: false,
-            temporal_history_attestation: "exact_server_parent_validation_and_effect_child_histories",
+            temporal_history_attestation:
+                "exact_server_parent_validation_and_effect_child_histories",
             owner_receipt_attestation: "not_independently_verified",
             source_authentication: "not_independently_attested",
             next_action: "Get an independently verified owner receipt.",

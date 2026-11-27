@@ -820,7 +820,10 @@ mod tests {
             let n = socket.read(&mut buffer).expect("read fixture request body");
             assert!(n > 0, "incomplete fixture request body");
             request.extend_from_slice(&buffer[..n]);
-            assert!(request.len() < 8192, "unexpected oversized fixture request body");
+            assert!(
+                request.len() < 8192,
+                "unexpected oversized fixture request body"
+            );
         }
         String::from_utf8(request).expect("fixture HTTP request is UTF-8")
     }
@@ -833,7 +836,8 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let serving = std::thread::spawn(move || {
-            let post_response = r#"{"status_code":20000,"tasks":[{"status_code":20100,"id":"stub-serp-7"}]}"#;
+            let post_response =
+                r#"{"status_code":20000,"tasks":[{"status_code":20100,"id":"stub-serp-7"}]}"#;
             let get_response = r#"{"status_code":20000,"tasks":[{"status_code":20000,"result":[{"items":[{"type":"organic","rank_absolute":1,"title":"Fixture page","url":"https://example.org/kitchens","description":"Fixture only"}]}]}]}"#;
             let mut observed = Vec::new();
             for (status, body) in [
@@ -899,9 +903,8 @@ mod tests {
         assert!(requests[0].starts_with("POST /v3/serp/google/organic/task_post HTTP/1.1"));
         assert!(requests[0].contains("custom kitchens customer problems"));
         for request in &requests[1..] {
-            assert!(request.starts_with(
-                "GET /v3/serp/google/organic/task_get/advanced/stub-serp-7 HTTP/1.1"
-            ));
+            assert!(request
+                .starts_with("GET /v3/serp/google/organic/task_get/advanced/stub-serp-7 HTTP/1.1"));
         }
         for request in requests {
             assert!(
@@ -946,7 +949,9 @@ mod tests {
             .await
             .expect_err("lost POST receipt is an unknown outcome, not success");
         assert!(
-            error.downcast_ref::<reqwest::Error>().is_some_and(|err| err.is_body()),
+            error
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|err| err.is_body()),
             "a prematurely closed accepted POST must be a transport/body error"
         );
         let request = serving.join().unwrap();
