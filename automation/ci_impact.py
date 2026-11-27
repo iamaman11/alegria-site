@@ -378,11 +378,16 @@ DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES = {
 ACQUISITION_NATIVE_V2_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "-p", "temporal_pg_effects",
     "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+    "--bin", "temporal_pg_effects",
 )
 ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
     "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
+    # Native privileged Start adapter is already part of the v3 SHA bundle;
+    # the Acquisition shard installs it without a second Rust compilation.
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
@@ -417,6 +422,27 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    # Distinct authenticated PostgreSQL source issuer, immutable raw snapshot,
+    # live V2 business root and SELECT-only Temporal Start reader. This is a
+    # physical SQL permission proof; origin→typed-payload fidelity still
+    # requires a dedicated trusted transformer before public acceptance.
+    "external_source_attestation_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/external_source_attestation_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/operation_protocol/",
+            "app/rust/services/temporal_pg_effects/",
+        ),
+        "lock_crates": {"operation_protocol", "temporal_pg_effects", "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "external_source_attestation_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
     # One REAL disposable PostgreSQL admission boundary for the opt-in
     # DataForSEO Temporal owner.  This test cannot attest live Temporal
     # History or paid HTTP; it proves no missing operator grant can start an
@@ -782,16 +808,20 @@ SUITE_OWNERS = {
             "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
             "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
+            "app/db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql",
         },
         "prefixes": (
             "app/rust/services/temporal_acquisition_pure/",
+            # Its separate privileged one-step gate now checks Acquisition
+            # source admission before submitting the generic Temporal DAG.
+            "app/rust/services/temporal_pg_effects/",
             "app/rust/crates/acquisition/",
             "app/rust/crates/operation_protocol/",
             "app/rust/crates/trusted_owner_catalog/",
             "app/rust/services/temporal_orchestrator/",
         ),
         "lock_crates": {"acquisition", "operation_protocol", "trusted_owner_catalog",
-                        "temporal_acquisition_pure", "temporal_orchestrator",
+                        "temporal_acquisition_pure", "temporal_orchestrator", "temporal_pg_effects",
                         "integration_qdrant_temporal_e2e"},
         "on_unknown_global_input": True,
         "prepare": ACQUISITION_NATIVE_V2_PREPARE,
@@ -1250,7 +1280,7 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
-    "dataforseo_owner_pg_v1",
+    "dataforseo_owner_pg_v1", "external_source_attestation_pg_v1",
     "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
     "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
@@ -1336,7 +1366,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
     ),
     "temporal_acquisition": (
-        ("acquisition_native_v2", "acquisition_native_v2_", 1),
+        ("acquisition_native_v2", "acquisition_native_v2_", 2),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
@@ -1347,6 +1377,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "pg_app_truth": (
         ("truth_adjudication_integrity", "truth_adjudication_", 3),
         ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
+        ("external_source_attestation_pg_v1", "external_source_attestation_pg_", 1),
     ),
     "pg_app_cms": (("cms_review_revision", "cms_revision_", 4),),
     "pg_app_planning": (("planning_atomicity", "planning_atomic_", 6),),

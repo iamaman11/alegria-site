@@ -316,3 +316,425 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
             if a.workflow_id.starts_with("alegria-owner-operation-v2-")
     )).count(), 0, "invalid DTO must never reach executable owner Child");
 }
+
+/// An operator-only Start needs TWO authorities absent from the direct
+/// Temporal Worker E2E above: the already existing independently issued
+/// business root and a separately persisted source-issuer record. Neither
+/// the private intent nor a user-authored provenance string can mint one.
+///
+/// This test deliberately simulates issuance from a tenant-attributed raw
+/// snapshot; it does not claim a production authenticated HTML-to-DTO
+/// transformer, a user session, or published siteArchitect Start capability.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_source_issuer() {
+    use acquisition::operation_owner_schema_json::acquisition_owner_schemas;
+    use acquisition::operations::{ClassifySourcePage, ClassifySourcePageInput};
+    use acquisition::source_relevance::PageUtilityClassifierOutput;
+    use operation_protocol::{
+        operation_dag_parent_workflow_id_v2, owner_content_hash, Operation,
+        OperationDagReceiptV1, PlanHash, SiteLabExpectedStartV1,
+        SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        OPERATION_DAG_PARENT_QUEUE_V2,
+    };
+
+    #[derive(serde::Serialize)]
+    struct ExactSourceStartIntent<'a> {
+        schema_revision: u16,
+        run: &'a operation_protocol::OperationDagRunV6,
+        context_key: &'a str,
+        expected: &'a SiteLabExpectedStartV1,
+        expires_at_unix_seconds: u64,
+    }
+    fn expected_for(run: &operation_protocol::OperationDagRunV6) -> SiteLabExpectedStartV1 {
+        SiteLabExpectedStartV1 {
+            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+            plan_hash: run.plan.hash.clone(),
+            command_hashes: run
+                .owner_commands
+                .iter()
+                .map(|(id, wire)| (id.clone(), owner_content_hash(&wire.command_bytes)))
+                .collect(),
+            source_payload_hashes: run
+                .admitted
+                .iter()
+                .map(|(id, source)| (id.clone(), owner_content_hash(&source.payload)))
+                .collect(),
+        }
+    }
+
+    let build_id = env::var("GITHUB_SHA").expect("exact binary SHA for native source Start");
+    assert_eq!(build_id.len(), 40);
+    let tenant = "ci-native-acquisition-owner";
+    let context = format!("acq-{}", Uuid::new_v4().simple());
+    let record_id = Uuid::new_v4();
+    let provenance = format!("source-record-v1:{record_id}");
+    let payload = serde_json::to_vec(&ClassifySourcePageInput {
+        url: "https://ci-native-source.example.test/directory".into(),
+        title: "Captured directory page".into(),
+        raw_text: "All countries".into(),
+    })
+    .unwrap();
+    let (mut run, routes) =
+        acquisition_native_v2_case(ClassifySourcePage::contract(), payload.clone(), &build_id);
+    run.plan
+        .external_artifacts
+        .get_mut(&"source".into())
+        .unwrap()
+        .provenance = provenance.clone();
+    run.admitted.get_mut(&"source".into()).unwrap().provenance = provenance;
+    run.plan.hash = PlanHash(String::new());
+    run.plan = run.plan.clone().seal(routes.catalog()).unwrap();
+    routes.validate_run_routes(&run).unwrap();
+    assert_eq!(run.plan.scope.tenant_id, tenant);
+
+    // Exact root-owned structural catalog: no user-supplied schema or Task
+    // Queue may acquire source-issuer/owner authority.
+    let contract = routes
+        .catalog()
+        .contract(&run.pinned_routes[0].operation)
+        .unwrap();
+    let schemas = acquisition_owner_schemas().unwrap();
+    let owner_pin = &schemas[&contract.reference];
+    owner_pin.validate(contract).unwrap();
+    let catalog = SiteLabV2CiRootCatalog::new();
+    catalog.install(&serde_json::json!({
+        "schema_revision":3,
+        "entries":[{
+            "contract":contract,
+            "route":run.pinned_routes[0],
+            "parameter_schema":{"type":"object","additionalProperties":false},
+            "owner_schema":owner_pin
+        }]
+    }));
+    let installed = trusted_owner_catalog::load_trusted_owner_bundle(&catalog.0).unwrap();
+    installed
+        .verify_caller_schema(&contract.reference, owner_pin)
+        .unwrap();
+
+    let pg = PostgresHarness::start()
+        .await
+        .expect("disposable PostgreSQL source and business issuers");
+    mixed_v2_install_native_admissions(&pg.pool).await;
+    sqlx::raw_sql(include_str!(
+        "../../../../../db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql"
+    ))
+    .execute(&pg.pool)
+    .await
+    .expect("install independent source attestation migration on disposable PG");
+
+    // The raw snapshot's content digest is independent of the transformed
+    // typed JSON payload digest; this test never equates the two.
+    let raw_html = "<html><title>Captured directory page</title>All countries</html>";
+    let raw_hash = owner_content_hash(raw_html.as_bytes());
+    sqlx::query(
+        "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
+         VALUES ($1,'ES','tourist','BY')",
+    )
+    .bind(&context)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id) VALUES ($1,$2)",
+    )
+    .bind(&context)
+    .bind(tenant)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let source_page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages(url,domain,dtype,tenant_id,raw_html,content_hash)
+         VALUES ($1,'ci-native-source.example.test','government',$2,$3,$4)
+         RETURNING id",
+    )
+    .bind("https://ci-native-source.example.test/directory")
+    .bind(tenant)
+    .bind(raw_html)
+    .bind(&raw_hash)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+
+    let nonce = Uuid::new_v4().simple().to_string();
+    let business_role = format!("acq_business_{nonce}");
+    let source_role = format!("acq_source_{nonce}");
+    let reader_role = format!("acq_start_reader_{nonce}");
+    const PASSWORD: &str = "disposable_acquisition_source_only";
+    // These identifiers are exact ASCII prefixes + generated hex and only
+    // reach the container owned by this CI test. Role powers are disjoint.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {business_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {source_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {reader_role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         GRANT CONNECT ON DATABASE alegria TO {business_role},{source_role},{reader_role};
+         GRANT USAGE ON SCHEMA pipeline TO {business_role},{source_role},{reader_role};
+         GRANT USAGE ON SCHEMA raw TO {source_role};
+         GRANT INSERT ON pipeline.operation_dag_business_runs_v1 TO {business_role};
+         GRANT INSERT,UPDATE(revoked_at)
+             ON pipeline.operation_dag_external_source_attestations_v1 TO {source_role};
+         GRANT SELECT ON raw.pages TO {source_role};
+         GRANT SELECT ON pipeline.operation_dag_business_runs_v1,
+             pipeline.operation_dag_external_source_attestations_v1 TO {reader_role};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .expect("provision independently credentialed business/source/reader roles");
+    for role in [&business_role, &source_role, &reader_role] {
+        sqlx::query(
+            "INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)",
+        )
+        .bind(role)
+        .bind(tenant)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    }
+    let restricted_url = |role: &str| {
+        let prefix = "postgres://postgres:postgres_password@";
+        assert!(pg.database_url.starts_with(prefix));
+        pg.database_url
+            .replacen(prefix, &format!("postgres://{role}:{PASSWORD}@"), 1)
+    };
+    let business_pool = sqlx::PgPool::connect(&restricted_url(&business_role))
+        .await
+        .unwrap();
+    let source_pool = sqlx::PgPool::connect(&restricted_url(&source_role))
+        .await
+        .unwrap();
+    let reader_pool = sqlx::PgPool::connect(&restricted_url(&reader_role))
+        .await
+        .unwrap();
+
+    let temporal = TemporalHarness::start()
+        .await
+        .expect("disposable native Temporal for authorized Acquisition Start");
+    let parent_bin = binary("INTEGRATION_EFFECT_DAG_WORKER_BIN");
+    let acquisition_bin = binary("INTEGRATION_ACQUISITION_PURE_OWNER_BIN");
+    let pg_operator_bin = binary("INTEGRATION_PG_EFFECT_WORKER_BIN");
+    let _parent = ChildGuard(Some(
+        Command::new(&parent_bin)
+            .env("ALLOW_OPERATION_DAG_V2_WITH_OWNER_VALIDATION", "true")
+            .env("TEMPORAL_ORCHESTRATOR_TASK_QUEUE", OPERATION_DAG_PARENT_QUEUE_V2)
+            .env("TEMPORAL_OPERATION_DAG_CATALOG_PATH", &catalog.0)
+            .env("WORKER_BUILD_ID", &build_id)
+            .env("TEMPORAL_URL", &temporal.temporal_url)
+            .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env_remove("DATABASE_URL")
+            .spawn()
+            .expect("native V2 generic parent"),
+    ));
+    let _owner = ChildGuard(Some(
+        Command::new(&acquisition_bin)
+            .env("ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1", "true")
+            .env("WORKER_BUILD_ID", &build_id)
+            .env("TEMPORAL_URL", &temporal.temporal_url)
+            .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env_remove("DATABASE_URL")
+            .spawn()
+            .expect("native pure Acquisition owner"),
+    ));
+    let client = connect_client(
+        &temporal.temporal_url,
+        format!("ci-acquisition-trusted-source-{}", Uuid::new_v4()),
+        &temporal.namespace,
+    )
+    .await
+    .unwrap();
+
+    let private = MixedV2PrivateLocatorFiles::new();
+    let reader_dsn = private.request("acq-start-reader-dsn", &restricted_url(&reader_role));
+    let deadline = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 300;
+    let make_intent = |candidate: &operation_protocol::OperationDagRunV6, label: &str| {
+        let expected = expected_for(candidate);
+        private.request(
+            label,
+            &serde_json::to_string(&ExactSourceStartIntent {
+                schema_revision: 1,
+                run: candidate,
+                context_key: &context,
+                expected: &expected,
+                expires_at_unix_seconds: deadline,
+            })
+            .unwrap(),
+        )
+    };
+    let invoke = |request: &std::path::Path| {
+        Command::new(&pg_operator_bin)
+            .arg("--operator-start-single-v2")
+            .arg(request)
+            .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
+            .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
+            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
+            .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &catalog.0)
+            .env_remove("DATABASE_URL")
+            .output()
+            .expect("native exact-source single-step operator Start")
+    };
+    let parent_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+    let intent_file = make_intent(&run, "acquisition-source-authorized-intent");
+    let without_business = invoke(&intent_file);
+    assert!(!without_business.status.success());
+    assert!(client
+        .get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
+        .describe(WorkflowDescribeOptions::builder().build())
+        .await
+        .is_err());
+
+    sqlx::query(
+        "INSERT INTO pipeline.operation_dag_business_runs_v1
+           (run_id,tenant_id,context_key,plan_hash,parent_workflow_id,expires_at)
+         VALUES ($1,$2,$3,$4,$5,clock_timestamp()+interval '1 hour')",
+    )
+    .bind(Uuid::parse_str(&run.plan.scope.run_id).unwrap())
+    .bind(tenant)
+    .bind(&context)
+    .bind(run.plan.hash.as_str())
+    .bind(&parent_id)
+    .execute(&business_pool)
+    .await
+    .expect("independent tenant business issuer");
+    let without_source = invoke(&intent_file);
+    assert!(!without_source.status.success());
+    let without_source_json: serde_json::Value =
+        serde_json::from_slice(&without_source.stdout).unwrap();
+    assert_eq!(
+        without_source_json["code"],
+        "independent_external_source_attestation_unavailable"
+    );
+    assert!(client
+        .get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
+        .describe(WorkflowDescribeOptions::builder().build())
+        .await
+        .is_err());
+
+    let source_schema = &run.admitted[&"source".into()].schema;
+    sqlx::query(
+        "INSERT INTO pipeline.operation_dag_external_source_attestations_v1
+           (record_id,run_id,tenant_id,context_key,plan_hash,
+            artifact_id,artifact_schema,payload_hash,
+            source_page_id,source_page_content_hash,expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,clock_timestamp()+interval '5 minutes')",
+    )
+    .bind(record_id)
+    .bind(Uuid::parse_str(&run.plan.scope.run_id).unwrap())
+    .bind(tenant)
+    .bind(&context)
+    .bind(run.plan.hash.as_str())
+    .bind("source")
+    .bind(sqlx::types::Json(source_schema))
+    .bind(owner_content_hash(&payload))
+    .bind(source_page_id)
+    .bind(raw_hash)
+    .execute(&source_pool)
+    .await
+    .expect("separately authenticated raw-snapshot source issuer");
+    let cannot_mint_business: bool = sqlx::query_scalar(
+        "SELECT has_table_privilege(current_user,
+            'pipeline.operation_dag_business_runs_v1','INSERT')",
+    )
+    .fetch_one(&source_pool)
+    .await
+    .unwrap();
+    assert!(!cannot_mint_business);
+    let cannot_mint_source: bool = sqlx::query_scalar(
+        "SELECT has_table_privilege(current_user,
+            'pipeline.operation_dag_external_source_attestations_v1','INSERT')",
+    )
+    .fetch_one(&reader_pool)
+    .await
+    .unwrap();
+    assert!(!cannot_mint_source);
+
+    // An attacker may know the exact record UUID and create an internally
+    // consistent *new expected hash*. The independently persisted source
+    // digest must still reject the modified payload before Temporal Start.
+    let mut forged = run.clone();
+    forged
+        .admitted
+        .get_mut(&"source".into())
+        .unwrap()
+        .payload
+        .push(b' ');
+    let forged_response = invoke(&make_intent(&forged, "acquisition-source-forged-payload"));
+    assert!(!forged_response.status.success());
+    let forged_json: serde_json::Value =
+        serde_json::from_slice(&forged_response.stdout).unwrap();
+    assert_eq!(
+        forged_json["code"],
+        "independent_external_source_attestation_unavailable"
+    );
+    assert!(client
+        .get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
+        .describe(WorkflowDescribeOptions::builder().build())
+        .await
+        .is_err());
+
+    let successful = invoke(&intent_file);
+    assert!(
+        successful.status.success(),
+        "trusted source operator Start failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&successful.stdout),
+        String::from_utf8_lossy(&successful.stderr)
+    );
+    let started: serde_json::Value = serde_json::from_slice(&successful.stdout).unwrap();
+    assert_eq!(started["status"], "started_business_root_verified_owner_unadmitted");
+    assert_eq!(
+        started["source_authentication"],
+        "source_record_independently_issued_hash_verified_at_start"
+    );
+    assert_eq!(started["parent_workflow_id"], parent_id);
+    assert_eq!(started["owner_admission"], "not_issued_by_start");
+    assert!(!invoke(&intent_file).status.success(), "duplicate Start must fail");
+
+    let parent = client.get_workflow_handle::<UntypedWorkflow>(parent_id);
+    let done = timeout(
+        Duration::from_secs(90),
+        parent.get_result(WorkflowGetResultOptions::default()),
+    )
+    .await
+    .expect("native source-verified Acquisition result timed out")
+    .expect("native source-verified Acquisition failed");
+    let receipt: OperationDagReceiptV1 = done.to_value(&PayloadConverter::serde_json());
+    assert_eq!(receipt.order, vec!["one_step".into()]);
+    let classified: PageUtilityClassifierOutput =
+        serde_json::from_slice(&receipt.artifacts[&"result".into()].payload).unwrap();
+    assert!(!classified.allow_structural_extraction);
+    let history = parent
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .into_events()
+        .await
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|e| matches!(
+                &e.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                    if a.workflow_id.starts_with("alegria-owner-validate-v1-")
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|e| matches!(
+                &e.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                    if a.workflow_id.starts_with("alegria-owner-operation-v2-")
+            ))
+            .count(),
+        1
+    );
+    business_pool.close().await;
+    source_pool.close().await;
+    reader_pool.close().await;
+}

@@ -14,6 +14,7 @@ use thiserror::Error;
 
 pub mod dag_machine;
 pub mod effect_child_v4;
+pub mod external_source_attestation_v1;
 pub mod json_budget;
 pub mod owner_dispatch;
 mod owner_schema_json;
@@ -24,6 +25,11 @@ pub use effect_child_v4::{
     canonical_effect_dispatch_input_bytes, checked_execution_key, BoundEffectInputV4,
     EffectChildInvocationV4, EffectChildProtocolError, EffectChildResultV4,
     TemporalExecutionIdentityV4, EFFECT_CHILD_SCHEMA_REVISION,
+};
+pub use external_source_attestation_v1::{
+    verify_external_source_record_v1, ExternalSourceAdmissionErrorV1,
+    TrustedExternalSourceRecordV1, VerifiedExternalSourceV1,
+    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
 };
 pub use json_budget::{
     enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES, DAG_MAX_NODES, DAG_MAX_RESULT_BYTES,

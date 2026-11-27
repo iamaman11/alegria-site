@@ -15,7 +15,9 @@ use std::{
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    OperationDagRunV6, SiteLabExpectedStartV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE_V2,
+    verify_external_source_record_v1, ArtifactId, OperationDagRunV6, PlanHash,
+    SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedRouteCatalog,
+    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
     OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
@@ -27,7 +29,7 @@ use temporalio_common::data_converters::{PayloadConverter, RawValue};
 use tokio::time::timeout;
 use url::Url;
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 
 use super::{operator_dag_governance, operator_dag_read_v2};
 
@@ -50,6 +52,7 @@ enum SingleStartStage {
     OperatorConfiguration,
     PrivateIntent,
     IndependentBusinessRoot,
+    ExternalSourceAttestation,
     TemporalConnection,
     FinalPreflight,
     StartSubmitted,
@@ -68,6 +71,9 @@ impl SingleStartStage {
             Self::OperatorConfiguration => "operator_configuration_unavailable",
             Self::PrivateIntent => "private_intent_invalid_or_untrusted",
             Self::IndependentBusinessRoot => "independent_business_root_unavailable",
+            Self::ExternalSourceAttestation => {
+                "independent_external_source_attestation_unavailable"
+            }
             Self::TemporalConnection => "temporal_connection_unavailable",
             Self::FinalPreflight => "authorization_expired_or_revoked",
             Self::StartSubmitted => "temporal_start_result_unknown",
@@ -87,6 +93,9 @@ impl SingleStartStage {
             }
             Self::IndependentBusinessRoot | Self::FinalPreflight => {
                 "Check independent tenant business-root issuance and the finite request validity window."
+            }
+            Self::ExternalSourceAttestation => {
+                "Have the separately credentialed source issuer commit one immutable, tenant-bound source record per Acquisition input before submitting any Temporal Start."
             }
             Self::TemporalConnection => {
                 "Restore the independently configured loopback Temporal endpoint before requesting a fresh intent."
@@ -283,6 +292,111 @@ async fn assert_active_independent_business_root(
     Ok(())
 }
 
+/// Only Acquisition is enrolled in mandatory source attestation in this
+/// version. Keep other historical one-node Start flows unchanged until each
+/// respective owner has its own source-ingress issuer and physical acceptance.
+/// Pinned owner routes have already passed exact trusted-catalog preflight.
+fn requires_acquisition_source_attestation(run: &OperationDagRunV6) -> bool {
+    run.plan.nodes.iter().any(|node| {
+        run.pinned_routes.iter().any(|route| {
+            route.operation == node.operation && route.owner.as_str() == "acquisition"
+        })
+    })
+}
+
+/// Provenance is just a lookup selector; the bytes in the plan cannot mint
+/// the row. The separate SQL principal, RLS, issuer-only INSERT/revocation,
+/// exact immutable binding and live validity window provide its authority.
+fn source_record_uuid(provenance: &str) -> Result<uuid::Uuid> {
+    let supplied = provenance
+        .strip_prefix("source-record-v1:")
+        .context("Acquisition input lacks independently issued source-record identity")?;
+    let record_id = uuid::Uuid::parse_str(supplied)
+        .context("Acquisition source-record identity is not a UUID")?;
+    ensure!(
+        !record_id.is_nil() && record_id.to_string() == supplied,
+        "Acquisition source-record identity must be one canonical nonnil UUID"
+    );
+    Ok(record_id)
+}
+
+async fn assert_active_independent_acquisition_sources(
+    pool: &PgPool,
+    tenant: &str,
+    intent: &SingleOperationStartIntentV1,
+) -> Result<usize> {
+    if !requires_acquisition_source_attestation(&intent.run) {
+        return Ok(0);
+    }
+    ensure!(
+        !intent.run.admitted.is_empty()
+            && intent.run.admitted.len() == intent.run.plan.external_artifacts.len(),
+        "Acquisition owner requires a complete independently attested external source set"
+    );
+    for (artifact_id, artifact) in &intent.run.admitted {
+        let record_id = source_record_uuid(&artifact.provenance)?;
+        // No caller-supplied receipt is trusted. Only rows independently
+        // loaded through the restricted tenant-bound SELECT-only PG LOGIN
+        // are interpreted as trusted source records. Revocation/expiry is
+        // checked by PG at the time of the query and again in typed Rust.
+        let row = sqlx::query(
+            "SELECT record_id::text AS record_id, tenant_id,context_key,
+                    run_id::text AS run_id,plan_hash,artifact_id,artifact_schema,
+                    payload_hash,
+                    floor(extract(epoch from issued_at))::bigint AS issued_at_unix_seconds,
+                    floor(extract(epoch from expires_at))::bigint AS expires_at_unix_seconds,
+                    floor(extract(epoch from revoked_at))::bigint AS revoked_at_unix_seconds
+             FROM pipeline.operation_dag_external_source_attestations_v1
+             WHERE record_id=$1 AND run_id=$2 AND tenant_id=$3 AND context_key=$4
+               AND plan_hash=$5 AND artifact_id=$6
+               AND revoked_at IS NULL
+               AND issued_at <= clock_timestamp()
+               AND expires_at > clock_timestamp() + interval '90 seconds'",
+        )
+        .bind(record_id)
+        .bind(uuid::Uuid::parse_str(&intent.run.plan.scope.run_id)?)
+        .bind(tenant)
+        .bind(&intent.context_key)
+        .bind(intent.run.plan.hash.as_str())
+        .bind(artifact_id.as_str())
+        .fetch_optional(pool)
+        .await?
+        .context("independent Acquisition source record absent, expired or revoked")?;
+        let record = TrustedExternalSourceRecordV1 {
+            schema_revision: EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+            record_id: row.try_get("record_id")?,
+            tenant_id: row.try_get("tenant_id")?,
+            context_key: row.try_get("context_key")?,
+            run_id: row.try_get("run_id")?,
+            plan_hash: PlanHash(row.try_get("plan_hash")?),
+            artifact_id: ArtifactId(row.try_get("artifact_id")?),
+            schema: row
+                .try_get::<sqlx::types::Json<operation_protocol::ArtifactSchema>, _>("artifact_schema")?
+                .0,
+            payload_hash: row.try_get("payload_hash")?,
+            issued_at_unix_seconds: row.try_get("issued_at_unix_seconds")?,
+            expires_at_unix_seconds: row.try_get("expires_at_unix_seconds")?,
+            revoked_at_unix_seconds: row.try_get("revoked_at_unix_seconds")?,
+        };
+        let now = i64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock before Unix epoch")?
+                .as_secs(),
+        )
+        .context("source attestation clock exceeds signed Unix seconds")?;
+        verify_external_source_record_v1(
+            &record,
+            &intent.run,
+            &intent.context_key,
+            artifact_id,
+            now,
+        )
+        .context("independent Acquisition source record does not match typed immutable input")?;
+    }
+    Ok(intent.run.admitted.len())
+}
+
 fn one_step_start_options(workflow_id: String) -> WorkflowStartOptions {
     WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE_V2, workflow_id)
         .id_reuse_policy(WorkflowIdReusePolicy::RejectDuplicate)
@@ -352,6 +466,13 @@ async fn try_start_from_private_request(
     )
     .await
     .context("business-root proof timed out before Temporal Start")??;
+    *stage = SingleStartStage::ExternalSourceAttestation;
+    timeout(
+        Duration::from_secs(15),
+        assert_active_independent_acquisition_sources(&pool, &config.tenant, &intent),
+    )
+    .await
+    .context("Acquisition source proof timed out before Temporal Start")??;
     let workflow_id = operation_dag_parent_workflow_id_v2(&intent.run.plan.scope.run_id);
     *parent_workflow_id = Some(workflow_id.clone());
     *stage = SingleStartStage::TemporalConnection;
@@ -381,6 +502,17 @@ async fn try_start_from_private_request(
     )
     .await
     .context("final business-root proof timed out before Temporal Start")??;
+    // A source issuer may revoke a previously checked record while the
+    // operator is connecting to Temporal. Recheck every Acquisition source
+    // immediately before submission, using the independent SQL authority.
+    *stage = SingleStartStage::ExternalSourceAttestation;
+    timeout(
+        Duration::from_secs(15),
+        assert_active_independent_acquisition_sources(&pool, &config.tenant, &intent),
+    )
+    .await
+    .context("final Acquisition source proof timed out before Temporal Start")??;
+    *stage = SingleStartStage::FinalPreflight;
     // Root SELECT is an await point. The operator intent could expire while
     // PostgreSQL responds, even though it was valid when the query began.
     // Check its validity again at the *last* synchronous point before RPC.
@@ -420,7 +552,11 @@ async fn try_start_from_private_request(
             "parent_workflow_id":workflow_id,
             "parent_workflow_run_id":server_run_id,
             "plan_hash":intent.run.plan.hash,
-            "source_authentication":"not_attested",
+            "source_authentication":if requires_acquisition_source_attestation(&intent.run) {
+                "source_record_independently_issued_hash_verified_at_start"
+            } else {
+                "not_attested"
+            },
             "business_root":"independently_issued_active_at_start",
             "owner_admission":"not_issued_by_start",
             "execution":"not_confirmed",
@@ -432,6 +568,79 @@ async fn try_start_from_private_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use operation_protocol::{
+        ContractHash, ExecutionPlan, OperationNode, OperationRef, PinnedOwnerRouteV1, RunScope,
+        OPERATION_DAG_RUN_SCHEMA_REVISION_V6, PLAN_SCHEMA_REVISION,
+    };
+
+    fn one_step_candidate(owner: &str) -> OperationDagRunV6 {
+        let operation = OperationRef {
+            id: "acquisition.classify_source_page".into(),
+            revision: 1,
+        };
+        OperationDagRunV6 {
+            schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+            plan: ExecutionPlan {
+                schema_revision: PLAN_SCHEMA_REVISION,
+                scope: RunScope {
+                    tenant_id: "tenant-ci".into(),
+                    run_id: uuid::Uuid::new_v4().to_string(),
+                },
+                allowed_effects: BTreeSet::new(),
+                external_artifacts: BTreeMap::new(),
+                pinned_contracts: Vec::new(),
+                nodes: vec![OperationNode {
+                    instance: "one_step".into(),
+                    operation: operation.clone(),
+                    inputs: BTreeMap::new(),
+                    outputs: BTreeMap::new(),
+                    after: BTreeSet::new(),
+                    permitted_effects: BTreeSet::new(),
+                }],
+                hash: PlanHash(String::new()),
+            },
+            admitted: BTreeMap::new(),
+            owner_commands: BTreeMap::new(),
+            pinned_routes: vec![PinnedOwnerRouteV1 {
+                operation,
+                owner: owner.into(),
+                contract_hash: ContractHash(String::new()),
+                workflow_type: String::new(),
+                task_queue: String::new(),
+                build_id: String::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn acquisition_start_gate_is_owner_specific_and_never_trusts_self_described_provenance() {
+        let mut run = one_step_candidate("acquisition");
+        assert!(requires_acquisition_source_attestation(&run));
+        run.pinned_routes[0].owner = "truth_domain".into();
+        assert!(!requires_acquisition_source_attestation(&run));
+        run.pinned_routes[0].owner = "acquisition".into();
+        run.pinned_routes[0].operation.id = "acquisition.other".into();
+        assert!(!requires_acquisition_source_attestation(&run));
+
+        let issued_id = "0e2dddf2-0f45-46ed-89dd-3dce7e8b247d";
+        assert_eq!(
+            source_record_uuid(&format!("source-record-v1:{issued_id}"))
+                .unwrap()
+                .to_string(),
+            issued_id
+        );
+        for forged in [
+            "untrusted-provenance",
+            "source-record-v1:",
+            "source-record-v1:00000000-0000-0000-0000-000000000000",
+            "source-record-v1:0E2DDDF2-0F45-46ED-89DD-3DCE7E8B247D",
+            "source-record-v1:0e2dddf2-0f45-46ed-89dd-3dce7e8b247d trailing",
+        ] {
+            assert!(source_record_uuid(forged).is_err(), "{forged}");
+        }
+    }
 
     #[test]
     fn single_step_start_requires_exact_operator_opt_in_and_tenant() {
@@ -514,6 +723,7 @@ mod tests {
             SingleStartStage::OperatorConfiguration,
             SingleStartStage::PrivateIntent,
             SingleStartStage::IndependentBusinessRoot,
+            SingleStartStage::ExternalSourceAttestation,
             SingleStartStage::TemporalConnection,
             SingleStartStage::FinalPreflight,
         ] {
@@ -524,6 +734,18 @@ mod tests {
             assert!(report["parent_workflow_id"].is_null());
             assert_ne!(report["code"], "temporal_start_result_unknown");
         }
+        let source_denied = serde_json::to_value(start_failure_report(
+            SingleStartStage::ExternalSourceAttestation,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(
+            source_denied["code"],
+            "independent_external_source_attestation_unavailable"
+        );
+        assert_eq!(source_denied["status"], "refused_before_temporal_start");
+        assert!(!source_denied.to_string().contains("raw_text"));
         let report = serde_json::to_value(start_failure_report(
             SingleStartStage::StartSubmitted,
             Some("29b23f2a-f6ea-4571-b2dc-2630cdbf3aef"),
