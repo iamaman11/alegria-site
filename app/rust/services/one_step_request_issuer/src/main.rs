@@ -342,38 +342,70 @@ async fn execute(path: &Path) -> Result<()> {
         env::var(ENABLE_ENV).as_deref() == Ok("true"),
         "request issuer must be explicitly enabled by the operator"
     );
-    let bytes = private_file::read_private_file(path)?;
-    let intent = issue_json::decode_issuance_intent(&bytes)?;
-    let catalog_path =
-        env::var(CATALOG_FILE_ENV).context("missing independently installed owner catalog path")?;
-    let catalog = catalog::read_installed_catalog(Path::new(&catalog_path))?;
+    let bytes = private_file::read_private_file(path).context("issuer_phase_private_input")?;
+    let intent =
+        issue_json::decode_issuance_intent(&bytes).context("issuer_phase_private_input")?;
+    let catalog_path = env::var(CATALOG_FILE_ENV)
+        .context("missing independently installed owner catalog path")
+        .context("issuer_phase_catalog")?;
+    let catalog = catalog::read_installed_catalog(Path::new(&catalog_path))
+        .context("issuer_phase_catalog")?;
     // This call checks native V6 route/command/source hashes against a private
     // SQL-approved event and the independently installed provider-neutral
     // owner catalog. Neither the request nor issuer creates authorization.
-    let pool = restricted_grant_pool().await?;
-    let mut transaction = pool.begin().await?;
+    let pool = restricted_grant_pool()
+        .await
+        .context("issuer_phase_sql_principal")?;
+    let mut transaction = pool.begin().await.context("issuer_phase_sql_principal")?;
     let tenant: Option<String> = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
         .fetch_one(&mut *transaction)
-        .await?;
-    let tenant = tenant.context("request issuer SQL login has no tenant identity")?;
+        .await
+        .context("issuer_phase_sql_principal")?;
+    let tenant = tenant
+        .context("request issuer SQL login has no tenant identity")
+        .context("issuer_phase_sql_principal")?;
     ensure!(
         tenant == intent.run.plan.scope.tenant_id,
-        "private request tenant differs from authenticated SQL login"
+        "issuer_phase_sql_principal"
     );
     let approved =
         independently_approved_request(&mut transaction, intent.authorization_event_id, &tenant)
-            .await?;
-    let grant = verified_private_intent(&intent, &approved, &catalog)?;
-    insert_preapproved_grant(&mut transaction, &intent, &grant).await?;
+            .await
+            .context("issuer_phase_approval_lookup")?;
+    let grant = verified_private_intent(&intent, &approved, &catalog)
+        .context("issuer_phase_typed_preflight")?;
+    insert_preapproved_grant(&mut transaction, &intent, &grant)
+        .await
+        .context("issuer_phase_grant_insert")?;
     transaction
         .commit()
         .await
-        .context("one-step durable SQL issuance commit could not be confirmed")?;
+        .context("one-step durable SQL issuance commit could not be confirmed")
+        .context("issuer_phase_commit_unknown")?;
     println!(
         "{}",
         issue_json::issued_report(intent.request_id, &grant.canonical_run_id)
     );
     Ok(())
+}
+
+/// Only fixed stage labels can leave this process. Never log the underlying
+/// anyhow chain: it may contain SQL diagnostics, credentials or private paths.
+fn redacted_failure_phase(error: &anyhow::Error) -> &'static str {
+    const STAGES: &[&str] = &[
+        "issuer_phase_private_input",
+        "issuer_phase_catalog",
+        "issuer_phase_sql_principal",
+        "issuer_phase_approval_lookup",
+        "issuer_phase_typed_preflight",
+        "issuer_phase_grant_insert",
+        "issuer_phase_commit_unknown",
+    ];
+    STAGES
+        .iter()
+        .copied()
+        .find(|stage| error.chain().any(|cause| cause.to_string() == *stage))
+        .unwrap_or("issuer_phase_other")
 }
 
 #[tokio::main]
@@ -394,10 +426,14 @@ async fn main() -> Result<()> {
     .await
     {
         Ok(()) => Ok(()),
-        Err(_) => {
+        Err(error) => {
             // Redact SQL credentials, exact principal/policy, source, command
             // bytes and filesystem paths. A failed COMMIT is NOT proof of
             // rollback. Do not silently repeat a one-time authorization.
+            eprintln!(
+                "one-step issuer {}: sensitive diagnostic withheld",
+                redacted_failure_phase(&error)
+            );
             println!("{}", issue_json::unknown_report());
             anyhow::bail!(
                 "one-step issuer refused or cannot confirm SQL commit; see redacted diagnostic"
@@ -409,6 +445,17 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use anyhow::anyhow;
+
+    #[test]
+    fn redacted_failure_phase_reports_only_reviewed_fixed_labels() {
+        let error =
+            anyhow!("postgres_password=must-not-leak").context("issuer_phase_typed_preflight");
+        assert_eq!(redacted_failure_phase(&error), "issuer_phase_typed_preflight");
+        let error = anyhow!("private path and SQL must not appear");
+        assert_eq!(redacted_failure_phase(&error), "issuer_phase_other");
+    }
 
     #[test]
     fn canonical_run_uuid_and_context_are_required() {
