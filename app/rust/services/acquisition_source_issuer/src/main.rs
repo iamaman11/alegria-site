@@ -219,10 +219,11 @@ async fn issue_source(
     intent: &SourceIssuanceIntentV1,
     checked: &CheckedSource<'_>,
 ) -> Result<String> {
-    let tenant: String = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
-        .fetch_one(&mut **transaction)
-        .await?
-        .context("source issuer SQL login is not tenant authenticated")?;
+    let tenant_opt: Option<String> =
+        sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+            .fetch_one(&mut **transaction)
+            .await?;
+    let tenant = tenant_opt.context("source issuer SQL login is not tenant authenticated")?;
     ensure!(
         tenant == intent.run.plan.scope.tenant_id,
         "source issuance tenant differs from database login tenant"
