@@ -344,18 +344,17 @@ async fn execute(path: &Path) -> Result<()> {
     );
     let bytes = private_file::read_private_file(path)?;
     let intent = issue_json::decode_issuance_intent(&bytes)?;
-    let catalog_path = env::var(CATALOG_FILE_ENV)
-        .context("missing independently installed owner catalog path")?;
+    let catalog_path =
+        env::var(CATALOG_FILE_ENV).context("missing independently installed owner catalog path")?;
     let catalog = catalog::read_installed_catalog(Path::new(&catalog_path))?;
     // This call checks native V6 route/command/source hashes against a private
     // SQL-approved event and the independently installed provider-neutral
     // owner catalog. Neither the request nor issuer creates authorization.
     let pool = restricted_grant_pool().await?;
     let mut transaction = pool.begin().await?;
-    let tenant: Option<String> =
-        sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
-            .fetch_one(&mut *transaction)
-            .await?;
+    let tenant: Option<String> = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+        .fetch_one(&mut *transaction)
+        .await?;
     let tenant = tenant.context("request issuer SQL login has no tenant identity")?;
     ensure!(
         tenant == intent.run.plan.scope.tenant_id,
@@ -389,7 +388,11 @@ async fn main() -> Result<()> {
             && args.next().is_none(),
         "usage: one_step_request_issuer --issue-request-v1 /absolute/private/intent.json"
     );
-    match execute(Path::new(private_path.as_ref().expect("private path present"))).await {
+    match execute(Path::new(
+        private_path.as_ref().expect("private path present"),
+    ))
+    .await
+    {
         Ok(()) => Ok(()),
         Err(_) => {
             // Redact SQL credentials, exact principal/policy, source, command

@@ -14,14 +14,13 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
-    preflight_issued_one_step_request_for_reservation_v1,
-    operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    verify_external_source_record_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
-    OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
-    OperationDagRunV6, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
-    TrustedOneStepRequestGrantV1, TrustedRouteCatalog, OperationRef,
-    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
-    OPERATION_DAG_PARENT_TYPE_V2,
+    operation_dag_parent_workflow_id_v2, preflight_issued_one_step_request_for_reservation_v1,
+    preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1, ArtifactId,
+    IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
+    OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationRef,
+    PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
+    TrustedRouteCatalog, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -224,10 +223,10 @@ fn checked_grant_config(
     );
     let principal = read(GRANTED_PRINCIPAL_ENV)
         .context("missing independently configured operator principal")?;
-    let policy = read(GRANTED_POLICY_ENV)
-        .context("missing independently configured principal policy")?;
-    let context = read(GRANTED_CONTEXT_ENV)
-        .context("missing independently configured principal context")?;
+    let policy =
+        read(GRANTED_POLICY_ENV).context("missing independently configured principal policy")?;
+    let context =
+        read(GRANTED_CONTEXT_ENV).context("missing independently configured principal context")?;
     ensure!(
         bounded_policy_identifier(&principal)
             && bounded_policy_identifier(&policy)
@@ -274,7 +273,10 @@ async fn checked_one_shot_grant_pool(expected_tenant: &str) -> Result<PgPool> {
     )?;
     let url = String::from_utf8(bytes)?;
     let url = url.trim_end_matches(['\r', '\n']);
-    ensure!(!url.is_empty() && url.trim() == url, "invalid grant reserver DSN");
+    ensure!(
+        !url.is_empty() && url.trim() == url,
+        "invalid grant reserver DSN"
+    );
     let pool = PgPool::connect(url).await?;
     let role = sqlx::query(
         "SELECT current_user::text effective,session_user::text login,
@@ -309,7 +311,10 @@ async fn checked_one_shot_grant_pool(expected_tenant: &str) -> Result<PgPool> {
     )
     .fetch_optional(&pool)
     .await?;
-    ensure!(membership.is_none(), "one-shot reserver cannot SET ROLE or inherit privileges");
+    ensure!(
+        membership.is_none(),
+        "one-shot reserver cannot SET ROLE or inherit privileges"
+    );
     let foreign_write: Option<String> = sqlx::query_scalar(
         "SELECT n.nspname||'.'||c.relname
          FROM pg_catalog.pg_class c
@@ -324,7 +329,10 @@ async fn checked_one_shot_grant_pool(expected_tenant: &str) -> Result<PgPool> {
     )
     .fetch_optional(&pool)
     .await?;
-    ensure!(foreign_write.is_none(), "one-shot reserver has forbidden direct app writes");
+    ensure!(
+        foreign_write.is_none(),
+        "one-shot reserver has forbidden direct app writes"
+    );
     let actual_tenant: Option<String> =
         sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
             .fetch_one(&pool)
@@ -444,7 +452,10 @@ async fn sql_reserve_one_shot(
     .bind(nonce)
     .fetch_one(pool)
     .await?;
-    ensure!(accepted, "atomic one-shot reservation refused or already claimed");
+    ensure!(
+        accepted,
+        "atomic one-shot reservation refused or already claimed"
+    );
     Ok(())
 }
 
@@ -453,13 +464,12 @@ async fn sql_commit_unknown_before_temporal_start(
     request_id: uuid::Uuid,
     nonce: uuid::Uuid,
 ) -> Result<()> {
-    let accepted: bool = sqlx::query_scalar(
-        "SELECT pipeline.mark_operation_dag_one_step_start_unknown_v1($1,$2)",
-    )
-    .bind(request_id)
-    .bind(nonce)
-    .fetch_one(pool)
-    .await?;
+    let accepted: bool =
+        sqlx::query_scalar("SELECT pipeline.mark_operation_dag_one_step_start_unknown_v1($1,$2)")
+            .bind(request_id)
+            .bind(nonce)
+            .fetch_one(pool)
+            .await?;
     ensure!(accepted, "one-shot grant unknown-state write refused");
     Ok(())
 }
@@ -1220,10 +1230,11 @@ mod tests {
             GRANTED_CONTEXT_ENV => Some("site-a/research".into()),
             _ => None,
         };
-        let (principal, policy, context, decoded) =
-            checked_grant_config(trusted, &bytes).unwrap();
-        assert_eq!((principal.as_str(), policy.as_str(), context.as_str()),
-            ("principal-7", "site-limited-v1", "site-a/research"));
+        let (principal, policy, context, decoded) = checked_grant_config(trusted, &bytes).unwrap();
+        assert_eq!(
+            (principal.as_str(), policy.as_str(), context.as_str()),
+            ("principal-7", "site-limited-v1", "site-a/research")
+        );
         assert_eq!(decoded, limits);
         assert!(checked_grant_config(|_| None, &bytes).is_err());
         assert!(checked_grant_config(
@@ -1233,7 +1244,8 @@ mod tests {
                 trusted(key)
             },
             &bytes
-        ).is_err());
+        )
+        .is_err());
         assert!(checked_grant_config(trusted, b"{\"currency_code\":\"USD\"}").is_err());
         let mut reordered = serde_json::to_value(&limits).unwrap();
         reordered["unexpected_budget_override"] = serde_json::json!(0);
@@ -1273,12 +1285,14 @@ mod tests {
             SingleStartStage::GrantReservationUncertain,
             SingleStartStage::GrantUnknownTransitionUncertain,
         ] {
-            let report =
-                serde_json::to_value(start_failure_report(stage, None, None)).unwrap();
+            let report = serde_json::to_value(start_failure_report(stage, None, None)).unwrap();
             assert_eq!(report["status"], "grant_state_uncertain_start_not_sent");
             assert_eq!(report["execution"], "not_confirmed");
             assert_ne!(report["code"], "temporal_start_result_unknown");
-            assert!(report["next_action"].as_str().unwrap().contains("Do not retry"));
+            assert!(report["next_action"]
+                .as_str()
+                .unwrap()
+                .contains("Do not retry"));
         }
         let preflight = serde_json::to_value(start_failure_report(
             SingleStartStage::IndependentRequestGrant,
@@ -1295,7 +1309,10 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(consumed["status"], "grant_consumed_start_not_sent");
-        assert!(consumed["next_action"].as_str().unwrap().contains("Never retry"));
+        assert!(consumed["next_action"]
+            .as_str()
+            .unwrap()
+            .contains("Never retry"));
     }
 
     #[test]

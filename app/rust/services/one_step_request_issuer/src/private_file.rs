@@ -71,7 +71,10 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
                 ensure!(metadata.len() <= 2 * 1024 * 1024, "oversized private input");
                 opened_file = Some((opened, metadata.uid()));
             } else {
-                ensure!(metadata.is_dir(), "issuer private parent must be a directory");
+                ensure!(
+                    metadata.is_dir(),
+                    "issuer private parent must be a directory"
+                );
                 parents.push(metadata);
                 directory = opened;
             }
@@ -86,8 +89,13 @@ pub(crate) fn read_private_file(path: &Path) -> Result<Vec<u8>> {
             "issuer private parent must not be group/world-writable or foreign-owned"
         );
         let mut bytes = Vec::new();
-        file.by_ref().take(2 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-        ensure!(bytes.len() <= 2 * 1024 * 1024, "issuer input grew beyond limit");
+        file.by_ref()
+            .take(2 * 1024 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            bytes.len() <= 2 * 1024 * 1024,
+            "issuer input grew beyond limit"
+        );
         Ok(bytes)
     }
     #[cfg(not(unix))]
