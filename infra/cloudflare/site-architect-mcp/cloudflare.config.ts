@@ -6,11 +6,12 @@ import { bindings, defineConfig } from "cf/config";
 const publicRelease = process.env.SITE_ARCHITECT_ENABLE_PUBLIC_MCP === "yes";
 const resourceUrl = process.env.SITE_ARCHITECT_MCP_RESOURCE_URL;
 const issuerUrl = process.env.SITE_ARCHITECT_OAUTH_ISSUER_URL;
-const admissionWorker = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_WORKER;
+const admissionVpcServiceId = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID;
+const admissionUrl = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_URL;
 const authWorker = process.env.SITE_ARCHITECT_AUTH_WORKER;
 
-if (publicRelease && (!resourceUrl || !issuerUrl || !authWorker || !admissionWorker)) {
-  throw new Error("Public MCP requires exact resource URL, OAuth issuer, auth Worker and private admission Worker");
+if (publicRelease && (!resourceUrl || !issuerUrl || !authWorker || !admissionVpcServiceId || !admissionUrl)) {
+  throw new Error("Public MCP requires exact resource URL, OAuth issuer, auth Worker, private VPC Service and HTTPS admission URL");
 }
 if (publicRelease && (!resourceUrl?.startsWith("https://") || !issuerUrl?.startsWith("https://"))) {
   throw new Error("Public MCP OAuth endpoints must use HTTPS");
@@ -30,8 +31,9 @@ export default defineConfig({
       AUTH_SERVER: authWorker ? bindings.worker({ worker: authWorker }) : undefined,
       AUTH_SERVER_URL: issuerUrl ? bindings.text(issuerUrl) : undefined,
       MCP_SERVER_URL: resourceUrl ? bindings.text(resourceUrl) : undefined,
-      ONE_STEP_ADMISSION: admissionWorker
-        ? bindings.worker({ worker: admissionWorker })
+      PRIVATE_ADMISSION_URL: admissionUrl ? bindings.text(admissionUrl) : undefined,
+      ONE_STEP_ADMISSION: admissionVpcServiceId
+        ? bindings.vpcService({ id: admissionVpcServiceId })
         : undefined,
     },
   },

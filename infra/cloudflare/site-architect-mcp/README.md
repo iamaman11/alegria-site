@@ -17,7 +17,8 @@ canonical repository is `iamaman11/alegria-site`, Draft PR #95; `main` and
   tenant, principal, policy, operation, source, grant, endpoint or budget may
   establish authority.
 - The only mutating tool accepts an opaque `request_id` UUID. `ONE_STEP_ADMISSION`
-  is an optional **private service binding**; no binding means no Start.
+  is an optional **Workers VPC Service binding** to a fixed, private HTTP
+  ingress behind Cloudflare Tunnel; no binding means no Start.
   It receives only a 30-second HMAC-SHA256 proof over the OAuth issuer,
   resource, verified subject, exact scope, request UUID and fresh nonce.
   The signing key is a Cloudflare **secret**, never JSON arguments, a model
@@ -27,8 +28,11 @@ canonical repository is `iamaman11/alegria-site`, Draft PR #95; `main` and
   reuses the existing one-use SQL grant and Temporal operator. The native
   verifier uses a separate, private copy of the 32-byte key; the OAuth
   subject is pinned by the operator, never selected from request JSON.
-- A live HTTP/VPC/Tunnel transport from the private Service Binding to this
-  native operator is **not implemented here**. An eventual bridge must
+- The configured VPC binding fixes the private destination host and port;
+  `PRIVATE_ADMISSION_URL` supplies the exact HTTPS `/v1/one-step` request URL
+  and TLS SNI, and must match the private ingress certificate. No MCP tool
+  argument controls either. The private HTTP ingress on the native operator
+  host is **not implemented here**. That ingress must
   validate its trusted private caller and securely deliver the signed proof
   to the correct single-subject operator, where SQL checks the configured
   tenant/principal/ACL against the exact one-use grant, source,
@@ -64,7 +68,8 @@ operator must explicitly set:
 | `SITE_ARCHITECT_MCP_RESOURCE_URL` | Exact externally reachable HTTPS URL ending `/mcp` |
 | `SITE_ARCHITECT_OAUTH_ISSUER_URL` | HTTPS issuer that signed in and consented a real user |
 | `SITE_ARCHITECT_AUTH_WORKER` | Name of the separately verified auth server Worker providing `validateToken` |
-| `SITE_ARCHITECT_PRIVATE_ADMISSION_WORKER` | Separately vetted private admission Worker; required to enable the public route, otherwise Start blocked |
+| `SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID` | Existing private VPC Service ID configured for the native ingress via Cloudflare Tunnel; required for public release |
+| `SITE_ARCHITECT_PRIVATE_ADMISSION_URL` | Exact HTTPS URL ending `/v1/one-step` with hostname matching the private ingress TLS certificate; not a caller-selected endpoint |
 
 The resource Worker also requires secret `ADMISSION_SIGNING_KEY_HEX`: exactly
 64 lowercase hex digits (32 cryptographically random bytes). Provision it
@@ -78,17 +83,20 @@ private, permission-restricted file via
 authenticated user to one independently credentialed SQL Start principal;
 general multi-user ACL selection is not implemented and remains a gate.
 
-These are not interchangeable with a tunnel, SQL connection string, raw token,
-or public HTTP URL. An operator on a private Windows host will need an
-independently secured private route (Tunnel, VPC or another approved bridge)
-**after** this resource Worker. That path and the real authorization server do
-not exist in this PR. Do not set the release switch just to see MCP tools.
+These are not interchangeable with a SQL connection string, raw token or
+public HTTP URL. The native operator's protected-file reader requires Unix
+`openat`/no-follow/0600 semantics: on a Windows machine it must run inside a
+Linux VM, WSL2 or equivalent Unix environment, not as a native Windows
+process. A real Tunnel/VPC Service, private ingress host and authorization
+server do not exist in this PR. Do not set the release switch just to see MCP
+tools. Workers VPC is currently a beta Cloudflare product; validate its
+availability and TLS routing on the chosen account before release.
 
 ## Mandatory acceptance before user launch
 
 1. Provision and inspect IdP, real sign-in + consent, issuer, exact resource,
    PKCE S256, token expiry, revocation, scope and per-user ACL.
-2. Implement a private only admission service and independently test a stolen,
+2. Implement a private-only native HTTP ingress and independently test a stolen,
    forged, cross-tenant, revoked, repeated and expired subject/grant.
    The CI fixture signer for the private native operator is *not* a real
    OAuth login or a production identity-provider acceptance test.

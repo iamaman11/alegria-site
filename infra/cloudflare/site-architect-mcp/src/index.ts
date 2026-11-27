@@ -43,6 +43,7 @@ function createServer() {
         subject && validVerifiedSubject(subject) ? subject : undefined,
         request_id,
         releaseEnv.ADMISSION_SIGNING_KEY_HEX,
+        releaseEnv.PRIVATE_ADMISSION_URL,
       );
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],

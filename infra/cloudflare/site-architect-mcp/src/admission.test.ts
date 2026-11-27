@@ -5,6 +5,7 @@ import {
   parseAdmissionReply,
   sealOneStepAdmission,
   signedAdmissionMessage,
+  validPrivateAdmissionUrl,
   validRequestId,
   validVerifiedSubject,
   type AdmissionService,
@@ -14,6 +15,7 @@ import {
 
 const requestId = "d54eb078-c5e9-49ba-bc6e-c3a91fa778ca";
 const signingKeyHex = "ab".repeat(32);
+const privateAdmissionUrl = "https://operator.private.example.org/v1/one-step";
 const subject: VerifiedSubject = {
   issuer: "https://auth.example.org",
   subject: "verified-human-123",
@@ -39,6 +41,21 @@ test("verified subject must come from configured HTTPS resource, never an inject
   assert.equal(validVerifiedSubject({ ...subject, subject: 42 } as unknown as VerifiedSubject), false);
 });
 
+test("private admission URL is an exact operator-installed HTTPS endpoint", () => {
+  assert.equal(validPrivateAdmissionUrl(privateAdmissionUrl), true);
+  for (const value of [
+    "http://operator.private.example.org/v1/one-step",
+    "https://operator.private.example.org/other",
+    "https://operator.private.example.org/v1/one-step?tenant=other",
+    "https://operator.private.example.org/v1/one-step#fragment",
+    "https://user:password@operator.private.example.org/v1/one-step",
+    "https://operator.private.example.org/v1/one-step/",
+    "https://operator.private.example.org:443/v1/one-step",
+    "file:///v1/one-step",
+    undefined,
+  ]) assert.equal(validPrivateAdmissionUrl(value), false);
+});
+
 test("no private admission binding never attempts a Start", async () => {
   assert.deepEqual(await admitOneStep(undefined, subject, requestId, signingKeyHex), {
     status: "launch_blocked", code: "private_admission_not_configured", request_id: requestId,
@@ -51,6 +68,8 @@ test("unverified identity and invalid IDs cannot reach a configured service", as
   assert.equal((await admitOneStep(service, undefined, requestId, signingKeyHex)).code, "verified_identity_unavailable");
   assert.equal((await admitOneStep(service, subject, "../../secrets", signingKeyHex)).code, "invalid_request_id");
   assert.equal((await admitOneStep(service, subject, requestId, undefined)).code, "private_admission_signing_key_not_configured");
+  assert.equal((await admitOneStep(service, subject, requestId, signingKeyHex)).code, "private_admission_url_not_configured");
+  assert.equal((await admitOneStep(service, subject, requestId, signingKeyHex, "https://evil.example.org/?url=private")).code, "private_admission_url_not_configured");
   assert.equal(calls, 0);
 });
 
@@ -75,7 +94,7 @@ test("private handoff carries signed verified subject and opaque ID; never a bea
   let calls = 0;
   const service: AdmissionService = { fetch: async (request) => {
     calls++;
-    assert.equal(request.url, "https://admission.internal/v1/one-step");
+    assert.equal(request.url, privateAdmissionUrl);
     assert.equal(request.method, "POST");
     assert.equal(request.headers.has("authorization"), false);
     const body = await request.json() as SignedOneStepAdmissionV1;
@@ -90,7 +109,7 @@ test("private handoff carries signed verified subject and opaque ID; never a bea
     assert.deepEqual(Object.keys(body), ["schema_revision", "request_id", "issuer", "audience", "subject", "scope", "issued_at_unix_seconds", "expires_at_unix_seconds", "nonce", "signature_hex"]);
     return Response.json({ schema_revision: 1, request_id: requestId, status: "request_reserved", code: "one_use_reserved" });
   } };
-  assert.deepEqual(await admitOneStep(service, subject, requestId, signingKeyHex), {
+  assert.deepEqual(await admitOneStep(service, subject, requestId, signingKeyHex, privateAdmissionUrl), {
     status: "request_reserved", code: "one_use_reserved", request_id: requestId,
   });
   assert.equal(calls, 1);
@@ -107,7 +126,7 @@ test("transport failures, non-2xx and malformed replies never become success or 
     { fetch: async () => new Response("x".repeat(4096), { headers: { "content-type": "application/json" } }) },
   ];
   for (const service of cases) {
-    assert.equal((await admitOneStep(service, subject, requestId, signingKeyHex)).status, "start_outcome_unknown");
+    assert.equal((await admitOneStep(service, subject, requestId, signingKeyHex, privateAdmissionUrl)).status, "start_outcome_unknown");
   }
 });
 

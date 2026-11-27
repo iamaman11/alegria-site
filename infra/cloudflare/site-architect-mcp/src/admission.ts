@@ -105,6 +105,21 @@ export function validVerifiedSubject(subject: VerifiedSubject): boolean {
   }
 }
 
+// This is an operator-installed URL, never an MCP argument. Workers VPC pins
+// the actual private host and port independently of the request URL. The
+// hostname here supplies TLS SNI and must match the private ingress cert.
+export function validPrivateAdmissionUrl(value: unknown): value is string {
+  if (typeof value !== "string" || value.length > 512) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !!url.hostname
+      && !url.username && !url.password && !url.search && !url.hash
+      && url.pathname === "/v1/one-step" && url.href === value;
+  } catch {
+    return false;
+  }
+}
+
 // An admission response must be a small, sealed DTO. Unknown/error responses
 // are always ambiguous once a request was sent: never automatically replay.
 export function parseAdmissionReply(raw: unknown, requestId: string): StartReply {
@@ -148,6 +163,7 @@ export async function admitOneStep(
   subject: VerifiedSubject | undefined,
   requestId: string,
   signingKeyHex: string | undefined,
+  privateAdmissionUrl?: string,
 ): Promise<StartReply> {
   if (!validRequestId(requestId)) {
     return reply(requestId, "launch_blocked", "invalid_request_id");
@@ -161,9 +177,13 @@ export async function admitOneStep(
   if (!signingKeyHex || !SIGNING_KEY_HEX.test(signingKeyHex)) {
     return reply(requestId, "launch_blocked", "private_admission_signing_key_not_configured");
   }
-  // The URL selects an internal Service Binding endpoint. It is *not* fetched
-  // with global fetch, is never supplied by the MCP caller and is not a tunnel.
-  // Its backend must independently bind issuer+subject to SQL policy and consume
+  if (!validPrivateAdmissionUrl(privateAdmissionUrl)) {
+    return reply(requestId, "launch_blocked", "private_admission_url_not_configured");
+  }
+  // The installed VPC Service binding pins the private host and port; the
+  // operator-installed URL supplies the expected HTTPS Host/SNI only. Neither
+  // is a caller-controlled global fetch URL or a public HTTP proxy.
+  // The native ingress must independently bind issuer+subject to SQL policy and consume
   // an existing one-use grant before the existing native Temporal operator.
   let body: string;
   try {
@@ -174,7 +194,7 @@ export async function admitOneStep(
     return reply(requestId, "launch_blocked", "admission_signature_unavailable");
   }
   try {
-    const response = await service.fetch(new Request("https://admission.internal/v1/one-step", {
+    const response = await service.fetch(new Request(privateAdmissionUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
