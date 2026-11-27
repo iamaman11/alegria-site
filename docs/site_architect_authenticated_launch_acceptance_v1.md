@@ -67,6 +67,15 @@ has no public route. A bound request may report only SQL reservation or an
 ambiguous outcome, never a fabricated successful Temporal execution. This
 does not change the user-ready count below.
 
+The next hardening slice adds a 30-second, exact-scope HMAC-signed Worker →
+native operator admission proof with a one-user, independently installed
+subject binding. The new private CLI mode verifies the signature and exact
+request ID against a separately stored immutable intent *before* invoking
+the existing SQL grant / Temporal path. This provides integrity for a later
+private transport; it does **not** provision a live OAuth issuer/IdP, live
+private Service Binding delivery, general per-user SQL ACL, or user-ready
+ChatGPT Start. A fixture-signing test alone cannot establish OAuth identity.
+
 ## Distinct statuses; never infer success
 
 | Evidence | Allowed conclusion | Forbidden conclusion |

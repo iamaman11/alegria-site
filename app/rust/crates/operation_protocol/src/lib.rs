@@ -16,6 +16,7 @@ pub mod dag_machine;
 pub mod effect_child_v4;
 pub mod external_source_attestation_v1;
 pub mod independent_user_identity_v1;
+pub mod signed_mcp_admission_v1;
 pub mod json_budget;
 mod one_step_request_grant_json;
 pub mod one_step_request_grant_v1;
@@ -39,6 +40,11 @@ pub use independent_user_identity_v1::{
     IndependentlyProvisionedOAuthSubjectV1, InstalledOAuthResourcePolicyV1,
     OAuthOneStepIdentityErrorV1, OAuthOneStepIdentityPreflightV1, OAuthVerifierClaimsV1,
     MAX_OAUTH_ACCESS_TOKEN_LIFETIME_SECONDS_V1, SITE_ARCHITECT_ONE_STEP_OAUTH_SCOPE_V1,
+};
+pub use signed_mcp_admission_v1::{
+    decode_admission_signing_key_v1, seal_one_step_admission_for_private_fixture_v1,
+    verify_signed_one_step_admission_v1, SignedOneStepAdmissionV1,
+    VerifiedSignedOneStepAdmissionV1,
 };
 pub use json_budget::{
     enforce_json_budget, JsonBudgetError, DAG_MAX_INPUT_BYTES, DAG_MAX_NODES, DAG_MAX_RESULT_BYTES,

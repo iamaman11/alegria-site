@@ -23,6 +23,7 @@ interface Env {
   AUTH_SERVER_URL: string;
   MCP_SERVER_URL: string;
   ONE_STEP_ADMISSION?: AdmissionService;
+  ADMISSION_SIGNING_KEY_HEX?: string;
 }
 
 // These opt-in bindings are intentionally omitted from the default (offline,
@@ -50,6 +51,7 @@ function createServer() {
         releaseEnv.ONE_STEP_ADMISSION,
         subject && validVerifiedSubject(subject) ? subject : undefined,
         request_id,
+        releaseEnv.ADMISSION_SIGNING_KEY_HEX,
       );
       return {
         content: [{ type: "text" as const, text: JSON.stringify(result) }],

@@ -419,10 +419,27 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
             expected: &expected, expires_at_unix_seconds: deadline,
         } },
     ).unwrap());
-    let invoke_as = |principal: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
-        .arg("--operator-start-granted-single-v1").arg(&grant_intent)
+    // This is a fixture signer, not a simulated verified ChatGPT OAuth login.
+    // It exercises the exact independently keyed Worker->native proof format
+    // and the real SQL reservation/Temporal Start without any remote bridge.
+    let signer_key = [0xab; 32];
+    let signer_key_file = private.request("worker-to-native-hmac-key", &"ab".repeat(32));
+    let signed_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let signed = operation_protocol::seal_one_step_admission_for_private_fixture_v1(
+        &request_id.to_string(),
+        "https://auth.example.test", "https://mcp.example.test/mcp",
+        "ci-oauth-subject", signed_at, &Uuid::new_v4().to_string(), &signer_key,
+    );
+    let signed_proof = private.request("signed-oauth-subject-proof", &serde_json::to_string(&signed).unwrap());
+    let invoke_as = |principal: &str, oauth_subject: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
+        .arg("--operator-start-signed-granted-single-v1").arg(&signed_proof).arg(&grant_intent)
         .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
         .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START", "true")
+        .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE", &signer_key_file)
+        .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_ISSUER", "https://auth.example.test")
+        .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_RESOURCE", "https://mcp.example.test/mcp")
+        .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_SUBJECT", oauth_subject)
         .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
         .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
         .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
@@ -435,19 +452,22 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         .env("SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE", &limits_path)
         .env_remove("DATABASE_URL")
         .output().expect("native SQL one-use grant Temporal Start bridge");
-    let denied_principal = invoke_as("forged-user");
+    let denied_identity = invoke_as("ci-authenticated-user", "forged-oauth-subject");
+    assert!(!denied_identity.status.success(),
+        "correct SQL principal alone must not override independently pinned OAuth subject");
+    let denied_principal = invoke_as("forged-user", "ci-oauth-subject");
     assert!(!denied_principal.status.success(),
         "even knowing exact private intent and grant UUID does not authorize another principal");
     assert!(client.get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
         .describe(WorkflowDescribeOptions::builder().build()).await.is_err(),
         "principal spoof must not create a Temporal workflow");
-    let started = invoke_as("ci-authenticated-user");
+    let started = invoke_as("ci-authenticated-user", "ci-oauth-subject");
     assert!(started.status.success(), "granted Start failed: stdout={} stderr={}",
         String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
     let started_report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
     assert_eq!(started_report["status"],
         "temporal_start_acknowledged_grant_pending_independent_history");
-    assert!(!invoke_as("ci-authenticated-user").status.success(),
+    assert!(!invoke_as("ci-authenticated-user", "ci-oauth-subject").status.success(),
         "one approved user request may launch exactly once");
 
     let parent = client.get_workflow_handle::<UntypedWorkflow>(parent_id);

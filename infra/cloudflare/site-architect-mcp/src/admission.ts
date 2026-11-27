@@ -3,6 +3,9 @@
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SAFE_ID = /^[\w.:-]{1,256}$/;
+const SIGNING_KEY_HEX = /^[0-9a-f]{64}$/;
+const EXACT_SCOPE = "site_architect.run_one";
+const ATTESTATION_TTL_SECONDS = 30;
 
 export type StartReply = {
   status: "launch_blocked" | "request_reserved" | "start_outcome_unknown";
@@ -20,6 +23,60 @@ export interface VerifiedSubject {
   resource: string;
 }
 
+/** Wire fields are sealed in this exact order, independently of JSON key order. */
+export interface SignedOneStepAdmissionV1 {
+  schema_revision: 1;
+  request_id: string;
+  issuer: string;
+  audience: string;
+  subject: string;
+  scope: typeof EXACT_SCOPE;
+  issued_at_unix_seconds: number;
+  expires_at_unix_seconds: number;
+  nonce: string;
+  signature_hex: string;
+}
+
+export function signedAdmissionMessage(input: Omit<SignedOneStepAdmissionV1, "signature_hex">): string {
+  return [
+    "site-architect-admission-v1", input.request_id, input.issuer,
+    input.audience, input.subject, input.scope,
+    input.issued_at_unix_seconds, input.expires_at_unix_seconds, input.nonce, "",
+  ].join("\n");
+}
+
+export async function sealOneStepAdmission(
+  subject: VerifiedSubject,
+  requestId: string,
+  signingKeyHex: string,
+  issuedAtUnixSeconds: number,
+): Promise<SignedOneStepAdmissionV1> {
+  if (!validRequestId(requestId) || !validVerifiedSubject(subject)
+    || !SIGNING_KEY_HEX.test(signingKeyHex)
+    || !Number.isSafeInteger(issuedAtUnixSeconds) || issuedAtUnixSeconds <= 0) {
+    throw new Error("untrusted admission signing inputs");
+  }
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Number.parseInt(signingKeyHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  const unsigned: Omit<SignedOneStepAdmissionV1, "signature_hex"> = {
+    schema_revision: 1 as const,
+    request_id: requestId,
+    issuer: subject.issuer,
+    audience: subject.resource,
+    subject: subject.subject,
+    scope: EXACT_SCOPE,
+    issued_at_unix_seconds: issuedAtUnixSeconds,
+    expires_at_unix_seconds: issuedAtUnixSeconds + ATTESTATION_TTL_SECONDS,
+    nonce: crypto.randomUUID(),
+  };
+  const key = await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedAdmissionMessage(unsigned))));
+  const signature_hex = Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return { ...unsigned, signature_hex };
+}
+
 function reply(requestId: string, status: StartReply["status"], code: string): StartReply {
   return { status, code, request_id: requestId };
 }
@@ -31,6 +88,8 @@ export function validRequestId(value: unknown): value is string {
 export function validVerifiedSubject(subject: VerifiedSubject): boolean {
   if (typeof subject.subject !== "string" || !SAFE_ID.test(subject.subject)
     || typeof subject.issuer !== "string" || typeof subject.resource !== "string") return false;
+  if ([subject.issuer, subject.resource].some((value) => value.length > 512
+    || !/^[\x21-\x7e]+$/.test(value) || /[@?#]/.test(value))) return false;
   try {
     const issuer = new URL(subject.issuer);
     const resource = new URL(subject.resource);
@@ -65,6 +124,7 @@ export async function admitOneStep(
   service: AdmissionService | undefined,
   subject: VerifiedSubject | undefined,
   requestId: string,
+  signingKeyHex: string | undefined,
 ): Promise<StartReply> {
   if (!validRequestId(requestId)) {
     return reply(requestId, "launch_blocked", "invalid_request_id");
@@ -75,15 +135,21 @@ export async function admitOneStep(
   if (!service) {
     return reply(requestId, "launch_blocked", "private_admission_not_configured");
   }
+  if (!signingKeyHex || !SIGNING_KEY_HEX.test(signingKeyHex)) {
+    return reply(requestId, "launch_blocked", "private_admission_signing_key_not_configured");
+  }
   // The URL selects an internal Service Binding endpoint. It is *not* fetched
   // with global fetch, is never supplied by the MCP caller and is not a tunnel.
   // Its backend must independently bind issuer+subject to SQL policy and consume
   // an existing one-use grant before the existing native Temporal operator.
-  const body = JSON.stringify({
-    schema_revision: 1,
-    request_id: requestId,
-    authenticated_user: subject,
-  });
+  let body: string;
+  try {
+    body = JSON.stringify(await sealOneStepAdmission(
+      subject, requestId, signingKeyHex, Math.floor(Date.now() / 1000),
+    ));
+  } catch {
+    return reply(requestId, "launch_blocked", "admission_signature_unavailable");
+  }
   try {
     const response = await service.fetch(new Request("https://admission.internal/v1/one-step", {
       method: "POST",

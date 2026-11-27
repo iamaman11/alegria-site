@@ -780,6 +780,21 @@ async fn main() -> Result<()> {
             .await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-start-signed-granted-single-v1") {
+            let signed = args.next().context(
+                "--operator-start-signed-granted-single-v1 requires private signed remote admission proof",
+            )?;
+            let intent = args.next().context(
+                "--operator-start-signed-granted-single-v1 requires a separate operator-owned granted intent",
+            )?;
+            anyhow::ensure!(args.next().is_none(), "unexpected signed Start arguments");
+            operator_single_step_start_v2::start_from_signed_granted_private_request(
+                std::path::Path::new(&signed),
+                std::path::Path::new(&intent),
+            )
+            .await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-read-granted-single-v1") {
             let path = args.next().context(
                 "--operator-read-granted-single-v1 requires one strictly private request UUID locator",

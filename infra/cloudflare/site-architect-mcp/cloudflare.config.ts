@@ -25,6 +25,8 @@ export default defineConfig({
     workersDev: publicRelease,
     observability: { enabled: true, traces: { enabled: true } },
     env: {
+      // Set only with Cloudflare's secret management; never committed as text.
+      ADMISSION_SIGNING_KEY_HEX: bindings.secret(),
       AUTH_SERVER: authWorker ? bindings.worker({ worker: authWorker }) : undefined,
       AUTH_SERVER_URL: issuerUrl ? bindings.text(issuerUrl) : undefined,
       MCP_SERVER_URL: resourceUrl ? bindings.text(resourceUrl) : undefined,

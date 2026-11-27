@@ -14,6 +14,7 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
+    decode_admission_signing_key_v1, verify_signed_one_step_admission_v1,
     operation_dag_parent_workflow_id_v2, preflight_issued_one_step_request_for_reservation_v1,
     preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1, ArtifactId,
     IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
@@ -56,6 +57,10 @@ const GRANTED_STATUS_READER_DSN_ENV: &str = "OPERATION_DAG_READ_V2_DATABASE_URL_
 const GRANTED_STATUS_TEMPORAL_URL_ENV: &str = "OPERATION_DAG_READ_V2_TEMPORAL_URL";
 const GRANTED_STATUS_NAMESPACE_ENV: &str = "OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE";
 const GRANTED_STATUS_CATALOG_ENV: &str = "OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE";
+const SIGNED_ADMISSION_KEY_FILE_ENV: &str = "SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE";
+const SIGNED_ADMISSION_ISSUER_ENV: &str = "SITE_ARCHITECT_SIGNED_ADMISSION_V1_ISSUER";
+const SIGNED_ADMISSION_RESOURCE_ENV: &str = "SITE_ARCHITECT_SIGNED_ADMISSION_V1_RESOURCE";
+const SIGNED_ADMISSION_SUBJECT_ENV: &str = "SITE_ARCHITECT_SIGNED_ADMISSION_V1_SUBJECT";
 const MAX_REQUEST_FUTURE_SECONDS: u64 = 600;
 const MAX_CONTEXT_KEY_BYTES: usize = 512;
 const MAX_POLICY_ID_BYTES: usize = 128;
@@ -1313,6 +1318,75 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
 /// a private operator-controlled immutable run are prerequisites.
 pub(super) async fn start_from_granted_private_request(path: &Path) -> Result<()> {
     start_private_request_in_mode(path, StartMode::IndependentlyGranted).await
+}
+
+/// Authenticated entry for a separately connected, private transport. The
+/// signed file must be supplied by the OAuth-verified resource Worker through
+/// an independently secured bridge; the full DAG intent is still a distinct
+/// operator-owned private file. A successful signature is NOT a SQL grant.
+/// This pilot binds exactly one installed subject to one operator principal;
+/// arbitrary multi-user subjects are deliberately unsupported until a trusted
+/// per-subject SQL ACL is implemented and physically accepted.
+pub(super) async fn start_from_signed_granted_private_request(
+    signed_path: &Path,
+    private_intent_path: &Path,
+) -> Result<()> {
+    if authorize_signed_one_step_request(signed_path, private_intent_path).is_err() {
+        println!("{}", serde_json::json!({
+            "schema_revision":1,
+            "operation":"site_architect_start_signed_granted_single_v1",
+            "status":"launch_blocked",
+            "code":"signed_remote_admission_not_verified",
+            "execution":"not_started",
+            "next_action":"Check independently configured OAuth subject, short-lived signature and private intent; no Temporal Start was attempted."
+        }));
+        anyhow::bail!("remote MCP signed admission refused before SQL or Temporal Start");
+    }
+    start_from_granted_private_request(private_intent_path).await
+}
+
+fn authorize_signed_one_step_request(signed_path: &Path, private_intent_path: &Path) -> Result<()> {
+    let issuer = env::var(SIGNED_ADMISSION_ISSUER_ENV).context("missing installed OAuth issuer")?;
+    let audience =
+        env::var(SIGNED_ADMISSION_RESOURCE_ENV).context("missing installed MCP resource")?;
+    let subject = env::var(SIGNED_ADMISSION_SUBJECT_ENV).context("missing installed OAuth subject")?;
+    let key_file =
+        env::var(SIGNED_ADMISSION_KEY_FILE_ENV).context("missing installed admission key")?;
+    let key_bytes = operator_dag_governance::read_private_operator_file(
+        Path::new(&key_file),
+        "short-lived remote admission HMAC verification key",
+    )?;
+    let key = decode_admission_signing_key_v1(&key_bytes)
+        .context("invalid private admission verification key")?;
+    let intent_bytes = operator_dag_governance::read_private_operator_file(
+        private_intent_path,
+        "separately stored one-use granted private intent",
+    )?;
+    let intent: GrantedSingleOperationStartIntentV1 = serde_json::from_slice(&intent_bytes)
+        .context("invalid stored one-use granted private intent")?;
+    ensure!(
+        serde_json::to_vec(&intent)? == intent_bytes && intent.schema_revision == 1,
+        "noncanonical private granted Start intent"
+    );
+    let signed_bytes = operator_dag_governance::read_private_operator_file(
+        signed_path,
+        "OAuth MCP authenticated admission proof",
+    )?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("operator clock invalid")?
+        .as_secs() as i64;
+    verify_signed_one_step_admission_v1(
+        &signed_bytes,
+        &key,
+        &issuer,
+        &audience,
+        &subject,
+        &intent.request_id,
+        now,
+    )
+    .context("remote MCP ingress signature, identity or one-use request invalid")?;
+    Ok(())
 }
 
 async fn start_private_request_in_mode(path: &Path, mode: StartMode) -> Result<()> {

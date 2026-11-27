@@ -51,6 +51,32 @@ root SQL settings, plus these new strictly operator-provisioned settings:
 - `SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE` — 0600 canonical JSON
   `OneStepResourceLimitsV1`, independently provisioned maximum budget
 
+The additional private, signed handoff entry point is
+`--operator-start-signed-granted-single-v1 /absolute/private/signed.json /absolute/private/intent.json`.
+It verifies the fixed 30-second HMAC-SHA256 signed `site_architect.run_one`
+proof, exact OAuth issuer/resource/subject, nonzero request UUID and fresh v4
+nonce **before** any SQL/Temporal action. Its `intent.json` remains an entirely
+separate operator-owned immutable V2 run; neither file may supply the SQL
+principal, tenant, source or budget policy. The signature is scoped to its
+exact request_id, so swapping the stored intent or subject is rejected.
+The native operator also requires these separately installed variables:
+
+- `SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE` — private 0600 file containing
+  exactly 64 lowercase hex characters (32 random HMAC key bytes), not a JSON
+  credential or MCP argument
+- `SITE_ARCHITECT_SIGNED_ADMISSION_V1_ISSUER` and
+  `SITE_ARCHITECT_SIGNED_ADMISSION_V1_RESOURCE` — exact installed HTTPS OAuth
+  issuer and `/mcp` resource audience
+- `SITE_ARCHITECT_SIGNED_ADMISSION_V1_SUBJECT` — exactly one independently
+  provisioned authenticated user subject for this particular operator
+  principal; multi-user selection is not implemented
+
+This is a private CLI and physical **fixture-signed** Temporal/SQL pilot, not
+a deployed ChatGPT auth-server or a reachable Cloudflare Service Binding. A
+secured ingress must deliver the signed file and select the operator-owned
+intent; the Worker cannot supply the private full plan. No public listener,
+second scheduler or automatic replay was introduced.
+
 Migration `20261127_0003_operation_dag_one_step_request_grants_v1.sql`
 defines the atomic one-use SQL state machine, DBA-authorized principal policy,
 distinct approval and grant issuer, and independently verified History
