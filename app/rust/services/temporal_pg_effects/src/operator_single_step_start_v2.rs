@@ -298,9 +298,9 @@ async fn assert_active_independent_business_root(
 /// Pinned owner routes have already passed exact trusted-catalog preflight.
 fn requires_acquisition_source_attestation(run: &OperationDagRunV6) -> bool {
     run.plan.nodes.iter().any(|node| {
-        run.pinned_routes.iter().any(|route| {
-            route.operation == node.operation && route.owner.as_str() == "acquisition"
-        })
+        run.pinned_routes
+            .iter()
+            .any(|route| route.operation == node.operation && route.owner.as_str() == "acquisition")
     })
 }
 
@@ -371,7 +371,9 @@ async fn assert_active_independent_acquisition_sources(
             plan_hash: PlanHash(row.try_get("plan_hash")?),
             artifact_id: ArtifactId(row.try_get("artifact_id")?),
             schema: row
-                .try_get::<sqlx::types::Json<operation_protocol::ArtifactSchema>, _>("artifact_schema")?
+                .try_get::<sqlx::types::Json<operation_protocol::ArtifactSchema>, _>(
+                    "artifact_schema",
+                )?
                 .0,
             payload_hash: row.try_get("payload_hash")?,
             issued_at_unix_seconds: row.try_get("issued_at_unix_seconds")?,

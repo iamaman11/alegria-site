@@ -173,9 +173,7 @@ pub fn verify_external_source_record_v1(
         return Err(ExternalSourceAdmissionErrorV1::ArtifactMismatch);
     }
     let expected_provenance = format!("{PROVENANCE_PREFIX}{}", record.record_id);
-    if planned.provenance != expected_provenance
-        || admitted.provenance != expected_provenance
-    {
+    if planned.provenance != expected_provenance || admitted.provenance != expected_provenance {
         return Err(ExternalSourceAdmissionErrorV1::ProvenanceMismatch);
     }
     if owner_content_hash(&admitted.payload) != record.payload_hash {
@@ -235,8 +233,9 @@ mod tests {
             })
             .unwrap();
         let source_id = ArtifactId("source".into());
-        let payload = br#"{"url":"https://example.test","title":"Trusted","raw_text":"Real source"}"#
-            .to_vec();
+        let payload =
+            br#"{"url":"https://example.test","title":"Trusted","raw_text":"Real source"}"#
+                .to_vec();
         let plan = ExecutionPlan {
             schema_revision: PLAN_SCHEMA_REVISION,
             scope: scope.clone(),
@@ -259,10 +258,7 @@ mod tests {
                         artifact: source_id.clone(),
                     },
                 )]),
-                outputs: BTreeMap::from([(
-                    PortId("output".into()),
-                    ArtifactId("result".into()),
-                )]),
+                outputs: BTreeMap::from([(PortId("output".into()), ArtifactId("result".into()))]),
                 after: BTreeSet::new(),
                 permitted_effects: BTreeSet::new(),
             }],
@@ -380,7 +376,12 @@ mod tests {
     fn expiry_revocation_and_future_issue_are_denied() {
         let (record, run) = fixture();
         assert_eq!(
-            verify(&record, &run, "context-authenticated", record.expires_at_unix_seconds),
+            verify(
+                &record,
+                &run,
+                "context-authenticated",
+                record.expires_at_unix_seconds
+            ),
             Err(ExternalSourceAdmissionErrorV1::Expired)
         );
         let mut revoked = record.clone();
