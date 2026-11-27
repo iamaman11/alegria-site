@@ -43,6 +43,8 @@ WORKFLOW_TYPES = (
     "FreshnessCheckWorkflow",
     "TestHitlWorkflow",
     "AlegriaPureOperationDagV1Workflow",
+    # New V4 pure queue + typed receipt, never reinterpret historical V3.
+    "AlegriaPureOperationDagV2Workflow",
     "AlegriaCheckedEffectDagV1Workflow",
     "AlegriaAdmittedEffectDagV2Workflow",
     "AlegriaAdmittedEffectDagV3Workflow",
@@ -175,6 +177,8 @@ REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
         ("legacy", "--replay-history", "CI_TEMPORAL_HISTORY_REPLAY=PASS"),
     ("AlegriaPureOperationDagV1Workflow", "alegria-pure-dag-v3"):
         ("orchestrator", "--replay-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("AlegriaPureOperationDagV2Workflow", "alegria-pure-dag-v4"):
+        ("orchestrator", "--replay-pure-v4-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
     ("AlegriaCheckedEffectDagV1Workflow", "alegria-pure-dag-v3"):
         ("orchestrator", "--replay-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
     ("AlegriaAdmittedEffectDagV2Workflow", "alegria-effect-dag-v4"):
