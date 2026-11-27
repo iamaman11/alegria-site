@@ -14,6 +14,59 @@ effects, not an authorization grant. `TBD` remains deliberately unresolved.
 Reachability denotes source call-site family, not deployed runtime observation.
 Paths are repository-relative and checked by the audit script.
 
+## Приёмка по доказательствам (текущий срез Draft PR #95)
+
+В этой таблице **52 предварительных кандидата** (29 KEEP, 12 SPLIT,
+11 INTERNAL), но **не 52 принятые самостоятельные операции**. Полный
+машинно-читаемый source-audit, включая отдельную строку и степень проверки
+для каждого кандидата:
+
+```bash
+python3 automation/audit_operation_inventory.py --format summary
+python3 automation/audit_operation_inventory.py --format readiness
+python3 automation/audit_operation_inventory.py --format json
+```
+
+Нельзя отождествлять число кандидатов с 73 Temporal Activity endpoints,
+22 историческими `SeoPhaseKey` или пятью *уже установленными* pure-контрактами
+`semantic.*`. Их исходные Rust `Operation`-контракты привязаны к
+`seo_application::operation_adapter::semantic_extraction_registry`; пять
+отдельных one-node DAG unit tests проверяют прямой typed-вызов каждого
+контракта и отказ на чужой scope/неверный payload/schema. Это **проверка
+пути по исходникам и unit-тесты**, не подтверждённый production Temporal E2E.
+
+`ACQ-01` и `ACQ-02` дополнительно выделены в `acquisition::operations` как
+строгие типизированные *owner-only* pure-контракты: DTO не изменяют
+десериализацию исторических Temporal V1 payload. **Они не включены** в
+`semantic_extraction_registry`, Site Lab или пользовательский Temporal
+исполнитель и потому не прибавляются к пяти установленным операциям.
+Для `EX-03` исполнена только pure-часть SPLIT, не внешний Qdrant enrichment.
+
+| Доказательство | Уровень, который оно подтверждает | Текущий статус |
+| --- | --- | --- |
+| Строка матрицы, исходный owner и классификация | Source inventory | 52/52 записаны; финальные границы не утверждены |
+| Rust typed `Input`/`Output`/`Failure`, versioned `Operation::contract` | Source-level owner contract; **компиляция требует CI** | 5 `semantic.*` + 2 owner-only ACQ; не все 52 |
+| Доверенная регистрация и однозначный исполнитель | Source-level installed/dispatch | 5 `semantic.*`; ACQ — нет |
+| Независимый one-node вызов и отрицательные случаи | Unit tests + после прогона CI проверка на SHA | Новые тесты для пяти pure; не подтверждает эффектные owner-гейты |
+| Native Temporal History, PG/Outbox owner receipt, replay, failures, tenant isolation | Physical E2E **на конкретном SHA** | 0 из 52 атрибутированы как fully-accepted |
+| Режимы production: RLS, provider budgets, rollback, Build-ID/drain | Production readiness | Не утверждено |
+
+Даже завершение unit-тестов пяти pure-операций **не закрывает** кандидатов
+с внешними эффектами, не подтверждает каждый `SPLIT` целиком, не разрешает
+использовать fixture-only DataForSEO как live-provider proof. Полных
+приёмок по §6.3 — **0**, ожидают окончательной приёмки **52**. Скрипт
+сознательно использует `not_verified` там, где нет надёжной положительной
+атрибуции, а не утверждает, что нужный код отсутствует.
+
+Выявленные отрицательные критерии на следующую приёмку: `TR-01` в
+`triple_builder.rs` использует `unwrap()` при соединении section-id и может
+паниковать вместо типизированного отказа на несогласованных самостоятельных
+входах; `PL-01` pure-модель выдаёт только *предварительное* число SERP
+snapshots, а фактический PG/provider receipt принадлежит application;
+`ED-05` PII prepass сейчас встроен в сборку черновика, а `CMS-01a`/`CMS-02`
+различаются `publish_mode` одного обработчика. `PUB-01` и `PUB-03` пока
+совмещают PG/FS/CDN эффекты; их отдельный эффектный admission не доказан.
+
 Verified static reachability at the baseline: 55 Activity methods referenced
 from canonical V1, 14 additional expert-only methods, two other operational
 workflows, two test-only methods; V2 source-only reuses five of the existing

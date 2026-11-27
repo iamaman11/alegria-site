@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 
 from check_json_boundary_policy import (
+    ACQUISITION_OWNER_JSON_TEST_BOUNDARIES,
     EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
     NATIVE_OWNER_V2_JSON_BOUNDARIES,
@@ -20,6 +21,18 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
+    def test_acquisition_owner_json_is_one_replay_fixture_not_a_domain_exemption(self) -> None:
+        exact = "app/rust/crates/acquisition/src/operations_json.rs"
+        self.assertEqual(ACQUISITION_OWNER_JSON_TEST_BOUNDARIES, {exact})
+        self.assertTrue(is_allowed_json_boundary(ROOT / exact))
+        for relative in (
+            "app/rust/crates/acquisition/src/operations.rs",
+            "app/rust/crates/acquisition/src/source_relevance.rs",
+            "app/rust/crates/acquisition/src/new_owner_json.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
     def test_site_lab_trusted_owner_e2e_json_is_one_exact_test_file(self) -> None:
         self.assertEqual(SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES, {
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_lab_owner_catalog_tests.rs",

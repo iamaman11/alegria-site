@@ -21,6 +21,10 @@ case "${1:-}" in
     python3 automation/check_legacy_worker_split.py
     python3 automation/check_temporal_activity_owner_inventory.py
     python3 automation/test_temporal_activity_owner_inventory.py
+    # Issue #94 candidate ledger is source evidence, never a second runtime
+    # registry. Enforce exact typed/catalog/runner bindings and fail-closed
+    # drift tests on every PR alongside the Activity inventory.
+    python3 automation/check_operation_inventory.py
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py

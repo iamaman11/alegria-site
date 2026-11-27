@@ -121,6 +121,190 @@ fn result<T: serde::de::DeserializeOwned>(result: &ExecutionResult, id: &str) ->
     serde_json::from_slice(&result.artifacts.get(&ArtifactId::from(id)).unwrap().payload).unwrap()
 }
 
+/// Each call is its own sealed, one-node V2 DAG, with one *typed* source DTO.
+/// No other operation supplies a prerequisite or runs as a side effect.
+/// This exercises the native pure registry, not a Temporal worker/Activity.
+fn prove_independent_pure_operation<O: PureExtractionOperation>(
+    expected_id: &str,
+    input: &O::Input,
+) {
+    // Prove registration itself needs no neighboring owner: the direct
+    // registry contains exactly this one concrete, versioned operation.
+    let mut registry = OperationRegistry::default();
+    registry.register_pure::<O>().unwrap();
+    let contract = O::contract();
+    let registered = registry.catalog().contracts().collect::<Vec<_>>();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(registered[0].reference, contract.reference);
+    assert_eq!(contract.reference.id.as_str(), expected_id);
+    assert_eq!(contract.reference.revision, 1);
+    assert_eq!(
+        contract.idempotency,
+        operation_protocol::IdempotencyPolicy::Pure
+    );
+    assert!(contract.effects.is_empty());
+    assert!(contract.invalidates.is_empty());
+
+    let (plan, admitted) = plan(
+        &registry,
+        vec![node::<O>("only-operation", "typed-input", "typed-output")],
+        vec![seed::<O>("typed-input", input)],
+    );
+    assert_eq!(plan.schema_revision, PLAN_SCHEMA_REVISION);
+    assert_eq!(plan.nodes.len(), 1);
+    assert_eq!(plan.external_artifacts.len(), 1);
+    assert!(plan.allowed_effects.is_empty());
+    assert!(plan.nodes[0].after.is_empty());
+    assert!(plan.nodes[0].permitted_effects.is_empty());
+    assert_eq!(plan.nodes[0].operation, contract.reference);
+
+    let standalone = registry.execute(&plan, admitted.clone()).unwrap();
+    assert_eq!(
+        standalone.order,
+        [OperationInstanceId::from("only-operation")]
+    );
+
+    let run = PureDagRun {
+        plan: plan.clone(),
+        admitted: admitted.clone(),
+    };
+    let receipt = execute_pure_dag("test-run", &run).unwrap();
+    assert_eq!(receipt.plan_hash, plan.hash);
+    assert_eq!(receipt.order, [OperationInstanceId::from("only-operation")]);
+    // The single source and the single produced artifact are the *only*
+    // artifacts: there is no hidden acquisition, sibling owner or publisher.
+    assert_eq!(receipt.artifacts.len(), 2);
+    assert_eq!(
+        receipt.artifacts[&ArtifactId::from("typed-output")].payload,
+        standalone.artifacts[&ArtifactId::from("typed-output")].payload
+    );
+    assert_eq!(
+        receipt.artifacts[&ArtifactId::from("typed-output")].schema,
+        contract.outputs[&PortId::from("output")]
+    );
+    let decoded: O::Output =
+        serde_json::from_slice(&receipt.artifacts[&ArtifactId::from("typed-output")].payload)
+            .unwrap();
+    assert_eq!(
+        serde_json::to_value(decoded).unwrap(),
+        serde_json::to_value(O::evaluate(input)).unwrap(),
+        "{expected_id}: executable registry output differs from the typed owner"
+    );
+
+    // The envelope's declared artifact type is pinned to the real owner
+    // contract. Changing only the admitted schema must fail before dispatch.
+    let mut wrong_schema = admitted.clone();
+    wrong_schema
+        .get_mut(&ArtifactId::from("typed-input"))
+        .unwrap()
+        .schema
+        .revision += 1;
+    assert!(matches!(
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan: plan.clone(),
+                admitted: wrong_schema,
+            }
+        ),
+        Err(OperationRunError::InvalidArtifactEnvelope(_))
+    ));
+
+    // A syntactically valid JSON value of the wrong DTO shape cannot be
+    // interpreted as any of these five concrete owner input structs.
+    let mut wrong_type = admitted.clone();
+    wrong_type
+        .get_mut(&ArtifactId::from("typed-input"))
+        .unwrap()
+        .payload = b"[]".to_vec();
+    assert!(matches!(
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan: plan.clone(),
+                admitted: wrong_type,
+            }
+        ),
+        Err(OperationRunError::InvalidInput { operation, .. })
+            if operation == contract.reference
+    ));
+
+    // Identical bytes originating from another tenant are not admissible.
+    let mut wrong_scope = admitted;
+    wrong_scope
+        .get_mut(&ArtifactId::from("typed-input"))
+        .unwrap()
+        .scope
+        .tenant_id = "other-tenant".to_owned();
+    assert!(matches!(
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan,
+                admitted: wrong_scope,
+            }
+        ),
+        Err(OperationRunError::InvalidArtifactEnvelope(_))
+    ));
+}
+
+#[test]
+fn installed_pure_registry_contains_exactly_five_named_semantic_operations() {
+    let registry = semantic_extraction_registry().unwrap();
+    let installed = registry
+        .catalog()
+        .contracts()
+        .map(|contract| contract.reference.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        installed,
+        [
+            "semantic.canonicalize_mentions",
+            "semantic.editorial_topics",
+            "semantic.entity_spans",
+            "semantic.layer_route",
+            "semantic.operational_entities",
+        ]
+    );
+}
+
+#[test]
+fn layer_route_executes_as_an_independent_typed_pure_dag() {
+    prove_independent_pure_operation::<LayerRoute>("semantic.layer_route", &router_input());
+}
+
+#[test]
+fn entity_spans_executes_as_an_independent_typed_pure_dag() {
+    prove_independent_pure_operation::<EntitySpans>("semantic.entity_spans", &entity_input());
+}
+
+#[test]
+fn canonicalize_mentions_executes_as_an_independent_typed_pure_dag() {
+    // Its input is the actual typed EntitySpanOutput DTO, admitted directly
+    // as an independent source. The EntitySpans operation is *not* scheduled.
+    let typed_input = entity_spans::execute(&entity_input());
+    prove_independent_pure_operation::<CanonicalizeMentions>(
+        "semantic.canonicalize_mentions",
+        &typed_input,
+    );
+}
+
+#[test]
+fn editorial_topics_executes_as_an_independent_typed_pure_dag() {
+    prove_independent_pure_operation::<EditorialTopics>(
+        "semantic.editorial_topics",
+        &editorial_input(),
+    );
+}
+
+#[test]
+fn operational_entities_executes_as_an_independent_typed_pure_dag() {
+    prove_independent_pure_operation::<OperationalEntities>(
+        "semantic.operational_entities",
+        &operational_input(),
+    );
+}
+
 #[test]
 fn real_pure_owners_declare_no_truth_invalidation_under_plan_revision_two() {
     assert_eq!(PLAN_SCHEMA_REVISION, 2);

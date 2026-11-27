@@ -80,3 +80,72 @@ pub fn execute(
         serp_patterns,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::SeoScopePayload;
+
+    #[test]
+    fn normalize_can_run_without_prior_ingest_or_provider_state() {
+        let input = SerpNormalizeInputPayload {
+            run_id: "independent-normalize".into(),
+            queries: vec![
+                "  Spain Visa COST ".into(),
+                "spain visa cost".into(),
+                " HOW TO COMPARE VISAS ".into(),
+                "visa refusal problem".into(),
+                "visa".into(),
+                " ".into(),
+            ],
+            ..Default::default()
+        };
+        let result = execute(&input).unwrap();
+        assert_eq!(result.normalized_query_count, 4);
+        assert_eq!(result.serp_patterns.len(), 4);
+        assert!(result.serp_patterns.iter().all(|pattern| {
+            !pattern.serp_pattern_key.is_empty()
+                && !pattern.query_batch_key.is_empty()
+                && pattern.scope_signature == result.scope_signature
+        }));
+        assert_eq!(result.serp_patterns[0].query, "spain visa cost");
+        assert_eq!(result.serp_patterns[0].dominant_intent, "commercial");
+        assert_eq!(result.serp_patterns[0].status, "active");
+        assert_eq!(result.serp_patterns[1].dominant_intent, "comparison");
+        assert_eq!(result.serp_patterns[2].dominant_intent, "troubleshooting");
+        assert_eq!(result.serp_patterns[3].dominant_intent, "informational");
+        assert_eq!(result.serp_patterns[3].status, "partial");
+        assert_eq!(execute(&input).unwrap(), result);
+    }
+
+    #[test]
+    fn normalize_preserves_supplied_batch_key_but_rejects_forged_scope() {
+        let valid = SerpNormalizeInputPayload {
+            run_id: "standalone-run".into(),
+            query_batch_key: "supplied-batch".into(),
+            queries: vec!["price of spain visa".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            execute(&valid).unwrap().serp_patterns[0].query_batch_key,
+            "supplied-batch"
+        );
+        let invalid = SerpNormalizeInputPayload {
+            scope: Some(SeoScopePayload {
+                market: "alegria-site".into(),
+                locale: "ru-RU".into(),
+                country_code: "ES".into(),
+                visa_type: "tourist".into(),
+                applicant_profile: "standard".into(),
+                raw_scope_tuple: "forged-raw-tuple".into(),
+                ..Default::default()
+            }),
+            ..valid
+        };
+        let error = execute(&invalid).unwrap_err();
+        assert!(matches!(error, DomainError::ValidationFailure { .. }));
+        assert!(error
+            .to_string()
+            .contains("raw_scope_tuple does not match canonical normalized scope"));
+    }
+}

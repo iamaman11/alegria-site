@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 primitives = { path = "../primitives" }
+operation_protocol = { path = "../operation_protocol" }
 anyhow = { workspace = true }
 ego-tree = { workspace = true }
 lopdf = { workspace = true }

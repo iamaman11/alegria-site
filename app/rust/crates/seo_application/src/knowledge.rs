@@ -137,6 +137,15 @@ pub async fn retrieve_source_context<S: SourceContextSearchPort + ?Sized>(
                     ),
                 });
             }
+            if chunk.chunk_key.trim().is_empty() || !chunk.retrieval_score.is_finite() {
+                return Err(DomainError::ContractViolation {
+                    message: format!(
+                        "knowledge.source_context stage=hit_shape run_id={} collection={} invalid chunk identity/score",
+                        request.run_id,
+                        collection.name()
+                    ),
+                });
+            }
             if seen.insert(chunk.chunk_key.clone()) {
                 chunks.push(chunk);
             }
@@ -146,6 +155,26 @@ pub async fn retrieve_source_context<S: SourceContextSearchPort + ?Sized>(
         }
     }
     Ok(chunks)
+}
+
+fn validate_semantic_neighbors(
+    neighbors: &[seo_ports::knowledge::SemanticNeighborCandidate],
+    limit: usize,
+    collection: &str,
+    stage: &str,
+) -> Result<(), DomainError> {
+    if neighbors.len() > limit
+        || neighbors
+            .iter()
+            .any(|neighbor| neighbor.entity_key.trim().is_empty() || !neighbor.score.is_finite())
+    {
+        return Err(DomainError::ContractViolation {
+            message: format!(
+                "knowledge.semantic_neighbors stage={stage} collection={collection} invalid identity/score/count (limit={limit})"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Read-only Knowledge retrieval for Truth completeness/resolution/conflict
@@ -229,6 +258,12 @@ pub async fn retrieve_semantic_neighbors<S: SemanticNeighborSearchPort + ?Sized>
             }
         }
     };
+    validate_semantic_neighbors(
+        &neighbors,
+        request.limit,
+        collection_used.as_deref().unwrap_or_default(),
+        "search_result",
+    )?;
     if neighbors.is_empty() {
         reason_codes.push("semantic_neighbors_empty".into());
     } else {
@@ -241,6 +276,12 @@ pub async fn retrieve_semantic_neighbors<S: SemanticNeighborSearchPort + ?Sized>
                     collection_used.as_deref().unwrap_or_default()
                 ),
             })?;
+        validate_semantic_neighbors(
+            &neighbors,
+            request.limit,
+            collection_used.as_deref().unwrap_or_default(),
+            "rerank_result",
+        )?;
         reason_codes.push("semantic_neighbors_reranked".into());
     }
     Ok(SemanticNeighborLookup {
@@ -337,6 +378,9 @@ fn project_writer_rule(rule: VerifiedRule, run_id: &str) -> Result<CitationRule,
         ),
     }
     };
+    if rule.rule_instance_id.trim().is_empty() || rule.rule_type_key.trim().is_empty() {
+        return Err(invalid_params("rule identity"));
+    }
     if (matches!(rule.role, RuleRoleType::FeeItem | RuleRoleType::MustPay)
         || matches!(rule.rule_type_key.as_str(), "fee" | "consular_fee"))
         && !matches!(&rule.params, RuleParams::Fee { .. })
@@ -702,6 +746,29 @@ mod tests {
         assert_eq!(error.class(), ErrorClass::ContractViolation);
     }
 
+    #[tokio::test]
+    async fn source_context_rejects_malformed_adapter_hits() {
+        let mut search = FakeSourceContextSearch::new(Vec::new());
+
+        for invalid in [
+            SourceContextChunk {
+                chunk_key: " ".into(),
+                ..source_hit(SourceContextCollection::VerifiedRules, "valid")
+            },
+            SourceContextChunk {
+                retrieval_score: f32::NAN,
+                ..source_hit(SourceContextCollection::VerifiedRules, "valid")
+            },
+        ] {
+            search.hits = vec![invalid];
+            let err = retrieve_source_context(&search, &source_query(1))
+                .await
+                .unwrap_err();
+            assert_eq!(err.class(), ErrorClass::ContractViolation);
+            assert!(err.to_string().contains("stage=hit_shape"));
+        }
+    }
+
     #[derive(Clone, Copy)]
     enum SearchReply {
         Empty,
@@ -879,6 +946,84 @@ mod tests {
             outcome.reason_codes,
             vec!["raw_chunks_ctx:search_failed", "semantic_neighbors_empty"]
         );
+    }
+
+    struct MalformedNeighborSearch {
+        candidate: SemanticNeighborCandidate,
+        invalid_at_rerank: bool,
+    }
+
+    #[async_trait]
+    impl SemanticNeighborSearchPort for MalformedNeighborSearch {
+        fn provider_configured(&self) -> bool {
+            true
+        }
+
+        async fn search_semantic_neighbors(
+            &self,
+            _query: &str,
+            _collection: SemanticNeighborCollection,
+            _limit: usize,
+        ) -> Result<Vec<SemanticNeighborCandidate>, DomainError> {
+            if self.invalid_at_rerank {
+                Ok(vec![SemanticNeighborCandidate {
+                    entity_key: "source:valid".into(),
+                    score: 0.9,
+                    retrieval_text: "source evidence".into(),
+                }])
+            } else {
+                Ok(vec![self.candidate.clone()])
+            }
+        }
+
+        async fn rerank_semantic_neighbors(
+            &self,
+            _query: &str,
+            _candidates: Vec<SemanticNeighborCandidate>,
+            _limit: usize,
+        ) -> Result<Vec<SemanticNeighborCandidate>, DomainError> {
+            assert!(
+                self.invalid_at_rerank,
+                "bad search hits must fail before rerank"
+            );
+            Ok(vec![self.candidate.clone()])
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_semantic_hits_fail_closed_before_and_after_rerank() {
+        let valid = SemanticNeighborCandidate {
+            entity_key: "source:valid".into(),
+            score: 0.9,
+            retrieval_text: "source evidence".into(),
+        };
+        for malformed in [
+            SemanticNeighborCandidate {
+                entity_key: " ".into(),
+                ..valid.clone()
+            },
+            SemanticNeighborCandidate {
+                score: f32::NAN,
+                ..valid.clone()
+            },
+        ] {
+            for invalid_at_rerank in [false, true] {
+                let search = MalformedNeighborSearch {
+                    candidate: malformed.clone(),
+                    invalid_at_rerank,
+                };
+                let err = retrieve_semantic_neighbors(&search, &neighbor_query(true, false))
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.class(), ErrorClass::ContractViolation);
+                let stage = if invalid_at_rerank {
+                    "stage=rerank_result"
+                } else {
+                    "stage=search_result"
+                };
+                assert!(err.to_string().contains(stage));
+            }
+        }
     }
 
     struct FakeCanonicalSearch {
@@ -1187,6 +1332,29 @@ mod tests {
             assert!(error.to_string().contains("stage=required_params"));
             assert!(error.to_string().contains("run_id=test-run"));
             assert!(error.to_string().contains(key));
+        }
+    }
+
+    #[tokio::test]
+    async fn verified_rendering_rejects_missing_rule_identity() {
+        for (rule_instance_id, rule_type_key) in [(" ", "passport"), ("verified:passport", " ")] {
+            let mut invalid = rule(
+                RuleRoleType::DocumentRequired,
+                RuleParams::None,
+                rule_instance_id,
+            );
+            invalid.rule_type_key = rule_type_key.into();
+            let reader = FakeReader {
+                context: Some(VerifiedRulesView {
+                    context_key: "test-context".into(),
+                    rules: vec![invalid],
+                }),
+            };
+            let err = generate_verified_blocks(&reader, &query())
+                .await
+                .unwrap_err();
+            assert_eq!(err.class(), ErrorClass::ContractViolation);
+            assert!(err.to_string().contains("invalid rule identity"));
         }
     }
 }

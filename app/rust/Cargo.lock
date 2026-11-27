@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "ego-tree",
  "lopdf",
+ "operation_protocol",
  "primitives",
  "regex",
  "scraper",

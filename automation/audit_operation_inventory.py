@@ -9,6 +9,7 @@ and emits evidence. It must not turn legacy phases into normative operations.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -21,6 +22,9 @@ WORKFLOWS = ROOT / "app/rust/services/temporal/src/workflows"
 EXECUTION = ROOT / "app/rust/crates/seo_application/src/execution.rs"
 RECIPE = ROOT / "app/rust/crates/seo_application/src/execution/recipe.rs"
 PURE_OPS = ROOT / "app/rust/crates/seo_domain/src/extraction/operations.rs"
+PURE_CATALOG = ROOT / "app/rust/crates/seo_application/src/site_lab/parameters_json.rs"
+PURE_RUNNER = ROOT / "app/rust/crates/seo_application/src/operation_adapter.rs"
+ACQUISITION_OWNER_OPS = ROOT / "app/rust/crates/acquisition/src/operations.rs"
 MATRIX = ROOT / "docs/ISSUE94_OPERATION_DECISION_MATRIX.md"
 
 # Counts apply to the audited 851c3fa baseline. They are drift tripwires, not
@@ -29,6 +33,11 @@ AUDITED_ACTIVITY_COUNT = 73
 AUDITED_PHASE_COUNT = 22
 AUDITED_CANDIDATE_COUNT = 52
 AUDITED_PURE_OPERATION_COUNT = 5
+# Snapshot of all six source-ledger fields across the 52 rows. The source
+# matrix remains authoritative; this fingerprint only stops a silent edit
+# from being misreported as a previously reviewed #94 architecture freeze.
+# Deliberate matrix revisions must re-review and re-baseline the audit.
+BASELINE_CANDIDATE_SHA256 = "43ecc38d66ca9e63d1332688876fce8792fc72c7ce29ecda46296bebd8151835"
 ALLOWED_DECISIONS = {"KEEP", "MERGE", "SPLIT", "INTERNAL", "DELETE", "TBD"}
 
 # This checked-in *audit classification* mirrors #94 §6.1, not a runtime
@@ -104,6 +113,29 @@ BASELINE_CANDIDATE_IDS = set("""
  ED-01 ED-02 ED-03 ED-04a ED-04b ED-05
  CMS-01a CMS-01b CMS-02 PUB-01 PUB-02 PUB-03 PUB-04
 """.split())
+
+# Five *source-evidenced subsets* of the decision ledger, never five accepted
+# whole candidates. EX-03 explicitly includes a separate unverified vector
+# effect, so its pure mapping is only one part of that SPLIT decision. This
+# audited correspondence is checked against the real Rust owner contracts,
+# installed catalog, runner registration and original candidate source paths.
+# It is not imported by runtime code or used for operation dispatch.
+PURE_CANDIDATE_SOURCE_BINDINGS = {
+    "EX-01": ("LayerRoute", "app/rust/crates/seo_domain/src/extraction/layer_routing.rs"),
+    "EX-02": ("EntitySpans", "app/rust/crates/seo_domain/src/extraction/entity_spans.rs"),
+    "EX-03": ("CanonicalizeMentions", "app/rust/crates/seo_domain/src/canonical_mapping.rs"),
+    "EX-05": ("OperationalEntities", "app/rust/crates/seo_domain/src/extraction/operational_entities.rs"),
+    "EX-06": ("EditorialTopics", "app/rust/crates/seo_domain/src/extraction/editorial_topics.rs"),
+}
+PURE_SOURCE_FILES = (
+    PURE_OPS.relative_to(ROOT).as_posix(),
+    PURE_CATALOG.relative_to(ROOT).as_posix(),
+    PURE_RUNNER.relative_to(ROOT).as_posix(),
+)
+ACQUISITION_CANDIDATE_SOURCE_BINDINGS = {
+    "ACQ-01": ("ClassifySourcePage", "app/rust/crates/acquisition/src/source_relevance.rs"),
+    "ACQ-02": ("EvaluateDomBlocks", "app/rust/crates/acquisition/src/source_relevance.rs"),
+}
 
 ACTIVITY_SIGNATURE = re.compile(
     r"#\[activity\]\s*pub async fn\s+(\w+)\s*\((.*?)\)\s*"
@@ -279,6 +311,175 @@ def pure_operations() -> tuple[list[str], list[str]]:
     return names, errors
 
 
+def typed_owner_contracts(code: str, names: list[str]) -> tuple[dict[str, dict], list[str]]:
+    errors: list[str] = []
+    implementations: dict[str, dict] = {}
+    for name in names:
+        impl = re.search(
+            rf"impl Operation for\s+{re.escape(name)}\s*\{{(?P<body>.*?)\n\}}",
+            code,
+            re.DOTALL,
+        )
+        if impl is None:
+            errors.append(f"pure owner {name} lacks typed Operation contract")
+            continue
+        body = impl.group("body")
+        input_type = re.search(r"\btype Input\s*=\s*([^;]+);", body)
+        output_type = re.search(r"\btype Output\s*=\s*([^;]+);", body)
+        failure_type = re.search(r"\btype Failure\s*=\s*([^;]+);", body)
+        operation_id = re.search(r'pure_contract\(\s*"([^"]+)"', body)
+        if not all((input_type, output_type, failure_type, operation_id)):
+            errors.append(f"pure owner {name} lacks exact Input/Output/Failure/operation ID")
+            continue
+        if failure_type.group(1).strip() != "Infallible":
+            errors.append(f"pure owner {name} no longer declares Infallible")
+            continue
+        implementations[name] = {
+            "rust_type": name,
+            "operation_id": operation_id.group(1),
+            "input_type": input_type.group(1).strip(),
+            "output_type": output_type.group(1).strip(),
+            "failure_type": failure_type.group(1).strip(),
+        }
+    return implementations, errors
+
+
+def audited_pure_contracts() -> tuple[dict[str, dict], list[str]]:
+    """Derive typed *source evidence*, not a claim of physical E2E success.
+
+    An owner implementation, its trusted catalog entry and its concrete
+    generic pure-executor registration must all exist in current Rust source.
+    Missing any of the three is a drift error, never an inferred ready state.
+    """
+    code = PURE_OPS.read_text(encoding="utf-8")
+    catalog = PURE_CATALOG.read_text(encoding="utf-8")
+    runner = PURE_RUNNER.read_text(encoding="utf-8")
+    names, errors = pure_operations()
+    implementations, typed_errors = typed_owner_contracts(code, names)
+    errors.extend(typed_errors)
+    for name in names:
+        if name not in implementations:
+            continue
+        installed = bool(re.search(rf"\b{re.escape(name)}::contract\(\)\.reference", catalog))
+        registered = bool(re.search(rf"\bregister_pure::<{re.escape(name)}>\(\)", runner))
+        if not installed:
+            errors.append(f"pure owner {name} missing trusted Site Lab catalog registration")
+        if not registered:
+            errors.append(f"pure owner {name} missing independent pure runner registration")
+        implementations[name].update({
+            "catalog_registration_source": installed,
+            "pure_runner_registration_source": registered,
+        })
+    return implementations, errors
+
+
+def audited_acquisition_owner_contracts() -> tuple[dict[str, dict], list[str]]:
+    """The ACQ owner is typed, but not installed in the generic runner.
+
+    Do not import the acquisition crate into the SEO runner simply to turn
+    two source-level domain contracts into a misleading readiness claim.
+    """
+    if not ACQUISITION_OWNER_OPS.is_file():
+        return {}, ["acquisition typed owner module missing"]
+    code = ACQUISITION_OWNER_OPS.read_text(encoding="utf-8")
+    names = [name for name, _ in ACQUISITION_CANDIDATE_SOURCE_BINDINGS.values()]
+    implementations, errors = typed_owner_contracts(code, names)
+    for name in names:
+        if not re.search(rf"impl PureAcquisitionOperation for\s+{re.escape(name)}\b", code):
+            errors.append(f"acquisition owner {name} lacks pure evaluate implementation")
+    return implementations, errors
+
+
+def candidate_readiness(
+    matrix: list[dict], pure_contracts: dict[str, dict],
+    acquisition_contracts: dict[str, dict],
+) -> tuple[list[dict], list[str]]:
+    """Attach the same conservative evidence schema to every one of 52 rows.
+
+    Parsing Rust declarations can establish a typed source contract, but it
+    cannot authenticate one deployed owner, an independent Temporal Run, a
+    signed source, or a real effect receipt. Every full candidate remains
+    unaccepted until separately linked physical evidence is reviewed.
+    """
+    errors: list[str] = []
+    result: list[dict] = []
+    by_id = {row["id"]: row for row in matrix}
+    for candidate_id, (name, expected_source) in PURE_CANDIDATE_SOURCE_BINDINGS.items():
+        row = by_id.get(candidate_id)
+        if row is None or expected_source not in row["source"].split(";"):
+            errors.append(f"pure candidate/source decision drift: {candidate_id} -> {expected_source}")
+        if name not in pure_contracts:
+            errors.append(f"pure candidate {candidate_id} lacks source-derived owner {name}")
+        if row is not None and row["decision"] not in ("KEEP", "SPLIT"):
+            errors.append(f"pure candidate {candidate_id} requires new decision review")
+    if set(pure_contracts) != {name for name, _ in PURE_CANDIDATE_SOURCE_BINDINGS.values()}:
+        errors.append("pure candidate bindings no longer cover exact source-derived Rust owners")
+    for candidate_id, (name, expected_source) in ACQUISITION_CANDIDATE_SOURCE_BINDINGS.items():
+        row = by_id.get(candidate_id)
+        if row is None or expected_source not in row["source"].split(";"):
+            errors.append(f"acquisition candidate/source decision drift: {candidate_id}")
+        if name not in acquisition_contracts:
+            errors.append(f"acquisition candidate {candidate_id} lacks typed owner {name}")
+        if row is not None and row["decision"] != "KEEP":
+            errors.append(f"acquisition candidate {candidate_id} requires new decision review")
+    if set(acquisition_contracts) != {
+        name for name, _ in ACQUISITION_CANDIDATE_SOURCE_BINDINGS.values()
+    }:
+        errors.append("acquisition candidate bindings no longer cover exact typed owners")
+
+    for row in matrix:
+        item = dict(row)
+        match = PURE_CANDIDATE_SOURCE_BINDINGS.get(row["id"])
+        contract = pure_contracts.get(match[0]) if match else None
+        acquisition_match = ACQUISITION_CANDIDATE_SOURCE_BINDINGS.get(row["id"])
+        acquisition_contract = (
+            acquisition_contracts.get(acquisition_match[0]) if acquisition_match else None
+        )
+        typed_source = contract is not None
+        typed_owner_only = acquisition_contract is not None
+        typed_contract = contract if typed_source else acquisition_contract
+        item["readiness_evidence"] = {
+            "source_paths_checked": True,
+            "decision_status": "provisional_source_audit",
+            "disposition": {
+                "KEEP": "candidate_independent_operation_not_yet_accepted",
+                "SPLIT": "candidate_requires_boundary_split_not_yet_accepted",
+                "INTERNAL": "helper_not_proposed_as_independent_operation",
+            }.get(row["decision"], "unreviewed_decision"),
+            "typed_domain_contract": (
+                "pure_input_output_failure_source_verified" if typed_source
+                else "owner_input_output_failure_source_verified" if typed_owner_only
+                else "not_verified"
+            ),
+            "installed_site_lab_contract": (
+                "pure_catalog_registration_source_verified"
+                if typed_source and contract["catalog_registration_source"]
+                else "not_verified"
+            ),
+            "single_operation_executor": (
+                "pure_runner_registration_source_verified"
+                if typed_source and contract["pure_runner_registration_source"]
+                else "not_verified"
+            ),
+            "independent_physical_e2e": "not_attributed_to_candidate",
+            "external_effect_admission": "not_verified_for_complete_candidate",
+            "complete_candidate_acceptance": "unresolved",
+            "typed_owner_contract": typed_contract,
+            "pure_subset_scope": (
+                "known_partial_split" if typed_source and row["decision"] == "SPLIT"
+                else "whole_candidate_scope_not_proven" if typed_source
+                else "not_applicable"
+            ),
+            "source_evidence_paths": (
+                list(PURE_SOURCE_FILES) if typed_source
+                else [ACQUISITION_OWNER_OPS.relative_to(ROOT).as_posix()]
+                if typed_owner_only else []
+            ),
+        }
+        result.append(item)
+    return result, errors
+
+
 def candidates() -> tuple[list[dict], list[str]]:
     code = MATRIX.read_text(encoding="utf-8")
     rows: list[dict] = []
@@ -306,6 +507,14 @@ def candidates() -> tuple[list[dict], list[str]]:
             + " unexpected="
             + str(sorted({row["id"] for row in rows} - BASELINE_CANDIDATE_IDS))
         )
+    digest = hashlib.sha256(
+        json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if digest != BASELINE_CANDIDATE_SHA256:
+        errors.append(
+            "candidate decision ledger changed without explicit reviewed re-baseline: "
+            + digest
+        )
     return rows, errors
 
 
@@ -314,7 +523,20 @@ def audit() -> dict:
     phases, phase_errors = legacy_phases()
     pure, pure_errors = pure_operations()
     matrix, matrix_errors = candidates()
-    errors = activity_errors + phase_errors + pure_errors + matrix_errors
+    pure_contracts, contract_errors = audited_pure_contracts()
+    acquisition_contracts, acquisition_errors = audited_acquisition_owner_contracts()
+    readiness, readiness_errors = candidate_readiness(
+        matrix, pure_contracts, acquisition_contracts
+    )
+    errors = (
+        activity_errors + phase_errors + pure_errors + matrix_errors
+        + contract_errors + acquisition_errors + readiness_errors
+    )
+    evidence_count = sum(
+        row["readiness_evidence"]["single_operation_executor"]
+        == "pure_runner_registration_source_verified"
+        for row in readiness
+    )
     return {
         "source_ref": "851c3fa54fd80c6ad7eb90c8f24d97568baeb45b (baseline; current files read live)",
         "counts": {
@@ -325,8 +547,25 @@ def audit() -> dict:
         },
         "activities": activities,
         "legacy_phases": phases,
-        "candidate_decisions": matrix,
+        "candidate_decisions": readiness,
         "generic_pure_operations": pure,
+        "source_evidenced_pure_contracts": pure_contracts,
+        "source_evidenced_acquisition_owner_contracts": acquisition_contracts,
+        "candidate_readiness_summary": {
+            "all_candidates": len(readiness),
+            "provisional_decisions_by_type": dict(sorted(Counter(row["decision"] for row in readiness).items())),
+            "provisional_public_candidate_rows": sum(
+                row["decision"] in ("KEEP", "SPLIT") for row in readiness
+            ),
+            "provisional_internal_helper_rows": sum(
+                row["decision"] == "INTERNAL" for row in readiness
+            ),
+            "pure_subset_typed_catalog_runner_source_evidenced": evidence_count,
+            "acquisition_owner_typed_only_source_evidenced": len(acquisition_contracts),
+            "fully_accepted_independent_candidates": 0,
+            "candidate_physical_e2e_attested": 0,
+            "candidate_acceptance_pending": len(readiness),
+        },
         # Even an explicitly classified effect does not prove a versioned
         # domain Input/Output/Error contract or tested effect admission.
         "remaining_unknown_contracts": [row["id"] for row in matrix],
@@ -340,14 +579,26 @@ def audit() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--format", choices=("json", "summary"), default="summary")
+    parser.add_argument("--format", choices=("json", "summary", "readiness"), default="summary")
     args = parser.parse_args()
     report = audit()
     if args.format == "json":
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.format == "readiness":
+        print("candidate\tdecision\ttyped_contract\tsingle_step\tphysical_e2e\taccepted")
+        for row in report["candidate_decisions"]:
+            evidence = row["readiness_evidence"]
+            print("\t".join((
+                row["id"], row["decision"],
+                evidence["typed_domain_contract"],
+                evidence["single_operation_executor"],
+                evidence["independent_physical_e2e"],
+                evidence["complete_candidate_acceptance"],
+            )))
     else:
         print("ISSUE94_INVENTORY " + json.dumps(report["counts"], sort_keys=True))
         print("unresolved_candidate_contracts=" + str(len(report["remaining_unknown_contracts"])))
+        print("ISSUE94_READINESS " + json.dumps(report["candidate_readiness_summary"], sort_keys=True))
         for error in report["validation_errors"]:
             print("ERROR: " + error, file=sys.stderr)
     return 1 if report["validation_errors"] else 0
