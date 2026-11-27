@@ -332,6 +332,16 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
     ) && mcp_site_lab_authoring_envelope_too_large(&args) {
         return (mcp_site_lab_authoring_problem(), true);
     }
+    // RecipeChange deliberately has no Serialize implementation. Bound the
+    // client's original JSON edit array before deserializing it into the
+    // strongly typed, deserialize-only edit commands.
+    if name == "site_lab_edit"
+        && args
+            .get("changes")
+            .is_some_and(|changes| mcp_site_lab_authoring_payload_too_large(changes))
+    {
+        return (mcp_site_lab_authoring_problem(), true);
+    }
 
     match name {
         "site_lab_tools" => {
@@ -387,8 +397,7 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
         },
         "site_lab_edit" => match serde_json::from_value::<McpEditRecipe>(args) {
             Ok(input) if input.changes.len() > SITE_LAB_MCP_MAX_RECIPE_EDITS
-                || mcp_site_lab_authoring_payload_too_large(&input.recipe)
-                || mcp_site_lab_authoring_payload_too_large(&input.changes) =>
+                || mcp_site_lab_authoring_payload_too_large(&input.recipe) =>
             {
                 (mcp_site_lab_authoring_problem(), true)
             }
