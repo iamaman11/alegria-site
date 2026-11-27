@@ -83,7 +83,20 @@ async fn restricted_grant_pool() -> Result<PgPool> {
         .context("independent request issuer SQL login unavailable")
         .context("issuer_phase_sql_connect")?;
     let role = sqlx::query(
-        "SELECT current_user::text effective, session_user::text login,
+        // The issuer must NOT need USAGE on raw merely to check that it has
+        // zero raw DML authority. Resolve raw relations from pg_catalog OIDs:
+        // a name-based has_table_privilege lookup can itself require schema
+        // visibility, accidentally expanding this issuer's SQL privileges.
+        "WITH raw_table_oids AS (
+           SELECT
+             (SELECT c.oid FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              WHERE n.nspname='raw' AND c.relname='pages') pages_oid,
+             (SELECT c.oid FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              WHERE n.nspname='raw' AND c.relname='sections') sections_oid
+         )
+         SELECT current_user::text effective, session_user::text login,
                 r.rolcanlogin login_enabled, r.rolinherit inherits_roles,
                 r.rolsuper privileged, r.rolbypassrls bypass,
                 r.rolcreaterole role_admin, r.rolcreatedb db_admin,
@@ -124,15 +137,16 @@ async fn restricted_grant_pool() -> Result<PgPool> {
                   'pipeline.operation_dag_run_governance_v2','INSERT') governance_insert,
                 has_table_privilege(session_user,
                   'pipeline.operation_dag_run_governance_v2','UPDATE') governance_update,
-                has_table_privilege(session_user,'raw.pages','INSERT') raw_insert,
-                has_table_privilege(session_user,'raw.pages','UPDATE') raw_update,
-                has_table_privilege(session_user,'raw.pages','DELETE') raw_delete,
-                has_table_privilege(session_user,'raw.pages','TRUNCATE') raw_truncate,
-                has_table_privilege(session_user,'raw.sections','INSERT') sections_insert,
-                has_table_privilege(session_user,'raw.sections','UPDATE') sections_update,
-                has_table_privilege(session_user,'raw.sections','DELETE') sections_delete,
-                has_table_privilege(session_user,'raw.sections','TRUNCATE') sections_truncate
-         FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
+                coalesce(has_table_privilege(session_user,raw_table_oids.pages_oid,'INSERT'),true) raw_insert,
+                coalesce(has_table_privilege(session_user,raw_table_oids.pages_oid,'UPDATE'),true) raw_update,
+                coalesce(has_table_privilege(session_user,raw_table_oids.pages_oid,'DELETE'),true) raw_delete,
+                coalesce(has_table_privilege(session_user,raw_table_oids.pages_oid,'TRUNCATE'),true) raw_truncate,
+                coalesce(has_table_privilege(session_user,raw_table_oids.sections_oid,'INSERT'),true) sections_insert,
+                coalesce(has_table_privilege(session_user,raw_table_oids.sections_oid,'UPDATE'),true) sections_update,
+                coalesce(has_table_privilege(session_user,raw_table_oids.sections_oid,'DELETE'),true) sections_delete,
+                coalesce(has_table_privilege(session_user,raw_table_oids.sections_oid,'TRUNCATE'),true) sections_truncate
+         FROM pg_catalog.pg_roles r CROSS JOIN raw_table_oids
+         WHERE r.rolname=current_user",
     )
     .fetch_one(&pool)
     .await
