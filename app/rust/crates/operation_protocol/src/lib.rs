@@ -16,6 +16,7 @@ pub mod dag_machine;
 pub mod effect_child_v4;
 pub mod json_budget;
 pub mod owner_dispatch;
+pub mod owner_schema_v3;
 pub mod owner_validation;
 pub use dag_machine::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
 pub use effect_child_v4::{
@@ -36,6 +37,11 @@ pub use owner_dispatch::{
     OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX, OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2,
     OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_INVOCATION_SCHEMA_REVISION,
     OWNER_OPERATION_CHILD_TYPE_V1,
+};
+pub use owner_schema_v3::{
+    OwnerDtoDescriptorFormatV3, OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3,
+    PinnedOwnerOperationSchemaV3, MAX_OWNER_DTO_DESCRIPTOR_BYTES_V3,
+    MAX_OWNER_OPERATION_DESCRIPTORS_BYTES_V3, OWNER_SCHEMA_ATTESTATION_REVISION_V3,
 };
 pub use owner_validation::{
     owner_validation_child_workflow_id_v1, OwnerValidationError, OwnerValidationRequestV1,

@@ -5,9 +5,9 @@ edition = "2021"
 
 [features]
 default = []
-# Historical Pure/V4/V5 Workflow Histories are served by an explicitly built
-# legacy variant; the normal generic DAG binary never links site application
-# and Truth/SEO domain crates.
+# Frozen Pure V3/Effect V4/V5 Histories and new strict Pure V4 are served only
+# by the explicit site-owned variant. The default generic DAG binary still
+# never links site application or Truth/SEO domain crates.
 legacy-workflows = ["dep:seo_application"]
 # Frozen Qdrant V1 parent is available only for explicitly deployed legacy
 # history replay. Generic DAG and PostgreSQL parents do not link this owner.

@@ -173,6 +173,14 @@ pub struct OperationRegistry {
     handlers: BTreeMap<OperationRef, CheckedHandler>,
 }
 
+/// V3 pure Temporal History must retain its earlier Serde-only decode.
+/// New V4 starts use strict, lossless JSON validation instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PureInputPolicy {
+    LegacyV3Serde,
+    StrictV4,
+}
+
 impl Default for OperationRegistry {
     fn default() -> Self {
         Self {
@@ -184,6 +192,13 @@ impl Default for OperationRegistry {
 
 impl OperationRegistry {
     pub fn register_pure<O: PureExtractionOperation>(&mut self) -> Result<(), OperationRunError> {
+        self.register_pure_with_policy::<O>(PureInputPolicy::StrictV4)
+    }
+
+    fn register_pure_with_policy<O: PureExtractionOperation>(
+        &mut self,
+        input_policy: PureInputPolicy,
+    ) -> Result<(), OperationRunError> {
         let contract = O::contract();
         if contract.inputs.len() != 1
             || contract.outputs.len() != 1
@@ -209,38 +224,44 @@ impl OperationRegistry {
                         artifact: ArtifactId::from("missing-input"),
                         reason: "required input port was not bound".to_owned(),
                     })?;
-            // A serde DTO without deny_unknown_fields may silently discard
-            // caller-supplied values. A sealed artifact schema pin cannot
-            // make that safe: reject duplicate raw keys and every field that
-            // fails to survive the concrete owner's typed round-trip.
-            // This changes only pure ingress checks, not historical V1 wire.
-            let authored = crate::typed_json::parse_unique_json_bytes(bytes).map_err(|error| {
-                OperationRunError::InvalidInput {
-                    operation: error_reference.clone(),
-                    artifact: artifact.clone(),
-                    reason: format!("ambiguous JSON input: {error}"),
-                }
-            })?;
+            // V3 was deployed with plain Serde decoding; keep that behavior
+            // for historical replay. Only V4 refuses raw duplicate keys and
+            // caller fields lost through a concrete owner's typed decoder.
+            let authored = if input_policy == PureInputPolicy::StrictV4 {
+                Some(
+                    crate::typed_json::parse_unique_json_bytes(bytes).map_err(|error| {
+                        OperationRunError::InvalidInput {
+                            operation: error_reference.clone(),
+                            artifact: artifact.clone(),
+                            reason: format!("ambiguous JSON input: {error}"),
+                        }
+                    })?,
+                )
+            } else {
+                None
+            };
             let typed: O::Input =
                 serde_json::from_slice(bytes).map_err(|error| OperationRunError::InvalidInput {
                     operation: error_reference.clone(),
                     artifact: artifact.clone(),
                     reason: error.to_string(),
                 })?;
-            let normalized =
-                crate::typed_json::normalized_wire_json_value(&typed).map_err(|error| {
-                    OperationRunError::InvalidInput {
+            if let Some(authored) = authored {
+                let normalized =
+                    crate::typed_json::normalized_wire_json_value(&typed).map_err(|error| {
+                        OperationRunError::InvalidInput {
+                            operation: error_reference.clone(),
+                            artifact: artifact.clone(),
+                            reason: format!("typed JSON normalization failed: {error}"),
+                        }
+                    })?;
+                if !crate::typed_json::preserves_authored_fields(&authored, &normalized) {
+                    return Err(OperationRunError::InvalidInput {
                         operation: error_reference.clone(),
                         artifact: artifact.clone(),
-                        reason: format!("typed JSON normalization failed: {error}"),
-                    }
-                })?;
-            if !crate::typed_json::preserves_authored_fields(&authored, &normalized) {
-                return Err(OperationRunError::InvalidInput {
-                    operation: error_reference.clone(),
-                    artifact: artifact.clone(),
-                    reason: "typed input discarded or altered an authored JSON field".into(),
-                });
+                        reason: "typed input discarded or altered an authored JSON field".into(),
+                    });
+                }
             }
             let output: O::Output = O::evaluate(&typed);
             let encoded =
@@ -380,6 +401,23 @@ pub fn execute_pure_dag(
     workflow_id: &str,
     run: &PureDagRun,
 ) -> Result<PureDagReceipt, OperationRunError> {
+    execute_pure_dag_with_registry(workflow_id, run, semantic_extraction_registry()?)
+}
+
+/// Historical V3 pure Workflow replay must keep earlier typed Serde-only
+/// admission. New V4 workflow starts always use strict `execute_pure_dag`.
+pub fn execute_pure_dag_legacy_v3(
+    workflow_id: &str,
+    run: &PureDagRun,
+) -> Result<PureDagReceipt, OperationRunError> {
+    execute_pure_dag_with_registry(workflow_id, run, semantic_extraction_registry_legacy_v3()?)
+}
+
+fn execute_pure_dag_with_registry(
+    workflow_id: &str,
+    run: &PureDagRun,
+    registry: OperationRegistry,
+) -> Result<PureDagReceipt, OperationRunError> {
     if workflow_id != run.plan.scope.run_id {
         return Err(OperationRunError::TemporalRunIdMismatch);
     }
@@ -390,7 +428,6 @@ pub fn execute_pure_dag(
         return Err(OperationRunError::EffectfulPlanEnvelope);
     }
     enforce_pure_dag_input_budget(run)?;
-    let registry = semantic_extraction_registry()?;
     // Never seal an incoming plan: its original fingerprints and hash must
     // survive Temporal workflow replay unchanged.
     run.plan.validate(registry.catalog())?;
@@ -427,6 +464,16 @@ pub fn semantic_extraction_registry() -> Result<OperationRegistry, OperationRunE
     registry.register_pure::<CanonicalizeMentions>()?;
     registry.register_pure::<EditorialTopics>()?;
     registry.register_pure::<OperationalEntities>()?;
+    Ok(registry)
+}
+
+fn semantic_extraction_registry_legacy_v3() -> Result<OperationRegistry, OperationRunError> {
+    let mut registry = OperationRegistry::default();
+    registry.register_pure_with_policy::<LayerRoute>(PureInputPolicy::LegacyV3Serde)?;
+    registry.register_pure_with_policy::<EntitySpans>(PureInputPolicy::LegacyV3Serde)?;
+    registry.register_pure_with_policy::<CanonicalizeMentions>(PureInputPolicy::LegacyV3Serde)?;
+    registry.register_pure_with_policy::<EditorialTopics>(PureInputPolicy::LegacyV3Serde)?;
+    registry.register_pure_with_policy::<OperationalEntities>(PureInputPolicy::LegacyV3Serde)?;
     Ok(registry)
 }
 

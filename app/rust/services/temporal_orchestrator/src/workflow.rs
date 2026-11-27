@@ -20,9 +20,11 @@ use qdrant_contracts::{
 };
 #[cfg(feature = "legacy-workflows")]
 use seo_application::operation_adapter::{
-    decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
-    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1, PureDagRun,
+    decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag_legacy_v3,
+    EffectDagRunV1, MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1,
 };
+#[cfg(feature = "legacy-workflows")]
+use seo_application::operation_adapter::{execute_pure_dag, PureDagReceipt, PureDagRun};
 use std::sync::OnceLock;
 use temporalio_common::WorkflowDefinition;
 use temporalio_macros::{workflow, workflow_methods};
@@ -120,6 +122,16 @@ struct AlegriaPureOperationDagV1Workflow {
     immutable_input: PureDagRun,
 }
 
+/// A separate History-visible strict input contract. Never reinterpret an
+/// existing V3 History with new duplicate/unknown-field rejection semantics.
+/// This V4 type runs only on its own queue and returns a typed receipt rather
+/// than the historical V3 JSON String.
+#[cfg(feature = "legacy-workflows")]
+#[workflow]
+struct AlegriaPureOperationDagV2Workflow {
+    immutable_input: PureDagRun,
+}
+
 /// The manifest may contain real PostgreSQL effects, but the current V3
 /// admission schema cannot bind independently attested child Workflow Run
 /// IDs to one canonical pipeline run. This Workflow intentionally performs
@@ -191,6 +203,20 @@ pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
 pub(crate) fn register_for_replay(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
+    Ok(())
+}
+
+#[cfg(feature = "legacy-workflows")]
+pub(crate) fn register_pure_v4(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaPureOperationDagV2Workflow>()?;
+    Ok(())
+}
+
+#[cfg(feature = "legacy-workflows")]
+pub(crate) fn register_for_replay_pure_v4(
+    opts: &mut WorkflowReplayerOptions,
+) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaPureOperationDagV2Workflow>()?;
     Ok(())
 }
 
@@ -644,7 +670,7 @@ impl AlegriaPureOperationDagV1Workflow {
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
         let input = ctx.state(|state| state.immutable_input.clone());
         let workflow_id = ctx.info().workflow_id().to_string();
-        let result = execute_pure_dag(&workflow_id, &input).map_err(|error| {
+        let result = execute_pure_dag_legacy_v3(&workflow_id, &input).map_err(|error| {
             WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
                 std::io::Error::other(error.to_string()),
             ))
@@ -654,6 +680,22 @@ impl AlegriaPureOperationDagV1Workflow {
                 std::io::Error::other(error.to_string()),
             ))
         })
+    }
+}
+
+#[cfg(feature = "legacy-workflows")]
+#[workflow_methods]
+impl AlegriaPureOperationDagV2Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, immutable_input: PureDagRun) -> Self {
+        Self { immutable_input }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<PureDagReceipt> {
+        let input = ctx.state(|state| state.immutable_input.clone());
+        let workflow_id = ctx.info().workflow_id().to_string();
+        execute_pure_dag(&workflow_id, &input).map_err(workflow_failure)
     }
 }
 
@@ -675,6 +717,23 @@ mod typed_native_child_contract_tests {
     >(
         _: &T,
     ) {
+    }
+
+    #[cfg(feature = "legacy-workflows")]
+    fn strict_pure_v4_abi<T: WorkflowDefinition<Input = PureDagRun, Output = PureDagReceipt>>() {}
+
+    #[cfg(feature = "legacy-workflows")]
+    #[test]
+    fn strict_pure_v4_has_new_typed_receipt_and_is_not_the_historical_v3_string_workflow() {
+        strict_pure_v4_abi::<AlegriaPureOperationDagV2Workflow>();
+        assert_ne!(
+            "AlegriaPureOperationDagV1Workflow",
+            "AlegriaPureOperationDagV2Workflow"
+        );
+        assert_ne!(
+            crate::PURE_DAG_ORCHESTRATOR_QUEUE,
+            crate::PURE_DAG_ORCHESTRATOR_V4_QUEUE
+        );
     }
 
     #[test]

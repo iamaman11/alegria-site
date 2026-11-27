@@ -2,7 +2,8 @@
 //! No DB, provider SDK, Activity registration, poller or network connection.
 
 use super::{
-    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
+    EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
+    PURE_DAG_ORCHESTRATOR_QUEUE, PURE_DAG_ORCHESTRATOR_V4_QUEUE,
 };
 use std::path::Path;
 
@@ -26,12 +27,18 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
             && queue != EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
         "historical site Workflow replay requires legacy-workflows binary feature"
     );
+    #[cfg(not(feature = "legacy-workflows"))]
+    anyhow::ensure!(
+        queue != PURE_DAG_ORCHESTRATOR_V4_QUEUE,
+        "strict pure V4 replay requires legacy-workflows binary feature"
+    );
     #[cfg(feature = "legacy-qdrant-v1")]
     let qdrant_v1 = queue == QDRANT_DAG_PARENT_QUEUE_V1;
     #[cfg(not(feature = "legacy-qdrant-v1"))]
     let qdrant_v1 = false;
     anyhow::ensure!(
         queue == PURE_DAG_ORCHESTRATOR_QUEUE
+            || queue == PURE_DAG_ORCHESTRATOR_V4_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
             || qdrant_v1
@@ -55,7 +62,12 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
         .namespace("default".to_string())
         .task_queue(queue.to_string())
         .build();
-    if queue == OPERATION_DAG_PARENT_QUEUE_V2 {
+    if queue == PURE_DAG_ORCHESTRATOR_V4_QUEUE {
+        #[cfg(feature = "legacy-workflows")]
+        super::workflow::register_for_replay_pure_v4(&mut options)?;
+        #[cfg(not(feature = "legacy-workflows"))]
+        anyhow::bail!("strict pure V4 replay requires legacy-workflows binary feature");
+    } else if queue == OPERATION_DAG_PARENT_QUEUE_V2 {
         super::workflow::register_for_replay_operation_dag_v2(&mut options)?;
     } else if queue == OPERATION_DAG_PARENT_QUEUE {
         super::workflow::register_for_replay_operation_dag_v1(&mut options)?;
@@ -96,6 +108,7 @@ mod tests {
         let missing = std::env::temp_dir().join("not-a-real-temporal-history.json");
         for queue in [
             PURE_DAG_ORCHESTRATOR_QUEUE,
+            PURE_DAG_ORCHESTRATOR_V4_QUEUE,
             EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
             EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
         ] {

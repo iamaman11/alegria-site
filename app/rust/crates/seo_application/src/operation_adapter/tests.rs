@@ -313,6 +313,89 @@ fn pure_runner_rejects_duplicate_json_fields_before_typed_owner_decode() {
 }
 
 #[test]
+fn historical_v3_serde_ingress_keeps_prior_unknown_field_semantics() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, mut admitted) = plan(
+        &registry,
+        vec![node::<LayerRoute>("only", "source", "output")],
+        vec![seed::<LayerRoute>("source", &router_input())],
+    );
+    let mut raw = serde_json::to_value(router_input()).unwrap();
+    raw.as_object_mut()
+        .unwrap()
+        .insert("future_field".into(), serde_json::json!(true));
+    admitted
+        .get_mut(&ArtifactId::from("source"))
+        .unwrap()
+        .payload = serde_json::to_vec(&raw).unwrap();
+
+    assert!(matches!(
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan: plan.clone(),
+                admitted: admitted.clone()
+            }
+        ),
+        Err(OperationRunError::InvalidInput { .. })
+    ));
+    let replayed = execute_pure_dag_legacy_v3("test-run", &PureDagRun { plan, admitted }).unwrap();
+    assert_eq!(replayed.order, [OperationInstanceId::from("only")]);
+    assert!(replayed.artifacts.contains_key(&ArtifactId::from("output")));
+}
+
+#[test]
+fn historical_v3_serde_ingress_keeps_prior_duplicate_key_semantics() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, mut admitted) = plan(
+        &registry,
+        vec![node::<LayerRoute>("only", "source", "output")],
+        vec![seed::<LayerRoute>("source", &router_input())],
+    );
+    admitted.get_mut(&ArtifactId::from("source")).unwrap().payload =
+        br#"{"section_id":"verified-visa","section_id":"prior-last-wins", "heading_text":"Docs", "raw_text":"Passport", "source_tier":"official", "block_type":"instruction"}"#.to_vec();
+
+    assert!(matches!(
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan: plan.clone(),
+                admitted: admitted.clone()
+            }
+        ),
+        Err(OperationRunError::InvalidInput { .. })
+    ));
+    let replayed = execute_pure_dag_legacy_v3("test-run", &PureDagRun { plan, admitted }).unwrap();
+    assert_eq!(replayed.order, [OperationInstanceId::from("only")]);
+}
+
+#[test]
+fn historical_v3_and_strict_v4_agree_on_lossless_typed_input() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, admitted) = plan(
+        &registry,
+        vec![node::<LayerRoute>("only", "source", "output")],
+        vec![seed::<LayerRoute>("source", &router_input())],
+    );
+    let run = PureDagRun { plan, admitted };
+    let strict = execute_pure_dag("test-run", &run).unwrap();
+    let legacy = execute_pure_dag_legacy_v3("test-run", &run).unwrap();
+    assert_eq!(strict.plan_hash, legacy.plan_hash);
+    assert_eq!(strict.order, legacy.order);
+    assert_eq!(
+        strict.artifacts.keys().collect::<Vec<_>>(),
+        legacy.artifacts.keys().collect::<Vec<_>>()
+    );
+    for (id, value) in strict.artifacts {
+        let previous = &legacy.artifacts[&id];
+        assert_eq!(value.schema, previous.schema);
+        assert_eq!(value.scope, previous.scope);
+        assert_eq!(value.provenance, previous.provenance);
+        assert_eq!(value.payload, previous.payload);
+    }
+}
+
+#[test]
 fn layer_route_executes_as_an_independent_typed_pure_dag() {
     prove_independent_pure_operation::<LayerRoute>("semantic.layer_route", &router_input());
 }

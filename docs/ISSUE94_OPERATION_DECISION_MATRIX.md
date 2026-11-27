@@ -89,13 +89,27 @@ ACQ/EX/TR (в `proto_runtime_payload_store/registered_payload_impls.rs`
 порты, владельца и effects, но **не полный структурный descriptor полей
 Rust Input/Output/Failure**. Изменение DTO без ревизии может оставить прежний
 hash. На текущей V2 History-схеме нельзя добавить descriptor in-place,
-поскольку это изменит исторические pinned fingerprints. Требуется новая
-версионированная owner schema attestation с проверкой replay в отдельном
-cutover. Проверки raw duplicate JSON и typed round-trip в pure-исполнителе
+поскольку это изменит исторические pinned fingerprints. В отдельном
+`operation_protocol::owner_schema_v3` теперь есть **additive фундамент**:
+версионированный `OwnerOperationSchemaV3`, явные независимые Input/Output/
+Failure descriptor bytes, ограничение размера, собственный fingerprint и
+сверка с независимо установленным trusted owner pin. V2 Contract/History
+не меняются. Но owner-side автоматическая генерация/семантическая проверка
+полного schema descriptor из реальных Rust DTO, установка доверенного
+каталога и включение V3 pin в новую History ещё **не реализованы**: P0
+поэтому остаётся открытым. Проверки raw duplicate JSON и typed round-trip в pure-исполнителе
 защищают от молча проигнорированных параметров **сейчас**, но не заменяют
 полного структурного descriptor. Исходные boundary regressions:
 `python3 automation/test_operation_wire_boundary.py`; эти source-checks
 не доказывают E2E всех 52 кандидатов.
+
+В CI дополнительно запинены **декларации legacy Protobuf V1**, включая
+импорт `condition.proto`, и неизменяемый сериализуемый layout/Blake3
+fingerprint `OperationContract` V2. Комментарии и форматирование Proto не
+считаются изменением деклараций; добавление/замена полей старой версии
+обязательно требует отдельного review на исторический replay. Это защищает
+старый wire от случайного изменения, но **не удостоверяет** полную структуру
+owner DTO и не может заменить отдельную V3 schema attestation.
 
 Проверки authoring и pure artifact ingress используют один нейтральный
 `seo_application::typed_json`: отказ на дубли ключей, проверка сохранности
@@ -104,13 +118,18 @@ cutover. Проверки raw duplicate JSON и typed round-trip в pure-исп�
 предметная IDL и не отдельный каталог операций. Консервативно отклоняются
 alias/skip-поля, которые не сохранили исходное JSON-представление.
 
-**Temporal V3 replay caveat:** проверка pure ingress применяется на
-существующем V3 workflow пути. Для старых V3 Histories, в которых раньше
-принимались лишние или неоднозначные поля, изменение результата проверки
-ещё не подтверждено реальным replay. До merge/deploy требуется проверить
-сохранённые Histories либо вывести версию поведения/новую очередь с
-совместимым Build ID. Отсутствие изменений в Protobuf V1 не доказывает
-совместимость всех V3 запусков.
+**Temporal V3/V4 replay boundary:** исторический V3 Workflow Type
+`AlegriaPureOperationDagV1Workflow` на очереди `alegria-pure-dag-v3`
+продолжает вызывать `execute_pure_dag_legacy_v3` с прежним Serde ingress и
+`String`-результатом. Новая строгая проверка относится к отдельному V4
+Workflow Type `AlegriaPureOperationDagV2Workflow`, очереди
+`alegria-pure-dag-v4`, типизированному `PureDagReceipt` и отдельному
+`ALLOW_PURE_DAG_ORCHESTRATOR_V4` opt-in. Один бинарник worker, новые
+бизнес-операции не добавляются; одна очередь не подменяет другую.
+Сохранение исходного пути V3 проверяется статическими негативными тестами,
+но **фактический replay сохранённых V3 Histories по server History ещё
+требует проверки** перед deployment. Отсутствие изменений в Protobuf V1
+само по себе не доказывает совместимость всех исторических запусков.
 
 Verified static reachability at the baseline: 55 Activity methods referenced
 from canonical V1, 14 additional expert-only methods, two other operational
