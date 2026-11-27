@@ -25,9 +25,13 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
-    def test_one_step_grant_and_acquisition_issuer_have_only_exact_wire_adapters(self) -> None:
+    def test_one_step_grant_and_acquisition_issuer_have_only_reviewed_wire_boundaries(self) -> None:
         self.assertEqual(ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES, {
             "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
+            "app/rust/services/one_step_request_issuer/src/issue_json.rs",
+            "app/rust/services/one_step_request_issuer/src/catalog.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/one_step_request_grant_pg_tests.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_one_step_grant_tests.rs",
         })
         self.assertEqual(ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES, {
             "app/rust/services/acquisition_source_issuer/src/issue_json.rs",
@@ -39,6 +43,8 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/crates/operation_protocol/src/unreviewed_grant_json.rs",
             "app/rust/services/acquisition_source_issuer/src/main.rs",
             "app/rust/services/acquisition_source_issuer/src/unreviewed_json.rs",
+            "app/rust/services/one_step_request_issuer/src/main.rs",
+            "app/rust/services/one_step_request_issuer/src/unreviewed_json.rs",
         ):
             self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 

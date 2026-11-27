@@ -175,15 +175,13 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
     .execute(&pg.pool)
     .await
     .expect("DBA installs independent approval policy");
-    let bind_approved_identity =
-        "(authorization_event_id,request_id,run_id,tenant_id,principal_id,policy_id,
-           context_key,operation_id,operation_revision,parent_workflow_id,plan_hash,
-           expected_start,limits,expires_at)";
-    let grant_fields = format!(
-        "INSERT INTO pipeline.operation_dag_one_step_request_approvals_v1 {bind_approved_identity}
+    let grant_fields =
+        "INSERT INTO pipeline.operation_dag_one_step_request_approvals_v1
+           (authorization_event_id,request_id,run_id,tenant_id,principal_id,policy_id,
+            context_key,operation_id,operation_revision,parent_workflow_id,plan_hash,
+            expected_start,limits,expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,
-                 clock_timestamp()+interval '5 minutes')"
-    );
+                 clock_timestamp()+interval '5 minutes')";
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "GRANT INSERT ON pipeline.operation_dag_one_step_request_approvals_v1 TO {approver};
          GRANT SELECT ON pipeline.operation_dag_one_step_request_approvals_v1,
@@ -212,7 +210,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         "currency_code": "USD",
         "max_charge_minor_units": 10001,
     });
-    assert!(sqlx::query(&grant_fields)
+    assert!(sqlx::query(grant_fields)
         .bind(authorization_event_id).bind(request_id).bind(run_id).bind(&tenant)
         .bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)
@@ -220,7 +218,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         .bind(expected.to_string()).bind(excessive_limits.to_string())
         .execute(&approver_pool).await.is_err(),
         "approver cannot overrule DBA-authorized budget ceilings");
-    assert!(sqlx::query(&grant_fields)
+    assert!(sqlx::query(grant_fields)
         .bind(authorization_event_id).bind(request_id).bind(run_id).bind(&tenant)
         .bind("forged-other-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)
@@ -228,7 +226,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         .bind(expected.to_string()).bind(limits.to_string())
         .execute(&approver_pool).await.is_err(),
         "approver may not sign a different user than independently DBA-mapped LOGIN");
-    assert!(sqlx::query(&grant_fields)
+    assert!(sqlx::query(grant_fields)
         .bind(authorization_event_id).bind(request_id).bind(run_id).bind(&tenant)
         .bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)
@@ -237,7 +235,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         .execute(&issuer_pool).await.is_err(),
         "grant issuer cannot also sign an authorization event");
 
-    let approval = sqlx::query(&grant_fields)
+    let approval = sqlx::query(grant_fields)
         .bind(authorization_event_id)
         .bind(request_id)
         .bind(run_id)
@@ -255,12 +253,14 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         .await;
     approval.expect("a separate authenticated approver signs a bounded exact request");
 
-    let grant_insert = format!(
-        "INSERT INTO pipeline.operation_dag_one_step_request_grants_v1 {bind_approved_identity}
+    let grant_insert =
+        "INSERT INTO pipeline.operation_dag_one_step_request_grants_v1
+           (authorization_event_id,request_id,run_id,tenant_id,principal_id,policy_id,
+            context_key,operation_id,operation_revision,parent_workflow_id,plan_hash,
+            expected_start,limits,expires_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,
-                 clock_timestamp()+interval '4 minutes')"
-    );
-    assert!(sqlx::query(&grant_insert)
+                 clock_timestamp()+interval '4 minutes')";
+    assert!(sqlx::query(grant_insert)
         .bind(authorization_event_id).bind(request_id).bind(run_id)
         .bind(&tenant).bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)
@@ -270,7 +270,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         "authorization approver cannot mint executable reservation grants");
     // The issuer cannot invent a tenant/plan/ACL/charge. The original
     // independently signed approval must match every pinned field.
-    assert!(sqlx::query(&grant_insert)
+    assert!(sqlx::query(grant_insert)
         .bind(authorization_event_id).bind(request_id).bind(run_id)
         .bind(&tenant).bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)
@@ -278,7 +278,7 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
         .bind(expected.to_string()).bind(limits.to_string())
         .execute(&issuer_pool).await.is_err(),
         "an issuer cannot substitute a new plan for the independently approved one");
-    sqlx::query(&grant_insert)
+    sqlx::query(grant_insert)
         .bind(authorization_event_id).bind(request_id).bind(run_id)
         .bind(&tenant).bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
         .bind(&context).bind("acquisition.classify_source_page").bind(1_i32)

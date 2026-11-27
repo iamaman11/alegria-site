@@ -17,7 +17,8 @@ use operation_protocol::{
     operation_dag_parent_workflow_id_v2, preflight_issued_one_step_request_for_reservation_v1,
     preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1, ArtifactId,
     IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
-    OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationRef,
+    OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationId,
+    OperationRef,
     PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
     TrustedRouteCatalog, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
     OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
@@ -392,7 +393,7 @@ async fn independently_check_one_shot_grant(
         context_key: row.try_get("context_key")?,
         canonical_run_id: row.try_get("run_id")?,
         operation: OperationRef {
-            id: row.try_get::<String, _>("operation_id")?.into(),
+            id: OperationId(row.try_get::<String, _>("operation_id")?),
             revision: u32::try_from(row.try_get::<i32, _>("operation_revision")?)?,
         },
         parent_workflow_id: row.try_get("parent_workflow_id")?,
@@ -1273,10 +1274,16 @@ mod tests {
         };
         let mut forged = serde_json::to_value(&wrapper).unwrap();
         forged["tenant_id"] = serde_json::json!("attacker");
-        assert!(serde_json::from_value::<GrantedSingleOperationStartIntentV1>(forged).is_err());
+        assert!(serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
+            &serde_json::to_vec(&forged).unwrap()
+        )
+        .is_err());
         let mut forged = serde_json::to_value(&wrapper).unwrap();
         forged["temporal_url"] = serde_json::json!("http://evil:7233/");
-        assert!(serde_json::from_value::<GrantedSingleOperationStartIntentV1>(forged).is_err());
+        assert!(serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
+            &serde_json::to_vec(&forged).unwrap()
+        )
+        .is_err());
     }
 
     #[test]

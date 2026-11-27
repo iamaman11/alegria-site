@@ -204,6 +204,14 @@ ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES = frozenset({
     # SQL issuer, Temporal Start or authorization authority; all policy and
     # one-use checks remain JSON-free in one_step_request_grant_v1.rs.
     "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
+    # Only the independently credentialed issuer's strict private request
+    # and protected catalog decoding; no JSON ingress in its SQL/ACL main.
+    "app/rust/services/one_step_request_issuer/src/issue_json.rs",
+    "app/rust/services/one_step_request_issuer/src/catalog.rs",
+    # Exact native physical E2E fixtures construct typed SQL/Temporal wires.
+    # The production operator and generic DAG receive no broad exemption.
+    "app/rust/crates/integration_pg_app_e2e/src/tests/one_step_request_grant_pg_tests.rs",
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_one_step_grant_tests.rs",
 })
 
 # Only the acquisition V1 replay-compatibility *unit fixture* may serialize
