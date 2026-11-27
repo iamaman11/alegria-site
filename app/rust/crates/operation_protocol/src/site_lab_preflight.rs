@@ -379,7 +379,11 @@ mod single_operation_tests {
 
     fn fixture(
         effectful: bool,
-    ) -> (OperationDagRunV6, TrustedRouteCatalog, SiteLabExpectedStartV1) {
+    ) -> (
+        OperationDagRunV6,
+        TrustedRouteCatalog,
+        SiteLabExpectedStartV1,
+    ) {
         let scope = RunScope {
             tenant_id: "tenant-a".into(),
             run_id: "00000000-0000-0000-0000-000000000001".into(),
@@ -487,9 +491,7 @@ mod single_operation_tests {
                     command_bytes: command_bytes.clone(),
                 },
             )]),
-            pinned_routes: routes
-                .trusted_snapshot_for([&contract.reference])
-                .unwrap(),
+            pinned_routes: routes.trusted_snapshot_for([&contract.reference]).unwrap(),
         };
         let expected = SiteLabExpectedStartV1 {
             schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
@@ -513,7 +515,10 @@ mod single_operation_tests {
         assert_eq!(preview.preflight.execution, "not_started");
         assert_eq!(preview.preflight.owner_admission, "not_issued");
         assert_eq!(preview.preflight.source_authentication, "not_checked");
-        assert_eq!(preview.steps[0].owner_validate_only, "required_not_observed");
+        assert_eq!(
+            preview.steps[0].owner_validate_only,
+            "required_not_observed"
+        );
         assert_eq!(preview.steps[0].effect_dispatch, "not_started");
         assert_eq!(preview.steps[0].idempotency, IdempotencyPolicy::AtMostOnce);
         assert_eq!(preview.steps[0].permitted_effects.len(), 1);

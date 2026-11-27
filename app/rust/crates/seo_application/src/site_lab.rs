@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     owner_content_hash, ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, EffectId,
-    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode,
-    PlanError, PlanHash, PortId, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
+    ExternalArtifact, IdempotencyPolicy, OperationInstanceId, OperationNode, PlanError, PlanHash,
+    PortId, DAG_MAX_NODES, PLAN_SCHEMA_REVISION,
 };
 pub use operation_protocol::{ExecutionPlan, OperationDagReceiptV1, OperationRef, RunScope};
 use serde::{Deserialize, Serialize};

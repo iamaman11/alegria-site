@@ -14,11 +14,10 @@ use dataforseo_contracts::{
     DATAFORSEO_OPERATOR_SIGNAL_V1, DATAFORSEO_OWNER_QUEUE_V1, INPUT_PORT,
 };
 use operation_protocol::{
-    operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2,
-    owner_content_hash, owner_validation_child_workflow_id_v1, ArtifactBinding,
-    Operation, OperationDagRunV6, OwnerInvocationV1, OwnerValidationRequestV1,
-    OwnerValidationResultV1, PortId, TemporalExecutionIdentityV4,
-    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2, owner_content_hash,
+    owner_validation_child_workflow_id_v1, ArtifactBinding, Operation, OperationDagRunV6,
+    OwnerInvocationV1, OwnerValidationRequestV1, OwnerValidationResultV1, PortId,
+    TemporalExecutionIdentityV4, OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
     OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
@@ -79,11 +78,18 @@ fn first_started_payload(history: &History, workflow_type: &str, queue: &str) ->
         bail!("DataForSEO History does not begin with server WorkflowExecutionStarted")
     };
     ensure!(
-        attrs.workflow_type.as_ref().map(|value| value.name.as_str()) == Some(workflow_type)
+        attrs
+            .workflow_type
+            .as_ref()
+            .map(|value| value.name.as_str())
+            == Some(workflow_type)
             && attrs.task_queue.as_ref().map(|value| value.name.as_str()) == Some(queue),
         "DataForSEO Temporal Workflow Type or Task Queue mismatch"
     );
-    let payloads = attrs.input.as_ref().context("Temporal Workflow has no start input")?;
+    let payloads = attrs
+        .input
+        .as_ref()
+        .context("Temporal Workflow has no start input")?;
     ensure!(
         payloads.payloads.len() == 1
             && !payloads.payloads[0].data.is_empty()
@@ -99,32 +105,47 @@ fn started_child<'a>(
     child_type: &str,
     task_queue: &str,
     input: &[u8],
-) -> Result<(&'a temporalio_common::protos::temporal::api::history::v1::HistoryEvent,
-             &'a temporalio_common::protos::temporal::api::history::v1::HistoryEvent)> {
+) -> Result<(
+    &'a temporalio_common::protos::temporal::api::history::v1::HistoryEvent,
+    &'a temporalio_common::protos::temporal::api::history::v1::HistoryEvent,
+)> {
     let matches = parent
         .events
         .iter()
         .filter_map(|event| match &event.attributes {
             Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs))
-                if attrs.workflow_id == workflow_id => Some((event, attrs)),
+                if attrs.workflow_id == workflow_id =>
+            {
+                Some((event, attrs))
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
-    ensure!(matches.len() == 1, "exactly one ChildInitiated event required");
+    ensure!(
+        matches.len() == 1,
+        "exactly one ChildInitiated event required"
+    );
     let (initiated, attrs) = matches[0];
     ensure!(
-        attrs.workflow_type.as_ref().map(|value| value.name.as_str()) == Some(child_type)
+        attrs
+            .workflow_type
+            .as_ref()
+            .map(|value| value.name.as_str())
+            == Some(child_type)
             && attrs.task_queue.as_ref().map(|value| value.name.as_str()) == Some(task_queue)
-            && attrs.input.as_ref().is_some_and(|value| value.payloads.len() == 1
-                && value.payloads[0].data.as_slice() == input),
+            && attrs.input.as_ref().is_some_and(
+                |value| value.payloads.len() == 1 && value.payloads[0].data.as_slice() == input
+            ),
         "ChildInitiated queue/type/exact bytes differ from independently observed child"
     );
     let starts = parent
         .events
         .iter()
-        .filter(|event| matches!(&event.attributes,
+        .filter(|event| {
+            matches!(&event.attributes,
             Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(value))
-            if value.initiated_event_id == initiated.event_id))
+            if value.initiated_event_id == initiated.event_id)
+        })
         .collect::<Vec<_>>();
     ensure!(starts.len() == 1, "exactly one ChildStarted event required");
     Ok((initiated, starts[0]))
@@ -203,7 +224,10 @@ fn prove_effect_pair(
     ensure!(
         server_child.workflow_id == request.child_workflow_id
             && server_child.run_id == request.child_workflow_run_id
-            && started_attrs.workflow_type.as_ref().map(|value| value.name.as_str())
+            && started_attrs
+                .workflow_type
+                .as_ref()
+                .map(|value| value.name.as_str())
                 == Some(OWNER_OPERATION_CHILD_TYPE_V1)
             && own_attrs.parent_initiated_event_id == initiated.event_id
             && server_parent.workflow_id == request.parent_workflow_id
@@ -233,8 +257,11 @@ fn prove_effect_pair(
         .find(|route| route.operation == dispatch.operation && route.owner == dispatch.owner)
         .context("DataForSEO operation missing pinned owner route")?;
     ensure!(
-        run.plan.pinned_contracts.iter().any(|pinned| pinned.reference == contract.reference
-            && pinned.fingerprint == contract_hash)
+        run.plan
+            .pinned_contracts
+            .iter()
+            .any(|pinned| pinned.reference == contract.reference
+                && pinned.fingerprint == contract_hash)
             && owner_wire.operation == dispatch.operation
             && owner_wire.owner == dispatch.owner
             && owner_wire.contract_hash == contract_hash
@@ -243,15 +270,22 @@ fn prove_effect_pair(
             && node.permitted_effects == dispatch.effects
             && run.plan.allowed_effects.is_superset(&dispatch.effects)
             && node.inputs.len() == invocation.bound_inputs.len()
-            && node.inputs.iter().all(|(port, binding)| invocation.bound_inputs
-                .get(port).is_some_and(|bound| &bound.source == binding))
+            && node.inputs.iter().all(|(port, binding)| invocation
+                .bound_inputs
+                .get(port)
+                .is_some_and(|bound| &bound.source == binding))
             && artifact == &bound.artifact_id
             && run.admitted.get(artifact) == Some(&bound.artifact)
             && route.contract_hash == contract_hash
             && route.workflow_type == OWNER_OPERATION_CHILD_TYPE_V1
             && route.task_queue == DATAFORSEO_OWNER_QUEUE_V1
             && route.build_id == trusted_build_id
-            && run.pinned_routes.iter().filter(|route| route.operation == dispatch.operation).count() == 1,
+            && run
+                .pinned_routes
+                .iter()
+                .filter(|route| route.operation == dispatch.operation)
+                .count()
+                == 1,
         "DataForSEO route, contract, source bytes or owner command differs from parent"
     );
     Ok(VerifiedHistory {
@@ -289,17 +323,16 @@ async fn prove_all_validations(
             .iter()
             .find(|route| route.operation == node.operation && route.owner == owner_wire.owner)
             .context("ValidateOnly lacks parent-pinned owner route")?;
-        let id = owner_validation_child_workflow_id_v1(
-            &parent_identity,
-            &dag.plan.hash,
-            &node.instance,
-        );
+        let id =
+            owner_validation_child_workflow_id_v1(&parent_identity, &dag.plan.hash, &node.instance);
         let initiated = parent
             .events
             .iter()
-            .filter(|event| matches!(&event.attributes,
+            .filter(|event| {
+                matches!(&event.attributes,
                 Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(value))
-                    if value.workflow_id == id))
+                    if value.workflow_id == id)
+            })
             .collect::<Vec<_>>();
         ensure!(
             initiated.len() == 1,
@@ -336,9 +369,11 @@ async fn prove_all_validations(
         let started = parent
             .events
             .iter()
-            .filter(|event| matches!(&event.attributes,
+            .filter(|event| {
+                matches!(&event.attributes,
                 Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(value))
-                    if value.initiated_event_id == initiated.event_id))
+                    if value.initiated_event_id == initiated.event_id)
+            })
             .collect::<Vec<_>>();
         ensure!(started.len() == 1, "ValidateOnly must start exactly once");
         let started = started[0];
@@ -353,17 +388,22 @@ async fn prove_all_validations(
             .context("ValidateOnly server start lacks real Run ID")?;
         ensure!(
             execution.workflow_id == id
-                && started_attrs.workflow_type.as_ref().map(|value| value.name.as_str())
+                && started_attrs
+                    .workflow_type
+                    .as_ref()
+                    .map(|value| value.name.as_str())
                     == Some(OWNER_VALIDATION_CHILD_TYPE_V1),
             "ValidateOnly ChildStarted server identity mismatch"
         );
         let completed = parent
             .events
             .iter()
-            .filter(|event| matches!(&event.attributes,
+            .filter(|event| {
+                matches!(&event.attributes,
                 Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(value))
                     if value.initiated_event_id == initiated.event_id
-                       && value.started_event_id == started.event_id))
+                       && value.started_event_id == started.event_id)
+            })
             .collect::<Vec<_>>();
         ensure!(
             completed.len() == 1 && completed[0].event_id < proof.child_started_event_id,
@@ -391,7 +431,10 @@ async fn prove_all_validations(
             own_bytes == raw_request,
             "ValidateOnly child own History start differs from parent initiation"
         );
-        let own_first = child_history.events.first().context("empty ValidateOnly History")?;
+        let own_first = child_history
+            .events
+            .first()
+            .context("empty ValidateOnly History")?;
         let Some(Attributes::WorkflowExecutionStartedEventAttributes(own_start)) =
             &own_first.attributes
         else {
@@ -415,7 +458,10 @@ async fn prove_all_validations(
                 _ => None,
             })
             .collect::<Vec<_>>();
-        ensure!(completed_own.len() == 1, "ValidateOnly own History lacks one completed result");
+        ensure!(
+            completed_own.len() == 1,
+            "ValidateOnly own History lacks one completed result"
+        );
         let own_result = completed_own[0]
             .result
             .as_ref()
@@ -544,7 +590,10 @@ async fn operator_pool() -> Result<(PgPool, String)> {
     );
     let credential_file = env::var("DATAFORSEO_OPERATOR_DATABASE_URL_FILE")?;
     let path = Path::new(&credential_file);
-    ensure!(path.is_absolute(), "operator credential file path must be absolute");
+    ensure!(
+        path.is_absolute(),
+        "operator credential file path must be absolute"
+    );
     ensure!(
         fs::canonicalize(path)?.as_path() == path,
         "DataForSEO operator DSN path must be canonical and symlink-free"
@@ -743,23 +792,20 @@ async fn write_admission(
         business.try_get::<String, _>("tenant_id")? == tenant
             && business.try_get::<String, _>("plan_hash")?
                 == proof.invocation.checked_dispatch.plan_hash.as_str()
-            && business.try_get::<String, _>("parent_workflow_id")?
-                == request.parent_workflow_id
+            && business.try_get::<String, _>("parent_workflow_id")? == request.parent_workflow_id
             && business.try_get::<bool, _>("active")?,
         "DataForSEO issuer requires active independent business-run authority"
     );
-    let parent_sha: String = sqlx::query_scalar(
-        "SELECT encode(public.digest($1::bytea,'sha256'),'hex')",
-    )
-    .bind(&proof.parent_start_bytes)
-    .fetch_one(&mut *tx)
-    .await?;
-    let child_sha: String = sqlx::query_scalar(
-        "SELECT encode(public.digest($1::bytea,'sha256'),'hex')",
-    )
-    .bind(&proof.child_start_bytes)
-    .fetch_one(&mut *tx)
-    .await?;
+    let parent_sha: String =
+        sqlx::query_scalar("SELECT encode(public.digest($1::bytea,'sha256'),'hex')")
+            .bind(&proof.parent_start_bytes)
+            .fetch_one(&mut *tx)
+            .await?;
+    let child_sha: String =
+        sqlx::query_scalar("SELECT encode(public.digest($1::bytea,'sha256'),'hex')")
+            .bind(&proof.child_start_bytes)
+            .fetch_one(&mut *tx)
+            .await?;
     let governed: bool = sqlx::query_scalar(
         "SELECT pipeline.operation_dag_governance_matches_v2(
           $1,$2,$3,$4,$5,$6,$7,TRUE)",
@@ -813,7 +859,10 @@ async fn write_admission(
     .execute(&mut *tx)
     .await?
     .rows_affected();
-    ensure!(affected == 1, "DataForSEO issuer did not insert exactly one admission");
+    ensure!(
+        affected == 1,
+        "DataForSEO issuer did not insert exactly one admission"
+    );
     tx.commit().await?;
     Ok(())
 }
@@ -898,9 +947,7 @@ mod tests {
         let request = IssueRequest {
             admission_id: Uuid::new_v4(),
             canonical_run_id,
-            parent_workflow_id: operation_dag_parent_workflow_id_v2(
-                &canonical_run_id.to_string(),
-            ),
+            parent_workflow_id: operation_dag_parent_workflow_id_v2(&canonical_run_id.to_string()),
             parent_workflow_run_id: Uuid::new_v4().to_string(),
             child_workflow_id: owner_child_workflow_id_v2(&"a".repeat(64)),
             child_workflow_run_id: Uuid::new_v4().to_string(),

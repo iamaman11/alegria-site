@@ -5,9 +5,7 @@
 use operation_protocol::OperationRef;
 use serde::Serialize;
 
-use super::{
-    describe_tools, RecipeParameters, SiteLabCatalog, SiteLabError, ToolDescription,
-};
+use super::{describe_tools, RecipeParameters, SiteLabCatalog, SiteLabError, ToolDescription};
 
 /// A digest of the installed owner's typed parameter check, never a copy of
 /// the author's provider settings or a claim that ValidateOnly has run.

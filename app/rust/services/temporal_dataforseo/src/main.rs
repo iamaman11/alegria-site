@@ -744,7 +744,9 @@ async fn main() -> Result<()> {
             arg == "--replay-history" || arg == "--issue-stub-admission",
             "unknown DataForSEO owner command"
         );
-        let file = args.next().context("DataForSEO command requires one file")?;
+        let file = args
+            .next()
+            .context("DataForSEO command requires one file")?;
         ensure!(args.next().is_none(), "unexpected replay arguments");
         if arg == "--issue-stub-admission" {
             operator::issue_from_file(Path::new(&file)).await?;
