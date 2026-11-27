@@ -308,7 +308,7 @@ fn pure_runner_rejects_duplicate_json_fields_before_typed_owner_decode() {
         err,
         OperationRunError::InvalidInput { operation, reason, .. }
             if operation == LayerRoute::contract().reference
-                && reason.contains("duplicate operation parameter field")
+                && reason.contains("duplicate operation JSON field")
     ));
 }
 
