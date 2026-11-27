@@ -1,6 +1,11 @@
 # Issue #94 — source-based candidate decision ledger
 
-Baseline: Draft PR #95 at `851c3fa`, reconciled with canonical [Issue #94 §6.3](https://github.com/iamaman11/alegria-site/issues/94).
+Decision baseline: Draft PR #95 at `851c3fa`, reconciled with canonical [Issue #94 §6.3](https://github.com/iamaman11/alegria-site/issues/94).
+Latest fully green exact-SHA PR CI checked for this ledger:
+[`d472c4b`](https://github.com/iamaman11/alegria-site/actions/runs/46077079856)
+(40 successful jobs, 8 skipped, 0 failed). This CI result verifies the
+selected tests on that SHA; it is **not** per-candidate acceptance or a
+production deployment.
 The full current runtime Activity inventory is generated **directly from Rust** by
 `python3 automation/audit_operation_inventory.py --format json`. The legacy
 22 phases are generated separately from `SeoPhaseKey` and never become the
@@ -47,7 +52,28 @@ SHA. Только после этого siteArchitect может показыв�
 **0/52 fully accepted**. Переименование интерфейса не изменяет ни эти
 числа, ни сохранённые Temporal History или SQL authority identities.
 
-### Дополнительный owner-local срез (ожидает exact-SHA CI и native E2E)
+### Фактический CI-бюджет и безопасная граница миграции
+
+На exact-SHA `d472c4b` обязательный PR CI прошёл за **351 с (5:51)**;
+цель **1–3 минуты пока не достигнута**. После ускорения Rust `verify`
+критический путь проходит через исторический `rust-e2e-legacy-binaries`
+(226 с, из них 194 с Cargo build), native Temporal harness (189 с)
+и зависящий от них реальный legacy E2E (81 с). Три старых бинарника
+собираются **одним** Cargo invocation: простое разнесение их по jobs
+повторно скомпилирует общие зависимости и не является подтверждённым
+ускорением.
+
+`temporal_worker` пока содержит действующие legacy Activity с прямыми
+зависимостями от PostgreSQL, Qdrant и Neo4j; новый generic
+`temporal_orchestrator` уже отделён от этих провайдеров по умолчанию.
+Следующая оптимизация требует переноса конкретных Activity к их
+владельцам с сохранением старых Workflow Types и зарегистрированных
+Activity до доказанного replay прежних History. Принимать такой перенос
+можно только по exact-SHA independent owner build/ValidateOnly, реальным
+Temporal E2E/replay, tenant/ACL/effect отказам и замеру *полного* PR CI
+до/после. Исторический Worker остаётся совместимым, пока это не доказано.
+
+### Дополнительный owner-local срез (полная приёмка всё ещё ожидается)
 
 В независимых предметных модулях подготовлены **13 отдельных pure-контрактов**
 для кандидатов матрицы. Они не добавлены в пользовательский каталог
@@ -144,8 +170,9 @@ owner-generated DTO схемами **из скомпилированного в�
 Источник authority для V5 pure — linked owner implementation; конфигурация
 каталога эффектных owner и их внешний issuer остаются отдельной границей.
 
-Статус приёмки новых изменений требует **успешного exact-SHA CI с native
-Temporal V5 E2E/replay**. Исходный код и дешёвые Python source/mutation gates
+Успешный full CI на `d472c4b` подтверждает выбранные CI-тесты на этом SHA,
+включая заявленные native Temporal E2E/replay suites. Но это **не**
+индивидуальная аттестация всех кандидатов: source-level Python/mutation gates
 сами по себе не доказывают серверную History, а локально записанная
 History **не заменяет replay исторической production History**.
 
