@@ -15,7 +15,7 @@ class OperationWireBoundaryTests(unittest.TestCase):
 
     def mutated(self, source: str, old: str, new: str) -> list[str]:
         text = self.baseline[source]
-        self.assertIn(old, text, f"fixture drifted; re-review this check before accepting")
+        self.assertIn(old, text, "fixture drifted; re-review this check before accepting")
         changed = dict(self.baseline)
         changed[source] = text.replace(old, new, 1)
         return check_sources(changed)
