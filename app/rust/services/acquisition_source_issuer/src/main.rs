@@ -229,14 +229,22 @@ async fn issue_source(
         "source issuance tenant differs from database login tenant"
     );
     let row = sqlx::query(
-        "SELECT id,url,final_url,content_type,status_code,raw_html,raw_html_bytes,content_hash
-         FROM raw.pages WHERE id=$1 AND tenant_id=$2 FOR SHARE",
+        "SELECT id,url,final_url,content_type,status_code,raw_html,raw_html_bytes,content_hash,
+                encode(public.digest(raw_html,'sha256'),'hex') AS raw_html_sha256
+         FROM raw.pages WHERE id=$1 AND tenant_id=$2",
     )
     .bind(intent.source_page_id)
     .bind(&tenant)
     .fetch_optional(&mut **transaction)
     .await?
     .context("tenant-authenticated immutable raw HTML page unavailable")?;
+    // The source-only SQL principal deliberately has NO UPDATE privilege:
+    // PostgreSQL SELECT FOR SHARE would require one. Capture the snapshot's
+    // server-computed SHA256 in the same MVCC SELECT as its raw HTML, then
+    // require the independent SECURITY DEFINER INSERT guard to compare that
+    // exact digest under its own FOR SHARE lock. A concurrent raw change
+    // between SELECT and INSERT fails closed, without elevating issuer rights.
+    let raw_html_sha256: String = row.try_get("raw_html_sha256")?;
     let captured = CapturedHtmlPageV1 {
         page_id: row.try_get("id")?,
         url: row.try_get("url")?,
@@ -268,8 +276,9 @@ async fn issue_source(
     let inserted = sqlx::query(
         "INSERT INTO pipeline.operation_dag_external_source_attestations_v1
             (record_id,run_id,tenant_id,context_key,plan_hash,artifact_id,
-             artifact_schema,payload_hash,source_page_id,source_page_content_hash,expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,to_timestamp($11::double precision))",
+            artifact_schema,payload_hash,source_page_id,source_page_content_hash,
+            source_page_raw_sha256,expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,to_timestamp($12::double precision))",
     )
     .bind(checked.record_id)
     .bind(Uuid::parse_str(&intent.run.plan.scope.run_id)?)
@@ -281,6 +290,7 @@ async fn issue_source(
     .bind(&derived.payload_hash)
     .bind(intent.source_page_id)
     .bind(&derived.raw_content_hash)
+    .bind(&raw_html_sha256)
     .bind(intent.expires_at_unix_seconds)
     .execute(&mut **transaction)
     .await

@@ -155,7 +155,7 @@ fn utf8_captured_byte_count_is_not_character_count() {
 fn input_json_budget_rejects_escape_expansion_instead_of_truncating() {
     let html = format!(
         "<html><head><title>Valid</title></head><body><main>{}</main></body></html>",
-        "\"".repeat(262_000)
+        "\"".repeat(262_144)
     );
     assert_eq!(
         classify_source_page_payload_from_pinned_html_v1(&snapshot(&html)).unwrap_err(),
