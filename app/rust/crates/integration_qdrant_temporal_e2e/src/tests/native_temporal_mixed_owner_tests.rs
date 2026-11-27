@@ -846,6 +846,7 @@ struct MixedV2NativeRoles {
     business_issuer_url: String,
     governance_issuer_url: String,
     pg_projection_issuer_url: String,
+    start_root_read_only_url: String,
     read_only_url: String,
     foreign_read_only_url: String,
     qdrant_worker_secret: PathBuf,
@@ -862,6 +863,7 @@ async fn mixed_v2_native_roles(
     let business = format!("v2_business_{nonce}");
     let governance = format!("v2_governance_{nonce}");
     let pg_issuer = format!("v2_pg_issuer_{nonce}");
+    let start_reader = format!("v2_start_reader_{nonce}");
     let reader = format!("v2_reader_{nonce}");
     let foreign_reader = format!("v2_foreign_reader_{nonce}");
     let q_worker = format!("v2_q_worker_{nonce}");
@@ -871,14 +873,16 @@ async fn mixed_v2_native_roles(
         "CREATE ROLE {business} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {governance} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {pg_issuer} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {start_reader} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {reader} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {foreign_reader} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {q_worker} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {q_issuer} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
-         GRANT CONNECT ON DATABASE alegria TO {business},{governance},{pg_issuer},{reader},{foreign_reader},{q_worker},{q_issuer};
-         GRANT USAGE ON SCHEMA pipeline TO {business},{governance},{pg_issuer},{reader},{foreign_reader},{q_worker},{q_issuer};
+         GRANT CONNECT ON DATABASE alegria TO {business},{governance},{pg_issuer},{start_reader},{reader},{foreign_reader},{q_worker},{q_issuer};
+         GRANT USAGE ON SCHEMA pipeline TO {business},{governance},{pg_issuer},{start_reader},{reader},{foreign_reader},{q_worker},{q_issuer};
          GRANT INSERT ON pipeline.operation_dag_business_runs_v1 TO {business};
          GRANT SELECT ON pipeline.operation_dag_business_runs_v1 TO {governance},{pg_issuer},{q_issuer};
+         GRANT SELECT ON pipeline.operation_dag_business_runs_v1 TO {start_reader};
          GRANT SELECT ON pipeline.operation_dag_business_runs_v1,
              pipeline.operation_dag_run_governance_v2 TO {reader},{foreign_reader};
          GRANT INSERT ON pipeline.operation_dag_run_governance_v2 TO {governance};
@@ -904,7 +908,7 @@ async fn mixed_v2_native_roles(
              TO {q_issuer};",
         pg_worker = existing.pg_worker_role,
     ))) .execute(&pg.pool).await.expect("DBA creates strictly disjoint V2 roles");
-    for role in [&business, &governance, &pg_issuer, &reader, &q_worker, &q_issuer] {
+    for role in [&business, &governance, &pg_issuer, &start_reader, &reader, &q_worker, &q_issuer] {
         sqlx::query("INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)")
             .bind(role).bind(tenant).execute(&pg.pool).await.unwrap();
     }
@@ -920,6 +924,7 @@ async fn mixed_v2_native_roles(
         business_issuer_url: url(&business),
         governance_issuer_url: url(&governance),
         pg_projection_issuer_url: url(&pg_issuer),
+        start_root_read_only_url: url(&start_reader),
         read_only_url: url(&reader),
         foreign_read_only_url: url(&foreign_reader),
         qdrant_worker_secret: secret("ci-v2-qdrant-worker", &url(&q_worker)),
@@ -2475,6 +2480,9 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             expires_at_unix_seconds: one_start_deadline,
         }).unwrap())
     };
+    let one_start_reader_dsn = private_locators.request(
+        "v2-one-step-start-root-only-dsn", &roles.start_root_read_only_url,
+    );
     let one_reader_dsn = private_locators.request(
         "v2-one-step-reader-dsn", &roles.read_only_url,
     );
@@ -2484,7 +2492,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             .arg(locator)
             .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
             .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
-            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &one_reader_dsn)
+            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &one_start_reader_dsn)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
             .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)

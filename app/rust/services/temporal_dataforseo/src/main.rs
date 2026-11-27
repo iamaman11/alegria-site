@@ -796,9 +796,8 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
             .expect("bind disposable local-only GET test listener");
         let address = listener.local_addr().unwrap();
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
+        let response =
+            format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         let serving = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let mut request = [0_u8; 512];
@@ -855,9 +854,7 @@ mod tests {
             let mut request = [0_u8; 512];
             socket.read(&mut request).unwrap();
             socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}")
                 .unwrap();
         });
         let url = format!("http://{address}/v3/serp/google/organic/task_get/advanced/stub-serp-1");

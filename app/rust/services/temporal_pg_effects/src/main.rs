@@ -750,7 +750,10 @@ async fn main() -> Result<()> {
             let path = args
                 .next()
                 .context("--operator-start-single-v2 requires one private V2 operator intent")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected single-step Start arguments");
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected single-step Start arguments"
+            );
             operator_single_step_start_v2::start_from_private_request(std::path::Path::new(&path))
                 .await?;
             return Ok(());

@@ -6,13 +6,17 @@
 //! Starting a Workflow does not authenticate sources, issue a tenant business
 //! root, authorize owner effects or attest a completed provider result.
 
-use std::{env, path::Path, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{
+    env,
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    OperationDagRunV6, SiteLabExpectedStartV1, TrustedRouteCatalog,
-    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    OperationDagRunV6, SiteLabExpectedStartV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE_V2,
+    OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -81,8 +85,8 @@ fn checked_operator_config(read: impl Fn(&str) -> Option<String>) -> Result<Oper
     let url = checked_local_temporal_url(
         &read(TEMPORAL_URL_ENV).context("missing operator-only Temporal endpoint")?,
     )?;
-    let namespace = read(TEMPORAL_NAMESPACE_ENV)
-        .context("missing operator-only Temporal namespace")?;
+    let namespace =
+        read(TEMPORAL_NAMESPACE_ENV).context("missing operator-only Temporal namespace")?;
     ensure!(
         !namespace.is_empty() && namespace == namespace.trim(),
         "invalid operator Temporal namespace"
@@ -120,7 +124,10 @@ fn decode_checked_intent(
         serde_json::to_vec(&intent)?.as_slice() == bytes,
         "single-step operator request must be canonical typed JSON"
     );
-    ensure!(intent.schema_revision == 1, "unsupported single-step operator intent revision");
+    ensure!(
+        intent.schema_revision == 1,
+        "unsupported single-step operator intent revision"
+    );
     checked_request_ttl(intent.expires_at_unix_seconds, now)?;
     ensure!(
         intent.run.plan.scope.tenant_id == tenant,
@@ -163,7 +170,9 @@ async fn assert_active_independent_business_root(
     .bind(tenant)
     .bind(&intent.context_key)
     .bind(intent.run.plan.hash.as_str())
-    .bind(operation_dag_parent_workflow_id_v2(&intent.run.plan.scope.run_id))
+    .bind(operation_dag_parent_workflow_id_v2(
+        &intent.run.plan.scope.run_id,
+    ))
     .fetch_one(pool)
     .await?;
     ensure!(
@@ -195,12 +204,9 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
         .context("system clock before Unix epoch")?
         .as_secs();
     let intent = decode_checked_intent(&bytes, &config.tenant, &catalog, now)?;
-    let pool = operator_dag_read_v2::tenant_read_only_pool(
-        &config.tenant,
-        ROOT_READER_DSN_ENV,
-        false,
-    )
-    .await?;
+    let pool =
+        operator_dag_read_v2::tenant_read_only_pool(&config.tenant, ROOT_READER_DSN_ENV, false)
+            .await?;
     assert_active_independent_business_root(&pool, &config.tenant, &intent).await?;
     let workflow_id = operation_dag_parent_workflow_id_v2(&intent.run.plan.scope.run_id);
     let connection = timeout(
@@ -294,9 +300,13 @@ mod tests {
     #[test]
     fn single_step_start_never_accepts_public_or_ambiguous_temporal_endpoint() {
         for rejected in [
-            "https://127.0.0.1:7233/", "http://example.com:7233/",
-            "http://127.0.0.1:7233/extra", "http://127.0.0.1:7233/?x=1",
-            "http://user@localhost:7233/", "http://localhost/", "http://127.0.0.1:7233/#x",
+            "https://127.0.0.1:7233/",
+            "http://example.com:7233/",
+            "http://127.0.0.1:7233/extra",
+            "http://127.0.0.1:7233/?x=1",
+            "http://user@localhost:7233/",
+            "http://localhost/",
+            "http://127.0.0.1:7233/#x",
         ] {
             assert!(checked_local_temporal_url(rejected).is_err(), "{rejected}");
         }
@@ -319,28 +329,29 @@ mod tests {
             "/tmp/../x.json",
             "/tmp/absent-site-lab-intent.json",
         ] {
-            assert!(
-                operator_dag_governance::read_private_operator_file(
-                    Path::new(path),
-                    "single-step intent",
-                )
-                .is_err()
-            );
+            assert!(operator_dag_governance::read_private_operator_file(
+                Path::new(path),
+                "single-step intent",
+            )
+            .is_err());
         }
     }
 
     #[test]
     fn single_step_start_pins_both_workflow_id_reuse_policies() {
         let options = one_step_start_options("alegria-operation-dag-v2-test".to_owned());
-        assert_eq!(options.id_reuse_policy, WorkflowIdReusePolicy::RejectDuplicate);
+        assert_eq!(
+            options.id_reuse_policy,
+            WorkflowIdReusePolicy::RejectDuplicate
+        );
         assert_eq!(options.id_conflict_policy, WorkflowIdConflictPolicy::Fail);
     }
 
     #[cfg(unix)]
     #[test]
     fn single_step_start_requires_private_regular_file_and_private_ancestry() {
-        use std::os::unix::fs::{symlink, PermissionsExt};
         use std::fs;
+        use std::os::unix::fs::{symlink, PermissionsExt};
 
         let root = env::current_dir()
             .unwrap()
@@ -360,14 +371,18 @@ mod tests {
         );
 
         fs::set_permissions(&private_file, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(operator_dag_governance::read_private_operator_file(&private_file, "intent").is_err());
+        assert!(
+            operator_dag_governance::read_private_operator_file(&private_file, "intent").is_err()
+        );
         fs::set_permissions(&private_file, fs::Permissions::from_mode(0o600)).unwrap();
         let link = root.join("linked-intent.json");
         symlink(&private_file, &link).unwrap();
         assert!(operator_dag_governance::read_private_operator_file(&link, "intent").is_err());
 
         fs::set_permissions(&root, fs::Permissions::from_mode(0o777)).unwrap();
-        assert!(operator_dag_governance::read_private_operator_file(&private_file, "intent").is_err());
+        assert!(
+            operator_dag_governance::read_private_operator_file(&private_file, "intent").is_err()
+        );
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_file(&link).unwrap();
         fs::remove_file(&private_file).unwrap();
