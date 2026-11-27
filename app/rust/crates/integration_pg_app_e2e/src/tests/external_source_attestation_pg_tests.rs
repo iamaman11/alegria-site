@@ -38,7 +38,7 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
          CREATE ROLE {foreign_name} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {ingress_name},{business_name},{issuer_name},{reader_name},{foreign_name};
          GRANT USAGE ON SCHEMA pipeline TO {business_name},{issuer_name},{reader_name},{foreign_name};
-         GRANT USAGE ON SCHEMA raw TO {ingress_name};
+         GRANT USAGE ON SCHEMA raw TO {ingress_name},{issuer_name};
          GRANT INSERT, SELECT ON raw.pages TO {ingress_name};
          GRANT UPDATE(content_hash,title,processed) ON raw.pages TO {ingress_name};
          GRANT USAGE ON SEQUENCE raw.pages_id_seq TO {ingress_name};

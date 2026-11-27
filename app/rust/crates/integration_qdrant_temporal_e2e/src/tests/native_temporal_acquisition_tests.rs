@@ -412,6 +412,16 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     installed
         .verify_caller_schema(&contract.reference, owner_pin)
         .unwrap();
+    // The generic Temporal parent uses the root-owned V3 structural bundle.
+    // The separately privileged Start operator intentionally has a different,
+    // canonical private catalog wire shape: {contracts, routes}.
+    let operator_catalog = mixed_v6_governance_issuer_catalog(&run, &routes);
+    operation_protocol::preflight_unadmitted_single_operation_v2_start(
+        &run,
+        &installed.routes,
+        &expected_for(&run),
+    )
+    .expect("full typed Acquisition preflight before native operator Start");
 
     let pg = PostgresHarness::start()
         .await
@@ -573,7 +583,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
             .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
             .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &catalog.0)
+            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &operator_catalog)
             .env_remove("DATABASE_URL")
             .output()
             .expect("native exact-source single-step operator Start")

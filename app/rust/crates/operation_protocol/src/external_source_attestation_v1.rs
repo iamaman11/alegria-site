@@ -359,7 +359,7 @@ mod tests {
             Err(ExternalSourceAdmissionErrorV1::ScopeMismatch)
         );
         let mut cross_run = record.clone();
-        cross_run.run_id = "different-run".into();
+        cross_run.run_id = "56fa53e3-c859-4e25-b9b3-0554a4af624a".into();
         assert_eq!(
             verify(&cross_run, &run, "context-authenticated", NOW),
             Err(ExternalSourceAdmissionErrorV1::ScopeMismatch)
