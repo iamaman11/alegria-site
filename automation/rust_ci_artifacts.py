@@ -49,6 +49,7 @@ KINDS = {
     # existing architecture owner job: pure Temporal Child and source-only SQL
     # issuer. Each filename is pinned and hash-verified separately at install.
     "acquisition_pure": ("temporal_acquisition_pure", "acquisition_source_issuer"),
+    "one_step_request_issuer": ("one_step_request_issuer",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 TARGET = WORKSPACE / "target" / "debug"

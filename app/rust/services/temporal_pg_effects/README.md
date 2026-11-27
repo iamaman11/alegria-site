@@ -13,6 +13,52 @@ several separately admitted instances. No general cross-owner arbitrary
 effectful DAG or production starter has been accepted. Do not start on a
 production namespace or grant broad application credentials.
 
+### One-shot siteArchitect Start operator (local opt-in pilot)
+
+The separate command `--operator-start-granted-single-v1 /absolute/private/intent.json`
+uses the **existing native V2 Temporal parent**, not a new DAG scheduler. It
+accepts one canonical private JSON wrapper whose only added locator is
+`request_id`; the embedded `intent` is the original private
+`SingleOperationStartIntentV1` (immutable `run`, `context_key`, `expected`,
+`expires_at_unix_seconds`, `schema_revision`). This is **not** a remotely
+connected ChatGPT MCP Start capability.
+
+After the ordinary tenant-root and independently issued Acquisition source
+checks, the separately authenticated one-shot SQL role loads a grant sealed by
+a different issuer. The Rust preflight checks its exact operation, tenant,
+principal, policy, context, plan, source and command hashes, TTL, one-use state
+and a separately configured resource ceiling. SQL atomically commits
+`unclaimed -> reserved`, followed by a second committed
+`reserved -> start_outcome_unknown` **before** the Temporal Start RPC. A lost
+SQL acknowledgement causes refusal without sending Start; after an ambiguous
+Temporal response no automatic retry is permitted. The deterministic Workflow
+ID is used for manual reconciliation. Temporal Start acknowledgment alone
+does **not** mark SQL `start_confirmed`: that requires separately admitted
+server History evidence through the SQL confirmation function.
+
+The required environment variables are the existing `SITE_LAB_SINGLE_V2_*`
+tenant, trusted catalog, Temporal endpoint/namespace and read-only business
+root SQL settings, plus these new strictly operator-provisioned settings:
+
+- `ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START=true` (off by default)
+- `SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE` — 0600 separate SQL LOGIN
+  with grant `SELECT` + narrowly granted reserve/unknown functions, no direct
+  application writes, no inherited roles, tenant-bound RLS
+- `SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID`,
+  `SITE_ARCHITECT_GRANTED_V1_POLICY_ID`,
+  `SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY` — independently provisioned policy,
+  never read from a user-supplied Start locator
+- `SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE` — 0600 canonical JSON
+  `OneStepResourceLimitsV1`, independently provisioned maximum budget
+
+Migration `20261127_0003_operation_dag_one_step_request_grants_v1.sql`
+defines the atomic one-use SQL state machine, DBA-authorized principal policy,
+distinct approval and grant issuer, and independently verified History
+confirmation. It deliberately does not provision credentials or assert that
+the remote ChatGPT account was authenticated. Until an actual user-identity
+handoff and paid-provider metering are physically accepted, this remains a
+restricted **NO-GO production pilot**, regardless of green CLI/CI tests.
+
 ### Transitional canonical tenant fencing (20261125_0007)
 
 Migration `20261125_0007_authoritative_tenant_truth_rls.sql` is a forward-only,

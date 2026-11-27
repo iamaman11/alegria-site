@@ -44,6 +44,7 @@ members = [
   "services/temporal",
   "services/temporal_acquisition_pure",
   "services/acquisition_source_issuer",
+  "services/one_step_request_issuer",
   "services/temporal_orchestrator",
   "services/temporal_pg_effects",
   "services/temporal_qdrant_effects",

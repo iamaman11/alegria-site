@@ -285,7 +285,7 @@ fn mcp_site_architect_tools() -> Value {
     json!({"tools":[
         {
             "name":"site_architect_tools", "title":"Available siteArchitect operations",
-            "description":"Discover only trusted installed operations, owner, typed ports, version, effects and exact provider parameter schema. Catalog presence never proves provider connectivity or permission to execute.",
+            "description":"Discover only trusted installed operations, owner, typed ports, version, effects and exact provider parameter schema. Includes independently gated user-Start readiness counts: catalog presence never proves provider connectivity or permission to execute.",
             "inputSchema":mcp_object_schema(json!({}), &[]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
@@ -300,7 +300,7 @@ fn mcp_site_architect_tools() -> Value {
         },
         {
             "name":"site_architect_one_step", "title":"Check one operation as a Temporal recipe",
-            "description":"Check a recipe with exactly one step using the existing typed DAG plan validator, and show exact installed owner settings and input dependencies. Authoring preview only, NOT the native Temporal Start preflight: exact source bytes, owner ValidateOnly, admission and History remain unverified.",
+            "description":"Check exactly one step using the native typed DAG plan validator; report blocked launch gates. Authoring preview only, NOT the Temporal Start preflight: authenticated user/tenant ACL, one-use grant, exact sources, owner ValidateOnly, admission and History remain unverified.",
             "inputSchema":mcp_object_schema(json!({"recipe":mcp_recipe_schema()}), &["recipe"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
@@ -681,7 +681,15 @@ fn mcp_site_architect_call(
                 serde_json::from_value(if args.is_null() { json!({}) } else { args });
             match parsed {
                 Ok(fields) if fields.is_empty() => match describe_tools(catalog) {
-                    Ok(operations) => (json!({"status":"catalog_preview_only","operations":operations,"execution":"not_started"}), false),
+                    Ok(operations) => {
+                        let launch_readiness = site_architect_launch_readiness(&operations);
+                        (json!({
+                            "status":"catalog_preview_only",
+                            "operations":operations,
+                            "launch_readiness":launch_readiness,
+                            "execution":"not_started"
+                        }), false)
+                    },
                     Err(error) => (json!(error.problem()), true),
                 },
                 _ => (mcp_bad_arguments("site_architect_tools takes an empty arguments object"), true),
@@ -848,7 +856,7 @@ fn mcp_site_architect_message(
             json!({"protocolVersion":SITE_LAB_MCP_PROTOCOL,
                 "capabilities":{"tools":{"listChanged":false}},
                 "serverInfo":{"name":"alegria-siteArchitect","version":env!("CARGO_PKG_VERSION")},
-                "instructions":"Stateless recipe authoring and offline inspection of typed saved V2 receipts only. No Temporal Start, History attestation, provider effects or admission is exposed."})
+                "instructions":"Read-only siteArchitect: trusted catalog, typed DAG authoring, saved-receipt inspection and an optional independently credentialed server-Temporal-History status reader. No user authorization issuer, one-use grant consume, Temporal Start, provider effects or admission is exposed."})
         }
         "ping" => json!({}),
         "tools/list" => mcp_site_architect_tools(),
@@ -1011,6 +1019,14 @@ mod site_architect_mcp_tests {
                 .len(),
             5
         );
+        let readiness = &replies[2]["result"]["structuredContent"]["launch_readiness"];
+        assert_eq!(readiness["counts"]["installed_versioned_operations"], 5);
+        assert_eq!(readiness["counts"]["user_start_verified_by_this_adapter"], 0);
+        assert_eq!(readiness["mcp_start_exposed"], false);
+        assert_eq!(
+            readiness["launch_gates"]["budget_and_one_use_grant"],
+            "not_proven_here"
+        );
         assert_eq!(replies[2]["result"]["isError"], false);
     }
 
@@ -1085,6 +1101,8 @@ mod site_architect_mcp_tests {
         assert_eq!(report["execution"], "not_started");
         assert_eq!(report["owner_validate_only"], "required_not_run");
         assert_eq!(report["operator_admission"], "not_issued");
+        assert_eq!(report["user_start_admission"], "not_available_in_read_only_adapter");
+        assert_eq!(report["batch_execution"], "not_started");
         assert_eq!(report["temporal_history_attestation"], "not_checked");
 
         let mut empty = recipe.clone();
@@ -1479,6 +1497,30 @@ mod site_architect_mcp_tests {
         )
         .unwrap();
         assert_eq!(unavailable["error"]["code"], -32601);
+
+        // A caller's claimed grant, role or tenant is never a valid way to
+        // promote this read-only MCP authoring process into a Start issuer.
+        for name in [
+            "site_architect_run",
+            "site_architect_request_grant",
+            "site_architect_start_one_step",
+        ] {
+            let refused = tool_call(
+                name,
+                json!({
+                    "request_id":"1285d5a3-afee-40aa-b334-7a47a43d6dd7",
+                    "tenant_id":"SENTINEL-FOREIGN-TENANT",
+                    "operator_socket":"/private/SENTINEL-OPERATOR-SOCKET",
+                    "role":"admin"
+                }),
+            );
+            assert_eq!(refused["result"]["isError"], true);
+            assert_eq!(
+                refused["result"]["structuredContent"]["code"],
+                "tool_unavailable"
+            );
+            assert!(!refused.to_string().contains("SENTINEL"));
+        }
         let oversized = vec![b'a'; SITE_LAB_MCP_MAX_MESSAGE_BYTES + 1];
         assert!(mcp_bounded_line(&mut std::io::Cursor::new(oversized)).is_err());
     }

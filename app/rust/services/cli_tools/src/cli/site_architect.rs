@@ -166,6 +166,67 @@ fn site_architect_operation_inspection(
         .map_err(|error| site_architect_safe_operation_problem(&error))
 }
 
+/// A deliberately *local* readiness accounting. The installed owner catalog
+/// can prove schemas and pure-plan composition, but it cannot prove an
+/// authenticated ChatGPT user, live provider, independent issuer, a consumed
+/// one-use grant, source bytes or a Temporal execution. Keep those gates
+/// explicit even if every owner has a valid schema. Do not hard-code the 52
+/// product-matrix entries as if they were installed executable operations.
+fn site_architect_launch_readiness(
+    operations: &[seo_application::site_lab::ToolDescription],
+) -> Value {
+    let schema_installed = operations
+        .iter()
+        .filter(|operation| operation.parameters.is_some())
+        .count();
+    let local_typed_parameters = operations
+        .iter()
+        .filter(|operation| {
+            operation
+                .parameters
+                .as_ref()
+                .is_some_and(|parameters| parameters.verification == "typed_local")
+        })
+        .count();
+    let requires_remote_validate_only = operations
+        .iter()
+        .filter(|operation| {
+            operation
+                .parameters
+                .as_ref()
+                .is_some_and(|parameters| {
+                    parameters.verification == "requires_owner_validate_only"
+                })
+        })
+        .count();
+    json!({
+        "status":"catalog_and_authoring_only",
+        "counts":{
+            "installed_versioned_operations":operations.len(),
+            "with_parameter_schema":schema_installed,
+            "with_local_typed_parameter_check":local_typed_parameters,
+            "requiring_independent_owner_validate_only":requires_remote_validate_only,
+            "user_start_verified_by_this_adapter":0
+        },
+        "composition":{
+            "single_operation":"typed_preview_only",
+            "multi_operation":"typed_dag_preview_only",
+            "selection_order":"caller_selected_subject_to_typed_input_dependencies",
+            "execution_order":"not_verified"
+        },
+        "launch_gates":{
+            "authenticated_chatgpt_principal_and_tenant_acl":"not_proven_here",
+            "budget_and_one_use_grant":"not_proven_here",
+            "exact_source_bytes_and_command_attestation":"not_proven_here",
+            "native_owner_validate_only_and_effect_admission":"not_proven_here",
+            "temporal_start_and_server_history":"not_proven_here",
+            "provider_receipt_and_metering":"not_proven_here"
+        },
+        "mcp_start_exposed":false,
+        "next_action":"Complete independent user authorization, atomic one-use grant reservation, owner/source attestation and exact Temporal History checks before enabling mutating ChatGPT Start. Catalog declarations cannot certify any user-ready operation."
+    })
+}
+
 /// The one-step recipe is the smallest typed DAG authoring graph, not a
 /// Temporal execution preflight or parallel single-operation executor. This
 /// reads only declarations; actual source bytes, Temporal History, owner
@@ -194,6 +255,8 @@ fn site_architect_one_step_preview(
         "owner_validate_only": "required_not_run",
         "operator_admission": "not_issued",
         "temporal_history_attestation": "not_checked",
+        "user_start_admission": "not_available_in_read_only_adapter",
+        "batch_execution": "not_started",
         "execution": "not_started",
         "next_action": "Verify exact source and command bytes through the native V2 preflight, execute independent owner ValidateOnly and obtain operator admission before any Temporal effects.",
     }))
@@ -279,9 +342,12 @@ fn site_architect_command(action: SiteArchitectCommand) -> Result<i32> {
 
     match action {
         SiteArchitectCommand::Tools => {
+            let operations = describe_tools(catalog)?;
+            let launch_readiness = site_architect_launch_readiness(&operations);
             site_architect_print(&json!({
                 "status": "catalog_preview_only",
-                "operations": describe_tools(catalog)?,
+                "operations": operations,
+                "launch_readiness": launch_readiness,
                 "execution": "not_started",
                 "note": "Declared tools are not provider connectivity or owner admission proof.",
             }))?;
@@ -598,6 +664,27 @@ mod site_architect_cli_tests {
         );
         assert_eq!(profile["checked_parameters"]["verification"], "typed_local");
         assert_eq!(profile["operator_admission"], "not_issued_by_inspection");
+    }
+
+    #[test]
+    fn readiness_is_derived_from_installed_catalog_without_inventing_user_start() {
+        let catalog = site_architect_installed_catalog().unwrap();
+        let operations = describe_tools(&catalog).unwrap();
+        let readiness = site_architect_launch_readiness(&operations);
+        assert_eq!(readiness["status"], "catalog_and_authoring_only");
+        assert_eq!(
+            readiness["counts"]["installed_versioned_operations"],
+            operations.len()
+        );
+        assert_eq!(readiness["counts"]["user_start_verified_by_this_adapter"], 0);
+        assert_eq!(readiness["mcp_start_exposed"], false);
+        assert_eq!(readiness["composition"]["single_operation"], "typed_preview_only");
+        assert_eq!(readiness["composition"]["multi_operation"], "typed_dag_preview_only");
+        assert_eq!(
+            readiness["launch_gates"]["authenticated_chatgpt_principal_and_tenant_acl"],
+            "not_proven_here"
+        );
+        assert_eq!(readiness["launch_gates"]["provider_receipt_and_metering"], "not_proven_here");
     }
 
     #[test]

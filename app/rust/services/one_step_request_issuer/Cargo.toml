@@ -1,0 +1,16 @@
+[package]
+name = "one_step_request_issuer"
+version = "0.1.0"
+edition = "2021"
+
+# Independent credential boundary: the CLI does not link Temporal, owner
+# provider implementations, MCP transports, or the execution operator.
+[dependencies]
+operation_protocol = { path = "../../crates/operation_protocol" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+libc = "0.2"

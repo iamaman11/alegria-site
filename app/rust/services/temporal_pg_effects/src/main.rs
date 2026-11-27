@@ -766,6 +766,20 @@ async fn main() -> Result<()> {
                 .await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-start-granted-single-v1") {
+            let path = args.next().context(
+                "--operator-start-granted-single-v1 requires one strictly private one-shot approved request",
+            )?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected one-shot authorized Start arguments"
+            );
+            operator_single_step_start_v2::start_from_granted_private_request(
+                std::path::Path::new(&path),
+            )
+            .await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-issue-business-run-v1") {
             let path = args.next().context(
                 "--operator-issue-business-run-v1 requires a private JSON business intent",

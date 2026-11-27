@@ -429,10 +429,11 @@ def check() -> None:
     # The separately compiled DataForSEO provider artifact is published once
     # from an already-required parallel owner. No second Cargo pass may be
     # appended to the generic parent/PG binary chain on the slowest PR path.
-    assert 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p acquisition_source_issuer --bins' in architecture
+    issuer_build = 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p acquisition_source_issuer -p one_step_request_issuer --bins'
+    assert issuer_build in architecture
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in architecture
-    assert 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p acquisition_source_issuer --bins' not in v3_job
+    assert issuer_build not in v3_job
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' not in v3_job
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' not in v3_job
     assert 'needs.architecture-and-rust.result == \'success\'' in qdrant_runner
@@ -442,7 +443,13 @@ def check() -> None:
     assert '--kind acquisition_pure --source-sha "$GITHUB_SHA"' in qdrant_runner
     assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in architecture
     assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in qdrant_runner
-    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 6
+    # Separate SQL identity boundary, separately compiled and digest-checked;
+    # never smuggle grant issuance into a Temporal effect-owner binary.
+    assert '--kind one_step_request_issuer --source-sha "$GITHUB_SHA"' in architecture
+    assert '--kind one_step_request_issuer --source-sha "$GITHUB_SHA"' in qdrant_runner
+    assert 'name: rust-e2e-one-step-request-issuer-${{ github.sha }}' in architecture
+    assert 'name: rust-e2e-one-step-request-issuer-${{ github.sha }}' in qdrant_runner
+    assert qdrant_runner.count('python3 automation/rust_ci_artifacts.py install') == 7
     assert 'name: rust-e2e-qdrant-effects-${{ github.sha }}' not in runner_blocks['rust-qdrant-e2e']
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]

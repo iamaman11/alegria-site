@@ -14,9 +14,12 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
+    preflight_issued_one_step_request_for_reservation_v1,
     operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    verify_external_source_record_v1, ArtifactId, OperationDagRunV6, PlanHash,
-    SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedRouteCatalog,
+    verify_external_source_record_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
+    OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
+    OperationDagRunV6, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
+    TrustedOneStepRequestGrantV1, TrustedRouteCatalog, OperationRef,
     EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
     OPERATION_DAG_PARENT_TYPE_V2,
 };
@@ -39,14 +42,20 @@ const TEMPORAL_URL_ENV: &str = "SITE_LAB_SINGLE_V2_TEMPORAL_URL";
 const TEMPORAL_NAMESPACE_ENV: &str = "SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE";
 const CATALOG_ENV: &str = "SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE";
 const ROOT_READER_DSN_ENV: &str = "SITE_LAB_SINGLE_V2_DATABASE_URL_FILE";
+const GRANTED_ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START";
+const GRANTED_DSN_FILE_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE";
+const GRANTED_PRINCIPAL_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID";
+const GRANTED_POLICY_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_POLICY_ID";
+const GRANTED_CONTEXT_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY";
+const GRANTED_LIMITS_FILE_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE";
 const MAX_REQUEST_FUTURE_SECONDS: u64 = 600;
 const MAX_CONTEXT_KEY_BYTES: usize = 512;
 const MAX_POLICY_ID_BYTES: usize = 128;
 
-/// Only the Start RPC has an ambiguous outcome: Temporal may persist the
-/// Workflow even when the caller loses the response. All earlier stages can
-/// fail without submitting an execution command. These states are part of the
-/// operator's diagnostic protocol, never a client-controlled admission.
+/// A Temporal Start acknowledgement may be lost after the Workflow was
+/// persisted; a one-shot SQL reservation acknowledgement may also be lost
+/// after its commit, but cannot send the Temporal command on that branch.
+/// These states are diagnostic only, never a client-controlled admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SingleStartStage {
     OperatorConfiguration,
@@ -55,6 +64,10 @@ enum SingleStartStage {
     ExternalSourceAttestation,
     TemporalConnection,
     FinalPreflight,
+    IndependentRequestGrant,
+    GrantReservationUncertain,
+    GrantUnknownTransitionUncertain,
+    GrantUnknownCommittedStartNotSent,
     StartSubmitted,
 }
 
@@ -62,6 +75,10 @@ impl SingleStartStage {
     fn status(self) -> &'static str {
         match self {
             Self::StartSubmitted => "start_outcome_unknown",
+            Self::GrantReservationUncertain | Self::GrantUnknownTransitionUncertain => {
+                "grant_state_uncertain_start_not_sent"
+            }
+            Self::GrantUnknownCommittedStartNotSent => "grant_consumed_start_not_sent",
             _ => "refused_before_temporal_start",
         }
     }
@@ -76,6 +93,10 @@ impl SingleStartStage {
             }
             Self::TemporalConnection => "temporal_connection_unavailable",
             Self::FinalPreflight => "authorization_expired_or_revoked",
+            Self::IndependentRequestGrant => "independent_request_grant_unavailable",
+            Self::GrantReservationUncertain => "grant_reservation_unconfirmed",
+            Self::GrantUnknownTransitionUncertain => "grant_unknown_state_unconfirmed",
+            Self::GrantUnknownCommittedStartNotSent => "grant_consumed_before_start_expired",
             Self::StartSubmitted => "temporal_start_result_unknown",
         }
     }
@@ -99,6 +120,15 @@ impl SingleStartStage {
             }
             Self::TemporalConnection => {
                 "Restore the independently configured loopback Temporal endpoint before requesting a fresh intent."
+            }
+            Self::IndependentRequestGrant => {
+                "Check separately issued request grant, authenticated principal, context ACL, budget and one-use state."
+            }
+            Self::GrantReservationUncertain | Self::GrantUnknownTransitionUncertain => {
+                "Do not retry Start: inspect the exact SQL grant state, reservation nonce and Workflow ID under independent operator authority. No Temporal Start RPC was sent by this invocation."
+            }
+            Self::GrantUnknownCommittedStartNotSent => {
+                "A one-use SQL grant was durably consumed but no Temporal Start was sent; reconcile the grant and deterministic Workflow ID manually. Never retry this request."
             }
         }
     }
@@ -157,6 +187,281 @@ struct SingleOperationStartIntentV1 {
     context_key: String,
     expected: SiteLabExpectedStartV1,
     expires_at_unix_seconds: u64,
+}
+
+/// The request ID is a SQL locator, never authority. All runnable bytes are
+/// still private operator-controlled input, and all principal/budget policy is
+/// configured independently of this file and its contents.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct GrantedSingleOperationStartIntentV1 {
+    schema_revision: u16,
+    request_id: String,
+    intent: SingleOperationStartIntentV1,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartMode {
+    PrivateOperator,
+    IndependentlyGranted,
+}
+
+struct CheckedGrantPolicy {
+    request_id: uuid::Uuid,
+    principal_id: String,
+    policy_id: String,
+    context_key: String,
+    maximum_limits: OneStepResourceLimitsV1,
+}
+
+fn checked_grant_config(
+    read: impl Fn(&str) -> Option<String>,
+    limits_bytes: &[u8],
+) -> Result<(String, String, String, OneStepResourceLimitsV1)> {
+    ensure!(
+        read(GRANTED_ENABLE_ENV).as_deref() == Some("true"),
+        "one-shot grant Start is not enabled by independent operator"
+    );
+    let principal = read(GRANTED_PRINCIPAL_ENV)
+        .context("missing independently configured operator principal")?;
+    let policy = read(GRANTED_POLICY_ENV)
+        .context("missing independently configured principal policy")?;
+    let context = read(GRANTED_CONTEXT_ENV)
+        .context("missing independently configured principal context")?;
+    ensure!(
+        bounded_policy_identifier(&principal)
+            && bounded_policy_identifier(&policy)
+            && bounded_context_key(&context),
+        "invalid independently configured principal, policy or context"
+    );
+    let limits: OneStepResourceLimitsV1 = serde_json::from_slice(limits_bytes)
+        .context("invalid private independently authorized maximum budget")?;
+    ensure!(
+        serde_json::to_vec(&limits)?.as_slice() == limits_bytes,
+        "authorized maximum budget must be canonical typed JSON"
+    );
+    Ok((principal, policy, context, limits))
+}
+
+fn decode_granted_intent(
+    bytes: &[u8],
+    tenant: &str,
+    catalog: &TrustedRouteCatalog,
+    now: u64,
+) -> Result<(SingleOperationStartIntentV1, uuid::Uuid)> {
+    let wrapper: GrantedSingleOperationStartIntentV1 = serde_json::from_slice(bytes)
+        .context("decode one-shot privately approved request locator and intent")?;
+    ensure!(
+        wrapper.schema_revision == 1 && serde_json::to_vec(&wrapper)?.as_slice() == bytes,
+        "noncanonical or unsupported one-shot request envelope"
+    );
+    let id = uuid::Uuid::parse_str(&wrapper.request_id)?;
+    ensure!(
+        !id.is_nil() && id.to_string() == wrapper.request_id,
+        "one-shot request ID must be canonical nonnil UUID"
+    );
+    let intent_bytes = serde_json::to_vec(&wrapper.intent)?;
+    let checked = decode_checked_intent(&intent_bytes, tenant, catalog, now)?;
+    Ok((checked, id))
+}
+
+async fn checked_one_shot_grant_pool(expected_tenant: &str) -> Result<PgPool> {
+    let path = env::var(GRANTED_DSN_FILE_ENV)
+        .context("one-shot Start requires separately provisioned SQL grant-reserver LOGIN")?;
+    let bytes = operator_dag_governance::read_private_operator_file(
+        Path::new(&path),
+        "one-shot SQL grant reserver DSN",
+    )?;
+    let url = String::from_utf8(bytes)?;
+    let url = url.trim_end_matches(['\r', '\n']);
+    ensure!(!url.is_empty() && url.trim() == url, "invalid grant reserver DSN");
+    let pool = PgPool::connect(url).await?;
+    let role = sqlx::query(
+        "SELECT current_user::text effective,session_user::text login,
+                r.rolcanlogin login_enabled,r.rolinherit inherits_roles,
+                (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole
+                 OR r.rolcreatedb OR r.rolreplication) elevated,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_one_step_request_grants_v1','SELECT') grant_reader,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_one_step_request_grants_v1','INSERT') grant_issuer,
+                has_table_privilege(session_user,
+                 'pipeline.operation_dag_business_runs_v1','INSERT') root_issuer
+         FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
+    )
+    .fetch_one(&pool)
+    .await?;
+    ensure!(
+        role.get::<String, _>("effective") == role.get::<String, _>("login")
+            && role.get::<bool, _>("login_enabled")
+            && !role.get::<bool, _>("inherits_roles")
+            && !role.get::<bool, _>("elevated")
+            && role.get::<bool, _>("grant_reader")
+            && !role.get::<bool, _>("grant_issuer")
+            && !role.get::<bool, _>("root_issuer"),
+        "one-shot SQL reserver must be restricted distinct authenticated LOGIN"
+    );
+    let membership: Option<String> = sqlx::query_scalar(
+        "SELECT parent.rolname::text FROM pg_catalog.pg_auth_members m
+         JOIN pg_catalog.pg_roles parent ON parent.oid=m.roleid
+         WHERE m.member=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=session_user)
+         LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(membership.is_none(), "one-shot reserver cannot SET ROLE or inherit privileges");
+    let foreign_write: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname||'.'||c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+         WHERE n.nspname NOT IN ('information_schema') AND n.nspname !~ '^pg_'
+           AND c.relkind IN ('r','p','v','m','f')
+           AND (has_any_column_privilege(session_user,c.oid,'INSERT')
+                OR has_any_column_privilege(session_user,c.oid,'UPDATE')
+                OR has_table_privilege(session_user,c.oid,'DELETE')
+                OR has_table_privilege(session_user,c.oid,'TRUNCATE'))
+         ORDER BY n.nspname,c.relname LIMIT 1",
+    )
+    .fetch_optional(&pool)
+    .await?;
+    ensure!(foreign_write.is_none(), "one-shot reserver has forbidden direct app writes");
+    let actual_tenant: Option<String> =
+        sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+            .fetch_one(&pool)
+            .await?;
+    ensure!(
+        actual_tenant.as_deref() == Some(expected_tenant),
+        "one-shot SQL reserver LOGIN tenant binding mismatch"
+    );
+    Ok(pool)
+}
+
+async fn independently_check_one_shot_grant(
+    pool: &PgPool,
+    policy: &CheckedGrantPolicy,
+    tenant: &str,
+    intent: &SingleOperationStartIntentV1,
+    catalog: &TrustedRouteCatalog,
+    now_unix_seconds: i64,
+) -> Result<()> {
+    let row = sqlx::query(
+        "SELECT request_id::text AS request_id,authorization_event_id::text AS authorization_event_id,
+                run_id::text AS run_id,tenant_id,principal_id,policy_id,context_key,
+                operation_id,operation_revision,parent_workflow_id,plan_hash,
+                expected_start,limits,state,issued_by::text AS issuer,
+                session_user::text AS reserver,
+                floor(extract(epoch from issued_at))::bigint AS issued_unix,
+                floor(extract(epoch from expires_at))::bigint AS expires_unix,
+                floor(extract(epoch from revoked_at))::bigint AS revoked_unix
+         FROM pipeline.operation_dag_one_step_request_grants_v1
+         WHERE request_id=$1 AND tenant_id=$2 AND run_id=$3",
+    )
+    .bind(policy.request_id)
+    .bind(tenant)
+    .bind(uuid::Uuid::parse_str(&intent.run.plan.scope.run_id)?)
+    .fetch_optional(pool)
+    .await?
+    .context("separately issued one-shot grant does not exist for authenticated tenant/run")?;
+    ensure!(
+        row.try_get::<String, _>("issuer")? != row.try_get::<String, _>("reserver")?,
+        "issuer and one-shot reserver must be independent SQL principals"
+    );
+    let state = match row.try_get::<String, _>("state")?.as_str() {
+        "unclaimed" => OneStepRequestIssuanceStateV1::Unclaimed,
+        "reserved" => OneStepRequestIssuanceStateV1::Reserved,
+        "start_submitted" => OneStepRequestIssuanceStateV1::StartSubmitted,
+        "start_outcome_unknown" => OneStepRequestIssuanceStateV1::StartOutcomeUnknown,
+        "start_confirmed" => OneStepRequestIssuanceStateV1::StartConfirmed,
+        _ => anyhow::bail!("one-shot SQL grant state is not a known native revision"),
+    };
+    let grant = TrustedOneStepRequestGrantV1 {
+        schema_revision: 1,
+        request_id: row.try_get("request_id")?,
+        authorization_event_id: row.try_get("authorization_event_id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        authenticated_principal_id: row.try_get("principal_id")?,
+        authorization_policy_id: row.try_get("policy_id")?,
+        context_key: row.try_get("context_key")?,
+        canonical_run_id: row.try_get("run_id")?,
+        operation: OperationRef {
+            id: row.try_get::<String, _>("operation_id")?.into(),
+            revision: u32::try_from(row.try_get::<i32, _>("operation_revision")?)?,
+        },
+        parent_workflow_id: row.try_get("parent_workflow_id")?,
+        expected: row
+            .try_get::<sqlx::types::Json<SiteLabExpectedStartV1>, _>("expected_start")?
+            .0,
+        limits: row
+            .try_get::<sqlx::types::Json<OneStepResourceLimitsV1>, _>("limits")?
+            .0,
+        issued_at_unix_seconds: row.try_get("issued_unix")?,
+        expires_at_unix_seconds: row.try_get("expires_unix")?,
+        revoked_at_unix_seconds: row.try_get("revoked_unix")?,
+        state,
+    };
+    ensure!(
+        intent.expected == grant.expected && intent.context_key == policy.context_key,
+        "sealed private intent differs from independent user-request grant"
+    );
+    let authenticated = IndependentlyAuthenticatedOneStepPolicyV1 {
+        tenant_id: tenant.to_owned(),
+        principal_id: policy.principal_id.clone(),
+        policy_id: policy.policy_id.clone(),
+        context_key: policy.context_key.clone(),
+        maximum_limits: policy.maximum_limits.clone(),
+    };
+    preflight_issued_one_step_request_for_reservation_v1(
+        &OpaqueOneStepRequestLocatorV1 {
+            request_id: policy.request_id.to_string(),
+        },
+        &grant,
+        &intent.run,
+        catalog,
+        &authenticated,
+        now_unix_seconds,
+    )
+    .context("one-shot request authorization, immutable inputs or budget not admitted")?;
+    Ok(())
+}
+
+async fn sql_reserve_one_shot(
+    pool: &PgPool,
+    policy: &CheckedGrantPolicy,
+    tenant: &str,
+    intent: &SingleOperationStartIntentV1,
+    nonce: uuid::Uuid,
+) -> Result<()> {
+    let accepted: bool = sqlx::query_scalar(
+        "SELECT pipeline.reserve_operation_dag_one_step_request_v1($1,$2,$3,$4,$5,$6,$7,$8)",
+    )
+    .bind(policy.request_id)
+    .bind(uuid::Uuid::parse_str(&intent.run.plan.scope.run_id)?)
+    .bind(tenant)
+    .bind(&policy.principal_id)
+    .bind(&policy.policy_id)
+    .bind(&policy.context_key)
+    .bind(intent.run.plan.hash.as_str())
+    .bind(nonce)
+    .fetch_one(pool)
+    .await?;
+    ensure!(accepted, "atomic one-shot reservation refused or already claimed");
+    Ok(())
+}
+
+async fn sql_commit_unknown_before_temporal_start(
+    pool: &PgPool,
+    request_id: uuid::Uuid,
+    nonce: uuid::Uuid,
+) -> Result<()> {
+    let accepted: bool = sqlx::query_scalar(
+        "SELECT pipeline.mark_operation_dag_one_step_start_unknown_v1($1,$2)",
+    )
+    .bind(request_id)
+    .bind(nonce)
+    .fetch_one(pool)
+    .await?;
+    ensure!(accepted, "one-shot grant unknown-state write refused");
+    Ok(())
 }
 
 struct OperatorConfig {
@@ -446,11 +751,28 @@ fn one_step_start_options(workflow_id: String) -> WorkflowStartOptions {
 }
 
 pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
+    start_private_request_in_mode(path, StartMode::PrivateOperator).await
+}
+
+/// Local opt-in pilot only. This is deliberately not a ChatGPT MCP mutation:
+/// a SQL principal with independently provisioned tenant/ACL/budget policy and
+/// a private operator-controlled immutable run are prerequisites.
+pub(super) async fn start_from_granted_private_request(path: &Path) -> Result<()> {
+    start_private_request_in_mode(path, StartMode::IndependentlyGranted).await
+}
+
+async fn start_private_request_in_mode(path: &Path, mode: StartMode) -> Result<()> {
     let mut stage = SingleStartStage::OperatorConfiguration;
     let mut run_id = None;
     let mut parent_workflow_id = None;
-    match try_start_from_private_request(path, &mut stage, &mut run_id, &mut parent_workflow_id)
-        .await
+    match try_start_from_private_request(
+        path,
+        mode,
+        &mut stage,
+        &mut run_id,
+        &mut parent_workflow_id,
+    )
+    .await
     {
         Ok(()) => Ok(()),
         Err(_) => {
@@ -459,14 +781,12 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
             // In particular, an RPC failure after submission does NOT prove
             // that Temporal rejected the Start. Its deterministic Workflow ID
             // is the only safe place to reconcile the unknown outcome.
-            println!(
-                "{}",
-                serde_json::to_string(&start_failure_report(
-                    stage,
-                    run_id.as_deref(),
-                    parent_workflow_id.as_deref(),
-                ))?
-            );
+            let mut report =
+                start_failure_report(stage, run_id.as_deref(), parent_workflow_id.as_deref());
+            if mode == StartMode::IndependentlyGranted {
+                report.operation = "site_architect_start_granted_single_v1";
+            }
+            println!("{}", serde_json::to_string(&report)?);
             anyhow::bail!("single-step V2 operator refused or could not confirm Temporal Start; see redacted JSON diagnostic")
         }
     }
@@ -474,6 +794,7 @@ pub(super) async fn start_from_private_request(path: &Path) -> Result<()> {
 
 async fn try_start_from_private_request(
     path: &Path,
+    mode: StartMode,
     stage: &mut SingleStartStage,
     run_id: &mut Option<String>,
     parent_workflow_id: &mut Option<String>,
@@ -492,8 +813,42 @@ async fn try_start_from_private_request(
         .duration_since(UNIX_EPOCH)
         .context("system clock before Unix epoch")?
         .as_secs();
-    let intent = decode_checked_intent(&bytes, &config.tenant, &catalog, now)?;
+    let (intent, grant_request_id) = match mode {
+        StartMode::PrivateOperator => (
+            decode_checked_intent(&bytes, &config.tenant, &catalog, now)?,
+            None,
+        ),
+        StartMode::IndependentlyGranted => {
+            let (checked, request_id) =
+                decode_granted_intent(&bytes, &config.tenant, &catalog, now)?;
+            (checked, Some(request_id))
+        }
+    };
     *run_id = Some(intent.run.plan.scope.run_id.clone());
+    // The independent principal/policy/ceiling MUST NOT come from the run,
+    // its wrapper or the SQL grant row. They belong to a separately
+    // provisioned OS operator and an independently tenant-bound SQL LOGIN.
+    // This CLI proves no remote ChatGPT subject authentication.
+    let grant_policy = if let Some(request_id) = grant_request_id {
+        *stage = SingleStartStage::IndependentRequestGrant;
+        let limits_file = env::var(GRANTED_LIMITS_FILE_ENV)
+            .context("one-shot Start requires private authorized maximum limits")?;
+        let limits_bytes = operator_dag_governance::read_private_operator_file(
+            Path::new(&limits_file),
+            "one-shot independently authorized maximum limits",
+        )?;
+        let (principal_id, policy_id, context_key, maximum_limits) =
+            checked_grant_config(|key| env::var(key).ok(), &limits_bytes)?;
+        Some(CheckedGrantPolicy {
+            request_id,
+            principal_id,
+            policy_id,
+            context_key,
+            maximum_limits,
+        })
+    } else {
+        None
+    };
     *stage = SingleStartStage::IndependentBusinessRoot;
     let pool = timeout(
         Duration::from_secs(15),
@@ -514,6 +869,31 @@ async fn try_start_from_private_request(
     )
     .await
     .context("Acquisition source proof timed out before Temporal Start")??;
+    let grant_pool = if let Some(policy) = grant_policy.as_ref() {
+        *stage = SingleStartStage::IndependentRequestGrant;
+        let restricted = timeout(
+            Duration::from_secs(15),
+            checked_one_shot_grant_pool(&config.tenant),
+        )
+        .await
+        .context("independent one-shot grant LOGIN connection timed out")??;
+        timeout(
+            Duration::from_secs(15),
+            independently_check_one_shot_grant(
+                &restricted,
+                policy,
+                &config.tenant,
+                &intent,
+                &catalog,
+                i64::try_from(now)?,
+            ),
+        )
+        .await
+        .context("independent one-shot grant preflight timed out")??;
+        Some(restricted)
+    } else {
+        None
+    };
     let workflow_id = operation_dag_parent_workflow_id_v2(&intent.run.plan.scope.run_id);
     *parent_workflow_id = Some(workflow_id.clone());
     *stage = SingleStartStage::TemporalConnection;
@@ -562,6 +942,63 @@ async fn try_start_from_private_request(
         .context("system clock before Unix epoch")?
         .as_secs();
     checked_request_ttl(intent.expires_at_unix_seconds, final_dispatch_time)?;
+    if let (Some(policy), Some(grant_pool)) = (&grant_policy, &grant_pool) {
+        // A preflight alone is never a Start permit: recheck the SQL issuer
+        // record against independent ACL/ceiling immediately before the
+        // transactionally exclusive one-use reserve.
+        *stage = SingleStartStage::IndependentRequestGrant;
+        timeout(
+            Duration::from_secs(15),
+            independently_check_one_shot_grant(
+                grant_pool,
+                policy,
+                &config.tenant,
+                &intent,
+                &catalog,
+                i64::try_from(final_dispatch_time)?,
+            ),
+        )
+        .await
+        .context("final independent one-shot grant preflight timed out")??;
+        let reservation_nonce = uuid::Uuid::new_v4();
+        // From this point a lost SQL acknowledgement can leave a durable
+        // reservation. Never issue Temporal Start or retry the claim on an
+        // ambiguous SQL response: reconciliation is mandatory.
+        *stage = SingleStartStage::GrantReservationUncertain;
+        timeout(
+            Duration::from_secs(15),
+            sql_reserve_one_shot(
+                grant_pool,
+                policy,
+                &config.tenant,
+                &intent,
+                reservation_nonce,
+            ),
+        )
+        .await
+        .context("one-shot durable reservation response uncertain")??;
+        // Persist Unknown *before* any RPC. If the process dies or loses the
+        // SQL acknowledgement, this request is never automatically replayed.
+        *stage = SingleStartStage::GrantUnknownTransitionUncertain;
+        timeout(
+            Duration::from_secs(15),
+            sql_commit_unknown_before_temporal_start(
+                grant_pool,
+                policy.request_id,
+                reservation_nonce,
+            ),
+        )
+        .await
+        .context("one-shot SQL outcome fence not confirmed; no Start sent")??;
+        *stage = SingleStartStage::GrantUnknownCommittedStartNotSent;
+    }
+    // Both SQL commits are await points. Expiry after the durable unknown
+    // fence must refuse the RPC (without replaying the consumed grant).
+    let after_sql_fence = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock before Unix epoch")?
+        .as_secs();
+    checked_request_ttl(intent.expires_at_unix_seconds, after_sql_fence)?;
     *stage = SingleStartStage::StartSubmitted;
     let handle = timeout(
         Duration::from_secs(20),
@@ -586,8 +1023,16 @@ async fn try_start_from_private_request(
     println!(
         "{}",
         serde_json::json!({
-            "operation":"site_lab_start_single_v2",
-            "status":"started_business_root_verified_owner_unadmitted",
+            "operation":if mode == StartMode::IndependentlyGranted {
+                "site_architect_start_granted_single_v1"
+            } else {
+                "site_lab_start_single_v2"
+            },
+            "status":if mode == StartMode::IndependentlyGranted {
+                "temporal_start_acknowledged_grant_pending_independent_history"
+            } else {
+                "started_business_root_verified_owner_unadmitted"
+            },
             "run_id":intent.run.plan.scope.run_id,
             "tenant_id":config.tenant,
             "parent_workflow_id":workflow_id,
@@ -604,6 +1049,11 @@ async fn try_start_from_private_request(
                 "not_attested"
             },
             "business_root":"independently_issued_active_at_start",
+            "grant_state":if mode == StartMode::IndependentlyGranted {
+                "start_outcome_unknown_until_independent_temporal_history_verification"
+            } else {
+                "not_required_for_private_operator_pilot"
+            },
             "owner_admission":"not_issued_by_start",
             "execution":"not_confirmed",
         })
@@ -751,6 +1201,101 @@ mod tests {
             }
         });
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn granted_start_requires_separately_configured_principal_policy_and_budget() {
+        let limits = OneStepResourceLimitsV1 {
+            max_admitted_source_bytes: 1024,
+            max_effect_dispatches: 1,
+            max_provider_requests: 1,
+            currency_code: "USD".into(),
+            max_charge_minor_units: 50,
+        };
+        let bytes = serde_json::to_vec(&limits).unwrap();
+        let trusted = |key: &str| match key {
+            GRANTED_ENABLE_ENV => Some("true".into()),
+            GRANTED_PRINCIPAL_ENV => Some("principal-7".into()),
+            GRANTED_POLICY_ENV => Some("site-limited-v1".into()),
+            GRANTED_CONTEXT_ENV => Some("site-a/research".into()),
+            _ => None,
+        };
+        let (principal, policy, context, decoded) =
+            checked_grant_config(trusted, &bytes).unwrap();
+        assert_eq!((principal.as_str(), policy.as_str(), context.as_str()),
+            ("principal-7", "site-limited-v1", "site-a/research"));
+        assert_eq!(decoded, limits);
+        assert!(checked_grant_config(|_| None, &bytes).is_err());
+        assert!(checked_grant_config(
+            |key| if key == GRANTED_PRINCIPAL_ENV {
+                Some("attacker\nprincipal".into())
+            } else {
+                trusted(key)
+            },
+            &bytes
+        ).is_err());
+        assert!(checked_grant_config(trusted, b"{\"currency_code\":\"USD\"}").is_err());
+        let mut reordered = serde_json::to_value(&limits).unwrap();
+        reordered["unexpected_budget_override"] = serde_json::json!(0);
+        assert!(checked_grant_config(trusted, &serde_json::to_vec(&reordered).unwrap()).is_err());
+    }
+
+    #[test]
+    fn granted_operator_envelope_cannot_smuggle_identity_or_temporal_route() {
+        let expected = SiteLabExpectedStartV1 {
+            schema_revision: 1,
+            plan_hash: PlanHash("a".repeat(64)),
+            command_hashes: BTreeMap::new(),
+            source_payload_hashes: BTreeMap::new(),
+        };
+        let wrapper = GrantedSingleOperationStartIntentV1 {
+            schema_revision: 1,
+            request_id: "e0813cac-2277-454e-980a-2e08110c1a08".into(),
+            intent: SingleOperationStartIntentV1 {
+                schema_revision: 1,
+                run: one_step_candidate("acquisition"),
+                context_key: "site-a/research".into(),
+                expected,
+                expires_at_unix_seconds: 1_900_000_100,
+            },
+        };
+        let mut forged = serde_json::to_value(&wrapper).unwrap();
+        forged["tenant_id"] = serde_json::json!("attacker");
+        assert!(serde_json::from_value::<GrantedSingleOperationStartIntentV1>(forged).is_err());
+        let mut forged = serde_json::to_value(&wrapper).unwrap();
+        forged["temporal_url"] = serde_json::json!("http://evil:7233/");
+        assert!(serde_json::from_value::<GrantedSingleOperationStartIntentV1>(forged).is_err());
+    }
+
+    #[test]
+    fn grant_lost_sql_ack_is_not_misreported_as_temporal_submission() {
+        for stage in [
+            SingleStartStage::GrantReservationUncertain,
+            SingleStartStage::GrantUnknownTransitionUncertain,
+        ] {
+            let report =
+                serde_json::to_value(start_failure_report(stage, None, None)).unwrap();
+            assert_eq!(report["status"], "grant_state_uncertain_start_not_sent");
+            assert_eq!(report["execution"], "not_confirmed");
+            assert_ne!(report["code"], "temporal_start_result_unknown");
+            assert!(report["next_action"].as_str().unwrap().contains("Do not retry"));
+        }
+        let preflight = serde_json::to_value(start_failure_report(
+            SingleStartStage::IndependentRequestGrant,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(preflight["status"], "refused_before_temporal_start");
+        assert_eq!(preflight["code"], "independent_request_grant_unavailable");
+        let consumed = serde_json::to_value(start_failure_report(
+            SingleStartStage::GrantUnknownCommittedStartNotSent,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(consumed["status"], "grant_consumed_start_not_sent");
+        assert!(consumed["next_action"].as_str().unwrap().contains("Never retry"));
     }
 
     #[test]

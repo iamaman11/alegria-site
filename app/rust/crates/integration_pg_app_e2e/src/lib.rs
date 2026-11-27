@@ -29,4 +29,5 @@ mod tests {
     include!("tests/cms_navigation_pg_tests.rs");
     include!("tests/dataforseo_owner_pg_tests.rs");
     include!("tests/external_source_attestation_pg_tests.rs");
+    include!("tests/one_step_request_grant_pg_tests.rs");
 }

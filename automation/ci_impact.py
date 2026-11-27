@@ -390,6 +390,19 @@ ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
     # the Acquisition shard installs it without a second Rust compilation.
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
+ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "-p", "temporal_pg_effects", "-p", "acquisition_source_issuer",
+    "-p", "one_step_request_issuer",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+    "--bin", "temporal_pg_effects", "--bin", "acquisition_source_issuer",
+    "--bin", "one_step_request_issuer",
+)
+ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES = {
+    **ACQUISITION_NATIVE_V2_RUNTIME_BINARIES,
+    "INTEGRATION_ONE_STEP_REQUEST_ISSUER_BIN": "one_step_request_issuer",
+}
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
@@ -464,6 +477,25 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "dataforseo_owner_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "one_step_grant_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/one_step_request_grant_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/one_step_request_issuer/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/operation_protocol/",
+        ),
+        "lock_crates": {"operation_protocol", "one_step_request_issuer",
+                        "temporal_pg_effects", "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "one_step_grant_pg_", "--locked", "--", "--nocapture",
         ),
     },
     "planning_atomicity": {
@@ -832,6 +864,35 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "acquisition_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "one_step_grant_native_v1": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_one_step_grant_tests.rs",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/services/one_step_request_issuer/",
+            "app/rust/services/acquisition_source_issuer/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/acquisition/",
+            "app/rust/crates/trusted_owner_catalog/",
+        ),
+        "lock_crates": {"one_step_request_issuer", "acquisition_source_issuer",
+                        "temporal_pg_effects", "temporal_acquisition_pure",
+                        "temporal_orchestrator", "operation_protocol", "acquisition",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ONE_STEP_GRANT_NATIVE_V1_PREPARE,
+        "runtime_binaries": ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "one_step_grant_native_v1_", "--locked", "--", "--nocapture",
         ),
     },
     "temporal_restart": {
@@ -1283,7 +1344,7 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
-    "dataforseo_owner_pg_v1", "external_source_attestation_pg_v1",
+    "dataforseo_owner_pg_v1", "external_source_attestation_pg_v1", "one_step_grant_pg_v1",
     "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
     "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
@@ -1370,6 +1431,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_acquisition": (
         ("acquisition_native_v2", "acquisition_native_v2_", 2),
+        ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
@@ -1381,6 +1443,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("truth_adjudication_integrity", "truth_adjudication_", 3),
         ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
         ("external_source_attestation_pg_v1", "external_source_attestation_pg_", 1),
+        ("one_step_grant_pg_v1", "one_step_grant_pg_", 1),
     ),
     "pg_app_cms": (("cms_review_revision", "cms_revision_", 4),),
     "pg_app_planning": (("planning_atomicity", "planning_atomic_", 6),),

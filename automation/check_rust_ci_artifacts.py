@@ -192,6 +192,22 @@ class RustArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("acquisition_pure", SHA, bundle, target=self.root / "forged_issuer")
 
+    def test_grant_issuer_artifact_is_independent_exact_sha_and_tamper_evident(self) -> None:
+        with patch.object(artifacts, "TARGET", self.target):
+            source = self.executable("one_step_request_issuer", b"separately privileged grant issuer")
+            bundle = self.root / "grant_issuer_bundle"
+            manifest = artifacts.package("one_step_request_issuer", SHA, bundle)
+            self.assertEqual(set(manifest["files"]), {"one_step_request_issuer"})
+            for wrong in ("acquisition_pure", "v3", "dataforseo_effects"):
+                with self.subTest(wrong=wrong), self.assertRaisesRegex(ValueError, "manifest"):
+                    artifacts.install(wrong, SHA, bundle, target=self.root / f"wrong_{wrong}")
+            target = self.root / "grant_issuer_install"
+            artifacts.install("one_step_request_issuer", SHA, bundle, target=target)
+            self.assertEqual((target / "one_step_request_issuer").read_bytes(), source.read_bytes())
+            (bundle / "one_step_request_issuer").write_bytes(b"forged issuer")
+            with self.assertRaisesRegex(ValueError, "digest"):
+                artifacts.install("one_step_request_issuer", SHA, bundle, target=self.root / "forged")
+
     def test_rejects_manifest_confusion_symlink_and_extra_payload(self) -> None:
         source = self.executable("real")
         bundle = self.root / "bundle"
