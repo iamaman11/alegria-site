@@ -73,13 +73,15 @@ struct IndependentlyApprovedRequestV1 {
 
 async fn restricted_grant_pool() -> Result<PgPool> {
     let dsn_path = env::var(DSN_FILE_ENV).context("missing request issuer DB credential path")?;
-    let bytes = private_file::read_private_file(Path::new(&dsn_path))?;
+    let bytes = private_file::read_private_file(Path::new(&dsn_path))
+        .context("issuer_phase_sql_dsn_file")?;
     let raw = String::from_utf8(bytes).context("request issuer DSN must be UTF-8")?;
     let dsn = raw.trim_end_matches(['\r', '\n']);
     ensure!(!dsn.is_empty() && dsn.trim() == dsn, "invalid issuer DSN");
     let pool = PgPool::connect(dsn)
         .await
-        .context("independent request issuer SQL login unavailable")?;
+        .context("independent request issuer SQL login unavailable")
+        .context("issuer_phase_sql_connect")?;
     let role = sqlx::query(
         "SELECT current_user::text effective, session_user::text login,
                 r.rolcanlogin login_enabled, r.rolinherit inherits_roles,
@@ -133,7 +135,62 @@ async fn restricted_grant_pool() -> Result<PgPool> {
          FROM pg_catalog.pg_roles r WHERE r.rolname=current_user",
     )
     .fetch_one(&pool)
-    .await?;
+    .await
+    .context("issuer_phase_sql_role_query")?;
+    // Fixed, non-sensitive failure categories make isolated CI role setup
+    // diagnosable without ever returning SQL errors, paths, or login names.
+    ensure!(
+        role.get::<String, _>("effective") == role.get::<String, _>("login")
+            && role.get::<bool, _>("login_enabled")
+            && !role.get::<bool, _>("inherits_roles")
+            && !role.get::<bool, _>("privileged")
+            && !role.get::<bool, _>("bypass")
+            && !role.get::<bool, _>("role_admin")
+            && !role.get::<bool, _>("db_admin")
+            && !role.get::<bool, _>("replication"),
+        "issuer_phase_sql_role_login_shape"
+    );
+    ensure!(
+        role.get::<bool, _>("grant_insert")
+            && !role.get::<bool, _>("grant_update")
+            && !role.get::<bool, _>("grant_delete")
+            && !role.get::<bool, _>("grant_truncate"),
+        "issuer_phase_sql_grant_dml"
+    );
+    ensure!(
+        !role.get::<bool, _>("approval_insert")
+            && !role.get::<bool, _>("approval_update")
+            && !role.get::<bool, _>("approval_delete")
+            && !role.get::<bool, _>("approval_truncate"),
+        "issuer_phase_sql_approval_dml"
+    );
+    ensure!(
+        !role.get::<bool, _>("policy_insert")
+            && !role.get::<bool, _>("policy_update")
+            && !role.get::<bool, _>("policy_delete")
+            && !role.get::<bool, _>("policy_truncate"),
+        "issuer_phase_sql_policy_dml"
+    );
+    ensure!(
+        !role.get::<bool, _>("root_insert")
+            && !role.get::<bool, _>("root_update")
+            && !role.get::<bool, _>("source_insert")
+            && !role.get::<bool, _>("source_update")
+            && !role.get::<bool, _>("governance_insert")
+            && !role.get::<bool, _>("governance_update"),
+        "issuer_phase_sql_owner_dml"
+    );
+    ensure!(
+        !role.get::<bool, _>("raw_insert")
+            && !role.get::<bool, _>("raw_update")
+            && !role.get::<bool, _>("raw_delete")
+            && !role.get::<bool, _>("raw_truncate")
+            && !role.get::<bool, _>("sections_insert")
+            && !role.get::<bool, _>("sections_update")
+            && !role.get::<bool, _>("sections_delete")
+            && !role.get::<bool, _>("sections_truncate"),
+        "issuer_phase_sql_raw_dml"
+    );
     ensure!(
         role.get::<String, _>("effective") == role.get::<String, _>("login")
             && role.get::<bool, _>("login_enabled")
@@ -178,10 +235,11 @@ async fn restricted_grant_pool() -> Result<PgPool> {
          LIMIT 1",
     )
     .fetch_optional(&pool)
-    .await?;
+    .await
+    .context("issuer_phase_sql_membership_query")?;
     ensure!(
         membership.is_none(),
-        "one-step issuer login must not use SET ROLE memberships"
+        "issuer_phase_sql_membership_denied"
     );
     Ok(pool)
 }
@@ -360,13 +418,13 @@ async fn execute(path: &Path) -> Result<()> {
     let tenant: Option<String> = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
         .fetch_one(&mut *transaction)
         .await
-        .context("issuer_phase_sql_principal")?;
+        .context("issuer_phase_sql_tenant_query")?;
     let tenant = tenant
         .context("request issuer SQL login has no tenant identity")
-        .context("issuer_phase_sql_principal")?;
+        .context("issuer_phase_sql_tenant_identity")?;
     ensure!(
         tenant == intent.run.plan.scope.tenant_id,
-        "issuer_phase_sql_principal"
+        "issuer_phase_sql_tenant_identity"
     );
     let approved =
         independently_approved_request(&mut transaction, intent.authorization_event_id, &tenant)
@@ -395,6 +453,19 @@ fn redacted_failure_phase(error: &anyhow::Error) -> &'static str {
     const STAGES: &[&str] = &[
         "issuer_phase_private_input",
         "issuer_phase_catalog",
+        "issuer_phase_sql_dsn_file",
+        "issuer_phase_sql_connect",
+        "issuer_phase_sql_role_query",
+        "issuer_phase_sql_role_login_shape",
+        "issuer_phase_sql_grant_dml",
+        "issuer_phase_sql_approval_dml",
+        "issuer_phase_sql_policy_dml",
+        "issuer_phase_sql_owner_dml",
+        "issuer_phase_sql_raw_dml",
+        "issuer_phase_sql_membership_query",
+        "issuer_phase_sql_membership_denied",
+        "issuer_phase_sql_tenant_query",
+        "issuer_phase_sql_tenant_identity",
         "issuer_phase_sql_principal",
         "issuer_phase_approval_lookup",
         "issuer_phase_typed_preflight",
