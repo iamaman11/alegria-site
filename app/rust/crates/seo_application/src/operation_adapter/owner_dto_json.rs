@@ -46,10 +46,15 @@ fn generated_schema_includes_optional_fields_nested_structs_and_serde_enum_varia
     assert!(output["properties"]["hitl_reason"].is_object());
     assert!(output["properties"]["layer_scores"].is_object());
     assert!(output["$defs"]["LayerScores"]["properties"]["procedural"].is_object());
-    assert!(!output["required"]
+    // A serialized Option<T> without skip_serializing_if is always emitted:
+    // Some(value) or null. It is nullable, but required on the Output wire.
+    assert!(output["required"]
         .as_array()
         .unwrap()
         .contains(&Value::String("hitl_reason".into())));
+    assert!(output["properties"]["hitl_reason"]
+        .to_string()
+        .contains("\"null\""));
 
     let mapping = &schemas[&CanonicalizeMentions::contract().reference];
     let mapping_output = descriptor_json(&mapping.schema.outputs[&PortId::from("output")]);
