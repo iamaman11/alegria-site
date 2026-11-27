@@ -398,5 +398,4 @@ mod tests {
             Err(OwnerSchemaErrorV3::InvalidJsonSchemaDescriptor)
         ));
     }
-
 }

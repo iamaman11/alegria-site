@@ -12,8 +12,8 @@ use anyhow::{Context, Result};
 use operation_protocol::{
     ContractCatalog, IdempotencyPolicy, OperationContract, OperationRef,
     OwnerDtoDescriptorFormatV3, PinnedOwnerOperationSchemaV3, PinnedOwnerRouteV1,
-    TrustedRouteCatalog,
-    OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
+    TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use prost::Message;
 use prost_types::FileDescriptorSet;
@@ -213,7 +213,10 @@ fn verify_installed_protobuf_descriptors(pin: &PinnedOwnerOperationSchemaV3) -> 
             );
             anyhow::ensure!(
                 file.enum_type.iter().all(|enumeration| {
-                    enumeration.name.as_deref().is_some_and(|name| !name.is_empty())
+                    enumeration
+                        .name
+                        .as_deref()
+                        .is_some_and(|name| !name.is_empty())
                         && !enumeration.value.is_empty()
                 }),
                 "trusted owner Protobuf enum type must be named with variants"
@@ -454,18 +457,16 @@ mod tests {
         let invalid = protobuf_failure_schema(&contract, b"not a FileDescriptorSet".to_vec());
         // The provider-neutral protocol only pins bounded opaque bytes.
         invalid.validate(&contract).unwrap();
-        assert!(decode_trusted_catalog(&standalone_schema_manifest(
-            contract.clone(), invalid
-        ))
-        .is_err());
+        assert!(
+            decode_trusted_catalog(&standalone_schema_manifest(contract.clone(), invalid)).is_err()
+        );
 
         // A nonempty wire with only an unknown field decodes to an empty
         // FileDescriptorSet. The provider-free size check alone accepts it.
         let empty = protobuf_failure_schema(&contract, vec![0x10, 0x00]);
-        assert!(decode_trusted_catalog(&standalone_schema_manifest(
-            contract.clone(), empty
-        ))
-        .is_err());
+        assert!(
+            decode_trusted_catalog(&standalone_schema_manifest(contract.clone(), empty)).is_err()
+        );
 
         let valid_set = prost_types::FileDescriptorSet {
             file: vec![prost_types::FileDescriptorProto {
@@ -479,10 +480,9 @@ mod tests {
             }],
         };
         let valid = protobuf_failure_schema(&contract, valid_set.encode_to_vec());
-        let installed = decode_trusted_catalog(&standalone_schema_manifest(
-            contract.clone(), valid.clone(),
-        ))
-        .unwrap();
+        let installed =
+            decode_trusted_catalog(&standalone_schema_manifest(contract.clone(), valid.clone()))
+                .unwrap();
         installed
             .verify_caller_schema(&contract.reference, &valid)
             .unwrap();
@@ -571,9 +571,7 @@ mod tests {
             &entry.contract,
             b"invalid FileDescriptorSet".to_vec()
         ));
-        assert!(
-            decode_trusted_catalog(&serde_json::to_vec(&malformed_protobuf).unwrap()).is_err()
-        );
+        assert!(decode_trusted_catalog(&serde_json::to_vec(&malformed_protobuf).unwrap()).is_err());
     }
 
     #[test]
