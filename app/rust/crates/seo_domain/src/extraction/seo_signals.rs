@@ -69,7 +69,8 @@ mod tests {
 
     #[test]
     fn no_signals_for_unrelated_or_empty_text() {
-        for raw_text in ["", "порядок оплаты услуг", "очередь клиентов"] {
+        for raw_text in ["", "порядок оплаты услуг", "очередь клиентов"]
+        {
             let result = execute(&SeoSignalInput {
                 section_id: "s2".to_owned(),
                 raw_text: raw_text.to_owned(),

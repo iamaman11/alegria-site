@@ -21,8 +21,8 @@ use operation_protocol::{
     ArtifactSchema, ContractCatalog, IdempotencyPolicy, Operation, OperationContract, OperationId,
     OperationOwnerId, OperationRef, PlanError, PortId,
 };
-use schemars::JsonSchema;
 use runtime_models::RuleRoleType;
+use schemars::JsonSchema;
 use seo_domain::extraction::entity_spans::EntityMention;
 use serde::{Deserialize, Serialize};
 
@@ -566,8 +566,15 @@ impl OwnerPureOperation for BuildSeoOpportunities {
         let output = opportunity_build_step::execute(&OpportunityBuildInputPayload {
             run_id: String::new(), // not read by this pure decision
             scope: input.scope.as_ref().map(SeoScopePayload::from),
-            serp_patterns: input.serp_patterns.iter().map(SerpPatternState::from).collect(),
-            graph_context: input.graph_context.as_ref().map(GraphPlanningContextState::from),
+            serp_patterns: input
+                .serp_patterns
+                .iter()
+                .map(SerpPatternState::from)
+                .collect(),
+            graph_context: input
+                .graph_context
+                .as_ref()
+                .map(GraphPlanningContextState::from),
         })
         .map_err(|_| OpportunityBuildFailureV1::InvalidScope)?;
         Ok(OpportunityBuildOutputV1 {
@@ -719,7 +726,10 @@ mod tests {
         };
         let output = BuildSeoOpportunities::evaluate(&input).unwrap();
         assert_eq!(output.keyword_clusters.len(), 1);
-        assert_eq!(output.keyword_clusters[0].reason_code, "graph_topic_family_merge");
+        assert_eq!(
+            output.keyword_clusters[0].reason_code,
+            "graph_topic_family_merge"
+        );
         assert_eq!(output.keyword_clusters[0].triple_refs, vec!["truth-triple"]);
         assert_eq!(output.content_gaps.len(), 1);
         assert_eq!(output.content_gaps[0].missing_topic, "missing-topic");

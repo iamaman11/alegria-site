@@ -85,7 +85,10 @@ where
 /// No effect owner route is created, and no future Truth write is admitted.
 pub fn truth_pure_operation_owner_schemas(
 ) -> Result<BTreeMap<OperationRef, PinnedOwnerOperationSchemaV3>, OwnerSchemaErrorV3> {
-    let schemas = [pinned::<JudgeCompletenessV1>()?, pinned::<DetectContradictionsV1>()?];
+    let schemas = [
+        pinned::<JudgeCompletenessV1>()?,
+        pinned::<DetectContradictionsV1>()?,
+    ];
     Ok(schemas
         .into_iter()
         .map(|schema| (schema.schema.operation.clone(), schema))

@@ -303,7 +303,10 @@ pub mod operations {
             });
             assert_eq!(decision.verdict, RebuildDecision::RebuildRequired);
             assert_eq!(decision.impacted_page_node_keys, vec!["page:1"]);
-            assert_eq!(decision.impacts[0].reason.changed_truth_keys, vec!["scope_change:ru"]);
+            assert_eq!(
+                decision.impacts[0].reason.changed_truth_keys,
+                vec!["scope_change:ru"]
+            );
             assert_eq!(decision.impacts[0].priority, 2);
             assert_eq!(
                 DetectRebuildImpact::evaluate(&RebuildImpactInput {

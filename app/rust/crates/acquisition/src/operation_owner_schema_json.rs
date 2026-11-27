@@ -83,8 +83,7 @@ where
     let input: O::Input =
         serde_json::from_slice(payload).map_err(|_| AcquisitionPureWireError::InvalidInput)?;
     let output = O::evaluate(&input);
-    let bytes =
-        serde_json::to_vec(&output).map_err(|_| AcquisitionPureWireError::InvalidOutput)?;
+    let bytes = serde_json::to_vec(&output).map_err(|_| AcquisitionPureWireError::InvalidOutput)?;
     if bytes.len() > DAG_MAX_RESULT_BYTES {
         return Err(AcquisitionPureWireError::OutputTooLarge);
     }
@@ -214,10 +213,9 @@ mod tests {
     fn source_dto_schema_reflects_nested_blocks_and_serde_enum_variants() {
         let schemas = acquisition_owner_schemas().unwrap();
         let blocks = &schemas[&EvaluateDomBlocks::contract().reference];
-        let schema: Value = serde_json::from_slice(
-            &blocks.schema.inputs[&PortId::from("input")].descriptor_bytes,
-        )
-        .unwrap();
+        let schema: Value =
+            serde_json::from_slice(&blocks.schema.inputs[&PortId::from("input")].descriptor_bytes)
+                .unwrap();
         assert_eq!(schema["properties"]["blocks"]["type"], "array");
         assert_eq!(schema["$defs"]["StrictDomBlockInput"]["type"], "object");
         let enum_variants = &schema["$defs"]["BlockRole"]["enum"];

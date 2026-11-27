@@ -18,10 +18,10 @@ use acquisition::operation_owner_schema_json::{
 use acquisition::operations::{acquisition_pure_contracts, ClassifySourcePage, EvaluateDomBlocks};
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
-    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding, Operation,
-    OperationContract, OperationRef, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
-    OwnerValidationResultV1, PinnedOwnerRouteV1, PortId, TrustedRouteCatalog,
-    OWNER_OPERATION_CHILD_TYPE_V1,
+    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
+    Operation, OperationContract, OperationRef, OwnerInvocationV1, OwnerResultV1,
+    OwnerValidationRequestV1, OwnerValidationResultV1, PinnedOwnerRouteV1, PortId,
+    TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{workflow, workflow_methods};
@@ -39,7 +39,9 @@ static TRUSTED_ACQUISITION: OnceLock<TrustedRouteCatalog> = OnceLock::new();
 
 fn invalid_input(reason: impl std::fmt::Display) -> WorkflowTermination {
     WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
-        std::io::Error::other(format!("Acquisition pure owner denied typed input: {reason}")),
+        std::io::Error::other(format!(
+            "Acquisition pure owner denied typed input: {reason}"
+        )),
     ))
 }
 
@@ -85,10 +87,10 @@ fn verify_owner_invocation(invocation: &OwnerInvocationV1) -> Result<OwnerResult
     // credentialed History reader is installed for this pure owner yet.
     // Fail closed rather than laundering a caller-provided producer proof.
     ensure!(
-        invocation.bound_inputs.values().all(|bound| matches!(
-            &bound.source,
-            ArtifactBinding::External { .. }
-        )),
+        invocation
+            .bound_inputs
+            .values()
+            .all(|bound| matches!(&bound.source, ArtifactBinding::External { .. })),
         "Acquisition Produced input requires independently attested Temporal History"
     );
     let checked = &invocation.checked_dispatch;
@@ -191,9 +193,15 @@ fn immutable_build_id(value: &str) -> bool {
 /// No caller-authored route catalog is loaded. Only the two compiled
 /// acquisition contracts are routed to this worker's fixed Task Queue.
 fn trusted_owner_catalog(build_id: &str) -> Result<TrustedRouteCatalog> {
-    ensure!(immutable_build_id(build_id), "WORKER_BUILD_ID must be 40-hex Git SHA");
+    ensure!(
+        immutable_build_id(build_id),
+        "WORKER_BUILD_ID must be 40-hex Git SHA"
+    );
     let schemas = acquisition_owner_schemas()?;
-    ensure!(schemas.len() == 2, "both acquisition owner schemas are required");
+    ensure!(
+        schemas.len() == 2,
+        "both acquisition owner schemas are required"
+    );
     let mut trusted = TrustedRouteCatalog::default();
     for operation in [
         ClassifySourcePage::contract().reference,
@@ -228,7 +236,10 @@ fn install_catalog() -> Result<()> {
 
 async fn connect_client(endpoint: &str, namespace: &str) -> Result<Client> {
     let options = ConnectionOptions::new(Url::parse(endpoint)?)
-        .identity(format!("alegria-acquisition-pure-owner:{}", std::process::id()))
+        .identity(format!(
+            "alegria-acquisition-pure-owner:{}",
+            std::process::id()
+        ))
         .build();
     let connection = Connection::connect(options).await?;
     Client::new(connection, ClientOptions::new(namespace).build())
@@ -256,8 +267,8 @@ async fn run_worker() -> Result<()> {
     let mut options = WorkerOptions::new(OWNER_QUEUE_V1).build();
     options.register_workflow::<AlegriaOwnerValidateV1Workflow>()?;
     options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
-    let mut worker = Worker::new(&runtime, client, options)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut worker =
+        Worker::new(&runtime, client, options).map_err(|error| anyhow::anyhow!("{error}"))?;
     worker.run().await?;
     Ok(())
 }
@@ -284,9 +295,15 @@ async fn replay_history(path: &Path) -> Result<()> {
 async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(argument) = args.next() {
-        ensure!(argument == "--replay-history", "unknown Acquisition owner command");
+        ensure!(
+            argument == "--replay-history",
+            "unknown Acquisition owner command"
+        );
         let path = args.next().context("missing Acquisition History path")?;
-        ensure!(args.next().is_none(), "unexpected Acquisition replay argument");
+        ensure!(
+            args.next().is_none(),
+            "unexpected Acquisition replay argument"
+        );
         replay_history(Path::new(&path)).await?;
         println!("CI_TEMPORAL_ACQUISITION_PURE_OWNER_REPLAY=PASS");
         return Ok(());
@@ -354,7 +371,8 @@ mod tests {
             .get_mut(&PortId::from("input"))
             .unwrap()
             .payload =
-            br#"{"url":"https://example.org","title":"Content","raw_text":"x","secret":true}"#.to_vec();
+            br#"{"url":"https://example.org","title":"Content","raw_text":"x","secret":true}"#
+                .to_vec();
         assert!(verify_owner_validation(&changed).is_err());
     }
 

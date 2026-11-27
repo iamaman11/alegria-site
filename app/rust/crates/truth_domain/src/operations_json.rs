@@ -44,7 +44,10 @@ fn completeness_wire_rejects_unknown_and_ill_typed_fields() {
     let valid: CompletenessInputV1 = serde_json::from_value(input.clone()).unwrap();
     let assessed = JudgeCompletenessV1::evaluate(&valid);
     assert!(assessed.needs_hitl);
-    assert!(assessed.missing_elements.iter().any(|x| x.loss_type == "number"));
+    assert!(assessed
+        .missing_elements
+        .iter()
+        .any(|x| x.loss_type == "number"));
 
     let mut unexpected = input.clone();
     unexpected["parameter_not_defined_by_owner"] = json!(true);
@@ -97,7 +100,10 @@ fn truth_owner_dto_schemas_match_concrete_strict_structures() {
     assert_eq!(nested["additionalProperties"], Value::Bool(false));
     assert_eq!(nested["properties"]["confidence"]["type"], "number");
     let output = serde_json::to_value(schema_for!(ContradictionOutputV1)).unwrap();
-    assert_eq!(output["$defs"]["ConflictCaseV1"]["additionalProperties"], false);
+    assert_eq!(
+        output["$defs"]["ConflictCaseV1"]["additionalProperties"],
+        false
+    );
 }
 
 #[test]
@@ -113,7 +119,10 @@ fn pinned_owner_schema_is_generated_and_rejects_tampered_nested_field_type() {
         assert_eq!(pin.schema.inputs.len(), 1);
         assert_eq!(pin.schema.outputs.len(), 1);
         assert_eq!(pin.schema.failure.descriptor_bytes.as_slice(), b"false");
-        assert_eq!(pin.schema.v2_contract_fingerprint, operation.fingerprint().unwrap());
+        assert_eq!(
+            pin.schema.v2_contract_fingerprint,
+            operation.fingerprint().unwrap()
+        );
         let mut mutated = pin.clone();
         mutated
             .schema
@@ -156,5 +165,8 @@ fn contradiction_owner_adapter_preserves_deterministic_verdict() {
     assert_eq!(first.conflict_count, 1);
     assert_eq!(first.conflicts[0].severity, "critical");
     assert_eq!(first.decision, second.decision);
-    assert_eq!(first.conflicts[0].value_left, second.conflicts[0].value_left);
+    assert_eq!(
+        first.conflicts[0].value_left,
+        second.conflicts[0].value_left
+    );
 }

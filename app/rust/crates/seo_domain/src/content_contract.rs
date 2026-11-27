@@ -313,9 +313,12 @@ pub mod operations {
                     bound_exactly: link.bound_exactly,
                 })
                 .collect::<Vec<_>>();
-            let publish_links = input.publish_links.as_ref().map(|coverage| PublishLinkCoverage {
-                related_pages_body: &coverage.related_pages_body,
-            });
+            let publish_links = input
+                .publish_links
+                .as_ref()
+                .map(|coverage| PublishLinkCoverage {
+                    related_pages_body: &coverage.related_pages_body,
+                });
             let violations = validate(&ContentContract {
                 blocks: &blocks,
                 claims: &claims,
