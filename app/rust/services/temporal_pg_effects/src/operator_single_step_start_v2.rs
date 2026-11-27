@@ -18,10 +18,10 @@ use operation_protocol::{
     preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1, ArtifactId,
     IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
     OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationId,
-    OperationRef,
-    PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
-    TrustedRouteCatalog, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
-    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
+    OperationRef, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
+    TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
+    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
+    OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -1274,16 +1274,20 @@ mod tests {
         };
         let mut forged = serde_json::to_value(&wrapper).unwrap();
         forged["tenant_id"] = serde_json::json!("attacker");
-        assert!(serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
-            &serde_json::to_vec(&forged).unwrap()
-        )
-        .is_err());
+        assert!(
+            serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
+                &serde_json::to_vec(&forged).unwrap()
+            )
+            .is_err()
+        );
         let mut forged = serde_json::to_value(&wrapper).unwrap();
         forged["temporal_url"] = serde_json::json!("http://evil:7233/");
-        assert!(serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
-            &serde_json::to_vec(&forged).unwrap()
-        )
-        .is_err());
+        assert!(
+            serde_json::from_slice::<GrantedSingleOperationStartIntentV1>(
+                &serde_json::to_vec(&forged).unwrap()
+            )
+            .is_err()
+        );
     }
 
     #[test]
