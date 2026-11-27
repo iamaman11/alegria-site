@@ -479,6 +479,44 @@ fn owner_dto_cannot_silently_discard_unknown_author_settings() {
 }
 
 #[test]
+fn authoring_json_rejects_ambiguous_duplicate_parameter_keys_at_every_depth() {
+    for wire in [
+        r#"{"top_k":10,"top_k":40}"#,
+        r#"{"mode":1,"\u006dode":2}"#,
+        r#"{"options":{"minimum":1,"minimum":2}}"#,
+        r#"{"queries":[{"source":"first","source":"second"}]}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<RecipeParameters>(wire).is_err(),
+            "duplicate JSON fields must fail before typed owner validation: {wire}"
+        );
+    }
+
+    let valid = r#"{"options":{"minimum":1,"maximum":2},"queries":[{"source":"first"}]}"#;
+    let decoded: RecipeParameters = serde_json::from_str(valid).unwrap();
+    assert_eq!(
+        serde_json::to_value(&decoded).unwrap(),
+        json!({"options":{"minimum":1,"maximum":2},"queries":[{"source":"first"}]})
+    );
+}
+
+#[test]
+fn duplicate_parameter_keys_inside_recipe_fail_at_wire_boundary() {
+    let original = serde_json::to_string(&recipe()).unwrap();
+    let ambiguous = original.replacen(
+        "\"parameters\":{}",
+        "\"parameters\":{\"top_k\":10,\"top_k\":40}",
+        1,
+    );
+    assert_ne!(
+        ambiguous, original,
+        "fixture must contain a real parameter field"
+    );
+    assert!(serde_json::from_str::<SiteRecipe>(&ambiguous).is_err());
+    assert!(serde_json::from_str::<SiteRecipe>(&original).is_ok());
+}
+
+#[test]
 fn legacy_recipes_remain_valid_without_parameters_but_require_v2_for_parameters() {
     let registry = catalog();
     let current = recipe();

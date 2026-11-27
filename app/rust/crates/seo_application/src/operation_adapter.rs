@@ -209,12 +209,37 @@ impl OperationRegistry {
                         artifact: ArtifactId::from("missing-input"),
                         reason: "required input port was not bound".to_owned(),
                     })?;
+            // A serde DTO without deny_unknown_fields may silently discard
+            // caller-supplied values. A sealed artifact schema pin cannot
+            // make that safe: reject duplicate raw keys and every field that
+            // fails to survive the concrete owner's typed round-trip.
+            // This changes only pure ingress checks, not historical V1 wire.
+            let authored = crate::site_lab::parse_unique_json_bytes(bytes).map_err(|error| {
+                OperationRunError::InvalidInput {
+                    operation: error_reference.clone(),
+                    artifact: artifact.clone(),
+                    reason: format!("ambiguous JSON input: {error}"),
+                }
+            })?;
             let typed: O::Input =
                 serde_json::from_slice(bytes).map_err(|error| OperationRunError::InvalidInput {
                     operation: error_reference.clone(),
                     artifact: artifact.clone(),
                     reason: error.to_string(),
                 })?;
+            let normalized =
+                serde_json::to_value(&typed).map_err(|error| OperationRunError::InvalidInput {
+                    operation: error_reference.clone(),
+                    artifact: artifact.clone(),
+                    reason: format!("typed JSON normalization failed: {error}"),
+                })?;
+            if !crate::site_lab::preserves_authored_fields(&authored, &normalized) {
+                return Err(OperationRunError::InvalidInput {
+                    operation: error_reference.clone(),
+                    artifact: artifact.clone(),
+                    reason: "typed input discarded or altered an authored JSON field".into(),
+                });
+            }
             let output: O::Output = O::evaluate(&typed);
             let encoded =
                 serde_json::to_vec(&output).map_err(|error| OperationRunError::InvalidOutput {

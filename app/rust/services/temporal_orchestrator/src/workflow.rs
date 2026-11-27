@@ -656,3 +656,51 @@ impl AlegriaPureOperationDagV1Workflow {
         })
     }
 }
+
+#[cfg(test)]
+mod typed_native_child_contract_tests {
+    use super::*;
+
+    // A compile-time ABI tripwire: replacing the new generic owner result
+    // with the historical JSON `String` would fail type-checking here.
+    // The actual V1/V2 child must retain concrete Rust input/output types,
+    // even though Temporal's transport stores serialized payload bytes.
+    fn owner_child_abi<T: WorkflowDefinition<Input = OwnerInvocationV1, Output = OwnerResultV1>>(
+        _: &T,
+    ) {
+    }
+
+    fn validation_child_abi<
+        T: WorkflowDefinition<Input = OwnerValidationRequestV1, Output = OwnerValidationResultV1>,
+    >(
+        _: &T,
+    ) {
+    }
+
+    #[test]
+    fn generic_parent_uses_exact_typed_owner_and_validate_only_child_abi() {
+        let owner = OwnerOperationV1Definition;
+        let validation = OwnerValidationV1Definition;
+        owner_child_abi(&owner);
+        validation_child_abi(&validation);
+        assert_eq!(owner.name(), OWNER_OPERATION_CHILD_TYPE_V1);
+        assert_eq!(validation.name(), OWNER_VALIDATION_CHILD_TYPE_V1);
+        assert_ne!(owner.name(), validation.name());
+    }
+
+    #[test]
+    fn parallel_parent_has_a_distinct_history_visible_workflow_and_queue() {
+        assert_ne!(
+            operation_protocol::OPERATION_DAG_PARENT_TYPE,
+            operation_protocol::OPERATION_DAG_PARENT_TYPE_V2
+        );
+        assert_ne!(
+            operation_protocol::OPERATION_DAG_PARENT_QUEUE,
+            operation_protocol::OPERATION_DAG_PARENT_QUEUE_V2
+        );
+        assert_ne!(
+            operation_protocol::OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX,
+            operation_protocol::OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2
+        );
+    }
+}

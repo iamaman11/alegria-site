@@ -58,14 +58,44 @@ python3 automation/audit_operation_inventory.py --format json
 сознательно использует `not_verified` там, где нет надёжной положительной
 атрибуции, а не утверждает, что нужный код отсутствует.
 
-Выявленные отрицательные критерии на следующую приёмку: `TR-01` в
-`triple_builder.rs` использует `unwrap()` при соединении section-id и может
-паниковать вместо типизированного отказа на несогласованных самостоятельных
-входах; `PL-01` pure-модель выдаёт только *предварительное* число SERP
+Выявленные отрицательные критерии на следующую приёмку: в новом срезе
+`TR-01` заменяет `unwrap()` при соединении section-id на типизированный
+`DomainError::ContractViolation`; положительный и два отрицательных теста
+требуют CI-подтверждения на новом SHA. `PL-01` pure-модель выдаёт только *предварительное* число SERP
 snapshots, а фактический PG/provider receipt принадлежит application;
 `ED-05` PII prepass сейчас встроен в сборку черновика, а `CMS-01a`/`CMS-02`
 различаются `publish_mode` одного обработчика. `PUB-01` и `PUB-03` пока
 совмещают PG/FS/CDN эффекты; их отдельный эффектный admission не доказан.
+
+## Почему Protobuf и JSON существуют одновременно
+
+**Не было миграции «с Proto на JSON».** Legacy-путь хранит/передаёт
+`alegria.temporal.v1` protobuf DTO из `app/contracts/proto/temporal_payloads.proto`
+через `prost`; рядом уже исторически используются JSON DTO для части
+ACQ/EX/TR (в `proto_runtime_payload_store/registered_payload_impls.rs`
+статически зарегистрированы **43 protobuf и 24 JSON** типа). Даже старый
+`StepEnvelope` имел строковый type tag и непрозрачные `bytes`, а некоторые
+протокольные сообщения содержат `sections_json` или `extra_json_utf8`.
+
+Новый динамический DAG использует **один provider-free Rust-протокол**
+`operation_protocol::Operation<Input, Output, Failure>` и проверяемую
+`OperationContract`/pinned fingerprint; формат JSON применяется для
+редактируемого Site Lab authoring и конкретных сериализованных данных.
+Проверку конкретных DTO выполняет владелец, а не неограниченный словарь
+внутри orchestration. Site Lab remote owner требует отдельного
+`ValidateOnly`; JSON schema от автора сама по себе не даёт права запуска.
+
+**Остающийся P0:** `OperationContract::fingerprint()` включает ID/revisions,
+порты, владельца и effects, но **не полный структурный descriptor полей
+Rust Input/Output/Failure**. Изменение DTO без ревизии может оставить прежний
+hash. На текущей V2 History-схеме нельзя добавить descriptor in-place,
+поскольку это изменит исторические pinned fingerprints. Требуется новая
+версионированная owner schema attestation с проверкой replay в отдельном
+cutover. Проверки raw duplicate JSON и typed round-trip в pure-исполнителе
+защищают от молча проигнорированных параметров **сейчас**, но не заменяют
+полного структурного descriptor. Исходные boundary regressions:
+`python3 automation/test_operation_wire_boundary.py`; эти source-checks
+не доказывают E2E всех 52 кандидатов.
 
 Verified static reachability at the baseline: 55 Activity methods referenced
 from canonical V1, 14 additional expert-only methods, two other operational

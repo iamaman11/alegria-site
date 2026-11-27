@@ -17,6 +17,7 @@ struct AtMostOncePublish;
 struct ChangedScoreSchema;
 struct ChangedScoreOwner;
 struct ChangedScoreInvalidation;
+struct ChangedScoreIdempotency;
 struct InvalidateEvidence;
 struct RefreshEvidence;
 struct DraftFromEvidence;
@@ -145,6 +146,20 @@ impl Operation for ChangedScoreInvalidation {
     fn contract() -> OperationContract {
         let mut contract = Score::contract();
         contract.invalidates.insert("evidence".into());
+        contract
+    }
+}
+
+impl Operation for ChangedScoreIdempotency {
+    type Input = Input;
+    type Output = Output;
+    type Failure = std::io::Error;
+
+    fn contract() -> OperationContract {
+        let mut contract = Score::contract();
+        // The same named/revisioned input and output must not quietly become
+        // retryable or effect-admissible in a previously sealed plan.
+        contract.idempotency = IdempotencyPolicy::Idempotent;
         contract
     }
 }
@@ -1042,6 +1057,15 @@ fn old_plan_rejects_same_revision_contract_schema_or_owner_drift() {
         .unwrap();
     assert_eq!(
         pinned.validate(&invalidation_changed),
+        Err(PlanError::ContractFingerprintMismatch(reference.clone()))
+    );
+
+    let mut idempotency_changed = ContractCatalog::default();
+    idempotency_changed
+        .register::<ChangedScoreIdempotency>()
+        .unwrap();
+    assert_eq!(
+        pinned.validate(&idempotency_changed),
         Err(PlanError::ContractFingerprintMismatch(reference.clone()))
     );
 

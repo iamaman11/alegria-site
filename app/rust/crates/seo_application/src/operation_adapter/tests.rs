@@ -269,6 +269,50 @@ fn installed_pure_registry_contains_exactly_five_named_semantic_operations() {
 }
 
 #[test]
+fn pure_runner_rejects_unknown_owner_input_fields_before_execution() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, mut admitted) = plan(
+        &registry,
+        vec![node::<LayerRoute>("only", "source", "output")],
+        vec![seed::<LayerRoute>("source", &router_input())],
+    );
+    let mut raw = serde_json::to_value(router_input()).unwrap();
+    raw.as_object_mut()
+        .unwrap()
+        .insert("ignored_override".into(), serde_json::json!(true));
+    admitted
+        .get_mut(&ArtifactId::from("source"))
+        .unwrap()
+        .payload = serde_json::to_vec(&raw).unwrap();
+    let err = execute_pure_dag("test-run", &PureDagRun { plan, admitted }).unwrap_err();
+    assert!(matches!(
+        err,
+        OperationRunError::InvalidInput { operation, reason, .. }
+            if operation == LayerRoute::contract().reference
+                && reason.contains("discarded or altered")
+    ));
+}
+
+#[test]
+fn pure_runner_rejects_duplicate_json_fields_before_typed_owner_decode() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, mut admitted) = plan(
+        &registry,
+        vec![node::<LayerRoute>("only", "source", "output")],
+        vec![seed::<LayerRoute>("source", &router_input())],
+    );
+    admitted.get_mut(&ArtifactId::from("source")).unwrap().payload =
+        br#"{"section_id":"verified-visa","section_id":"forged", "heading_text":"Docs", "raw_text":"Passport", "source_tier":"official", "block_type":"instruction"}"#.to_vec();
+    let err = execute_pure_dag("test-run", &PureDagRun { plan, admitted }).unwrap_err();
+    assert!(matches!(
+        err,
+        OperationRunError::InvalidInput { operation, reason, .. }
+            if operation == LayerRoute::contract().reference
+                && reason.contains("duplicate operation parameter field")
+    ));
+}
+
+#[test]
 fn layer_route_executes_as_an_independent_typed_pure_dag() {
     prove_independent_pure_operation::<LayerRoute>("semantic.layer_route", &router_input());
 }

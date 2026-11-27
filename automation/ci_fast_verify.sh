@@ -25,6 +25,10 @@ case "${1:-}" in
     # registry. Enforce exact typed/catalog/runner bindings and fail-closed
     # drift tests on every PR alongside the Activity inventory.
     python3 automation/check_operation_inventory.py
+    # The V1 prost DTO and V2 typed Rust DAG have distinct, intentional
+    # transport boundaries. Fail closed if either loses its typed owner gate,
+    # or if authoring JSON leaks into provider-free domain operations.
+    python3 automation/test_operation_wire_boundary.py
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py
