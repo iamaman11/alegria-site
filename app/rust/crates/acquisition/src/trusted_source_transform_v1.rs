@@ -13,9 +13,7 @@ use ego_tree::NodeRef;
 use scraper::{node::Node, Html, Selector};
 use url::Url;
 
-use crate::operations::{
-    ClassifySourcePageInput, DomBlockRelevanceInput, StrictDomBlockInput,
-};
+use crate::operations::{ClassifySourcePageInput, DomBlockRelevanceInput, StrictDomBlockInput};
 use crate::source_relevance::BlockRole;
 use operation_protocol::DAG_MAX_INPUT_BYTES;
 use primitives::hash::{blake3_hex, content_hash_v1};
@@ -316,7 +314,10 @@ pub fn dom_block_relevance_payload_from_pinned_html_v1(
             "form" => BlockRole::Form,
             _ => BlockRole::ContentMain,
         };
-        let node = document.tree.get(element.id()).ok_or(Error::NoVisibleContent)?;
+        let node = document
+            .tree
+            .get(element.id())
+            .ok_or(Error::NoVisibleContent)?;
         let text = collect_visible_text_with_root(node, true)?;
         if text.is_empty() {
             continue;
@@ -333,7 +334,10 @@ pub fn dom_block_relevance_payload_from_pinned_html_v1(
             text,
         });
     }
-    if !blocks.iter().any(|block| block.block_role == BlockRole::ContentMain) {
+    if !blocks
+        .iter()
+        .any(|block| block.block_role == BlockRole::ContentMain)
+    {
         let main_selector = Selector::parse("main").expect("static main selector");
         let body_selector = Selector::parse("body").expect("static body selector");
         let scope = document
@@ -341,7 +345,10 @@ pub fn dom_block_relevance_payload_from_pinned_html_v1(
             .next()
             .or_else(|| document.select(&body_selector).next())
             .ok_or(Error::NoVisibleContent)?;
-        let node = document.tree.get(scope.id()).ok_or(Error::NoVisibleContent)?;
+        let node = document
+            .tree
+            .get(scope.id())
+            .ok_or(Error::NoVisibleContent)?;
         let text = collect_visible_text(node)?;
         if !text.is_empty() {
             if blocks.len() == MAX_DOM_BLOCKS_V1 {

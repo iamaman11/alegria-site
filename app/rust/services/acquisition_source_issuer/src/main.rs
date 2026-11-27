@@ -272,11 +272,19 @@ async fn issue_source(
         if checked.operation == &ClassifySourcePage::contract().reference {
             let derived = classify_source_page_payload_from_pinned_html_v1(&captured)
                 .context("pinned raw HTML failed ACQ-01 typed derivation")?;
-            (derived.payload, derived.payload_hash, derived.raw_content_hash)
+            (
+                derived.payload,
+                derived.payload_hash,
+                derived.raw_content_hash,
+            )
         } else if checked.operation == &EvaluateDomBlocks::contract().reference {
             let derived = dom_block_relevance_payload_from_pinned_html_v1(&captured)
                 .context("pinned raw HTML failed ACQ-02 typed derivation")?;
-            (derived.payload, derived.payload_hash, derived.raw_content_hash)
+            (
+                derived.payload,
+                derived.payload_hash,
+                derived.raw_content_hash,
+            )
         } else {
             anyhow::bail!("source issuer cannot derive a foreign operation")
         };

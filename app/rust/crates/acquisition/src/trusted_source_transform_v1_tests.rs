@@ -184,10 +184,16 @@ fn trusted_html_derives_independently_scored_dom_landmarks() {
     assert_eq!(derived.input.blocks[0].block_role, BlockRole::Navigation);
     assert_eq!(derived.input.blocks[0].text, "Visa menu");
     assert_eq!(derived.input.blocks[1].block_role, BlockRole::ContentMain);
-    assert_eq!(derived.input.blocks[1].text, "Visa fee Official documents EUR 25");
+    assert_eq!(
+        derived.input.blocks[1].text,
+        "Visa fee Official documents EUR 25"
+    );
     assert_eq!(derived.input.blocks[2].block_role, BlockRole::Footer);
     assert_eq!(derived.input.blocks[2].text, "Related links");
-    assert_eq!(derived.input.blocks[0].dom_block_id, "raw-page-42-block-001");
+    assert_eq!(
+        derived.input.blocks[0].dom_block_id,
+        "raw-page-42-block-001"
+    );
     let decisions = EvaluateDomBlocks::evaluate(&derived.input);
     assert!(!decisions.blocks[0].allow_extraction);
     assert!(decisions.blocks[1].allow_extraction);
