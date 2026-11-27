@@ -655,8 +655,11 @@ mod tests {
             queries: vec![" price  of visa ".into(), "price of visa".into()],
         };
         let output = NormalizeSerpQueries::evaluate(&input).unwrap();
-        assert_eq!(output.normalized_query_count, 1);
+        // The existing owner algorithm trims and lowercases, but does not
+        // collapse internal repeated whitespace. Preserve that exact rule.
+        assert_eq!(output.normalized_query_count, 2);
         assert_eq!(output.serp_patterns[0].query, "price  of visa");
+        assert_eq!(output.serp_patterns[1].query, "price of visa");
         assert_eq!(output.serp_patterns[0].dominant_intent, "commercial");
         assert_eq!(NormalizeSerpQueries::evaluate(&input).unwrap(), output);
 
