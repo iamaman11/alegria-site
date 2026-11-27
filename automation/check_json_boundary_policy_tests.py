@@ -29,6 +29,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/temporal_acquisition_pure/src/main.rs",
             "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
             "app/rust/crates/truth_domain/src/operations_json.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
         })
         for relative in PURE_OWNER_LOCAL_JSON_BOUNDARIES:
             self.assertTrue(is_allowed_json_boundary(ROOT / relative))
@@ -38,6 +39,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/temporal_acquisition_pure/src/new_owner_json.rs",
             "app/rust/crates/truth_domain/src/operations.rs",
             "app/rust/crates/truth_domain/src/new_owner_json.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/new_acquisition_json.rs",
         ):
             self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 

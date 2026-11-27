@@ -16,9 +16,11 @@ e2e = [
   "dep:uuid", "dep:vector_qdrant", "dep:truth_domain",
   "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
   "dep:trusted_owner_catalog", "dep:dataforseo_contracts",
+  "dep:acquisition",
 ]
 
 [dependencies]
+acquisition = { path = "../acquisition", optional = true }
 anyhow = { workspace = true, optional = true }
 integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
 operation_protocol = { path = "../operation_protocol", optional = true }

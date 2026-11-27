@@ -375,6 +375,15 @@ DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES = {
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
     "INTEGRATION_DATAFORSEO_EFFECT_WORKER_BIN": "temporal_dataforseo",
 }
+ACQUISITION_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+)
+ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
+}
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
@@ -766,6 +775,30 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "dataforseo_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "acquisition_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/crates/acquisition/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"acquisition", "operation_protocol", "trusted_owner_catalog",
+                        "temporal_acquisition_pure", "temporal_orchestrator",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ACQUISITION_NATIVE_V2_PREPARE,
+        "runtime_binaries": ACQUISITION_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "acquisition_native_v2_", "--locked", "--", "--nocapture",
         ),
     },
     "temporal_restart": {
@@ -1235,7 +1268,7 @@ FULL_VERIFY_E2E_SUITES = frozenset({
 E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
     "vector", "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
-    "temporal_mixed_v2", "temporal_dataforseo", "truth_certification",
+    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition", "truth_certification",
 )
 E2E_VERIFY_SHARDS = (
     "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
@@ -1248,7 +1281,7 @@ E2E_GRAPH_SHARDS = ("graph",)
 E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
 E2E_QDRANT_TEMPORAL_SHARDS = (
     "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
-    "temporal_mixed_v2", "temporal_dataforseo",
+    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
 )
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
 E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
@@ -1301,6 +1334,9 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_dataforseo": (
         ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
+    ),
+    "temporal_acquisition": (
+        ("acquisition_native_v2", "acquisition_native_v2_", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
