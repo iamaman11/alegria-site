@@ -14,15 +14,15 @@ use std::{
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
-    decode_admission_signing_key_v1, verify_signed_one_step_admission_v1,
-    operation_dag_parent_workflow_id_v2, preflight_issued_one_step_request_for_reservation_v1,
-    preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1, ArtifactId,
-    IndependentlyAuthenticatedOneStepPolicyV1, OneStepRequestIssuanceStateV1,
-    OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1, OperationDagRunV6, OperationId,
-    OperationRef, PlanHash, SiteLabExpectedStartV1, TrustedExternalSourceRecordV1,
-    TrustedOneStepRequestGrantV1, TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
-    EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1, OPERATION_DAG_PARENT_QUEUE_V2,
-    OPERATION_DAG_PARENT_TYPE_V2,
+    decode_admission_signing_key_v1, operation_dag_parent_workflow_id_v2,
+    preflight_issued_one_step_request_for_reservation_v1,
+    preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1,
+    verify_signed_one_step_admission_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
+    OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
+    OperationDagRunV6, OperationId, OperationRef, PlanHash, SiteLabExpectedStartV1,
+    TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
+    DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+    OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
 use temporalio_client::{
@@ -1332,14 +1332,17 @@ pub(super) async fn start_from_signed_granted_private_request(
     private_intent_path: &Path,
 ) -> Result<()> {
     if authorize_signed_one_step_request(signed_path, private_intent_path).is_err() {
-        println!("{}", serde_json::json!({
-            "schema_revision":1,
-            "operation":"site_architect_start_signed_granted_single_v1",
-            "status":"launch_blocked",
-            "code":"signed_remote_admission_not_verified",
-            "execution":"not_started",
-            "next_action":"Check independently configured OAuth subject, short-lived signature and private intent; no Temporal Start was attempted."
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema_revision":1,
+                "operation":"site_architect_start_signed_granted_single_v1",
+                "status":"launch_blocked",
+                "code":"signed_remote_admission_not_verified",
+                "execution":"not_started",
+                "next_action":"Check independently configured OAuth subject, short-lived signature and private intent; no Temporal Start was attempted."
+            })
+        );
         anyhow::bail!("remote MCP signed admission refused before SQL or Temporal Start");
     }
     start_from_granted_private_request(private_intent_path).await
@@ -1349,7 +1352,8 @@ fn authorize_signed_one_step_request(signed_path: &Path, private_intent_path: &P
     let issuer = env::var(SIGNED_ADMISSION_ISSUER_ENV).context("missing installed OAuth issuer")?;
     let audience =
         env::var(SIGNED_ADMISSION_RESOURCE_ENV).context("missing installed MCP resource")?;
-    let subject = env::var(SIGNED_ADMISSION_SUBJECT_ENV).context("missing installed OAuth subject")?;
+    let subject =
+        env::var(SIGNED_ADMISSION_SUBJECT_ENV).context("missing installed OAuth subject")?;
     let key_file =
         env::var(SIGNED_ADMISSION_KEY_FILE_ENV).context("missing installed admission key")?;
     let key_bytes = operator_dag_governance::read_private_operator_file(

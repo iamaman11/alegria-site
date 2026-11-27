@@ -106,9 +106,9 @@ fn bounded_https(value: &str, expect_mcp: bool) -> bool {
 fn bounded_subject(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 256
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
 }
 
 fn canonical_message(value: &SignedOneStepAdmissionV1) -> String {
