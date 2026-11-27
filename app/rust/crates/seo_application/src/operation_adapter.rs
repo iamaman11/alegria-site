@@ -228,10 +228,12 @@ impl OperationRegistry {
                     reason: error.to_string(),
                 })?;
             let normalized =
-                serde_json::to_value(&typed).map_err(|error| OperationRunError::InvalidInput {
-                    operation: error_reference.clone(),
-                    artifact: artifact.clone(),
-                    reason: format!("typed JSON normalization failed: {error}"),
+                crate::site_lab::normalized_wire_json_value(&typed).map_err(|error| {
+                    OperationRunError::InvalidInput {
+                        operation: error_reference.clone(),
+                        artifact: artifact.clone(),
+                        reason: format!("typed JSON normalization failed: {error}"),
+                    }
                 })?;
             if !crate::site_lab::preserves_authored_fields(&authored, &normalized) {
                 return Err(OperationRunError::InvalidInput {

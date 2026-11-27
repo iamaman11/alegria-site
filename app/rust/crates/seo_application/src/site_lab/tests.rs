@@ -501,6 +501,25 @@ fn authoring_json_rejects_ambiguous_duplicate_parameter_keys_at_every_depth() {
 }
 
 #[test]
+fn typed_float_field_preserves_the_actual_serialized_json_decimal() {
+    #[derive(Debug, Serialize, Deserialize)]
+    struct ScoredParameters {
+        confidence: f32,
+    }
+
+    let authored = parse_unique_json_bytes(br#"{"confidence":0.95}"#).unwrap();
+    let typed: ScoredParameters = serde_json::from_value(authored.clone()).unwrap();
+    let normalized = normalized_wire_json_value(&typed).unwrap();
+    assert_eq!(normalized, authored);
+    assert!(preserves_authored_fields(&authored, &normalized));
+
+    let altered = parse_unique_json_bytes(br#"{"confidence":0.951}"#).unwrap();
+    assert!(!preserves_authored_fields(&altered, &normalized));
+    let with_unknown = parse_unique_json_bytes(br#"{"confidence":0.95,"option":true}"#).unwrap();
+    assert!(!preserves_authored_fields(&with_unknown, &normalized));
+}
+
+#[test]
 fn duplicate_parameter_keys_inside_recipe_fail_at_wire_boundary() {
     let original = serde_json::to_string(&recipe()).unwrap();
     let ambiguous = original.replacen(

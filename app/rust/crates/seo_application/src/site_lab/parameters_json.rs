@@ -45,6 +45,17 @@ pub(crate) fn preserves_authored_fields(authored: &Value, normalized: &Value) ->
     }
 }
 
+/// Compare with the JSON that the owner would actually put on the wire.
+/// `serde_json::to_value` can widen an f32 to a precise f64 (e.g. 0.95f32),
+/// even though `to_vec` emits its shortest round-trippable decimal `0.95`.
+/// Comparing the widened Value rejects legitimate typed downstream artifacts.
+pub(crate) fn normalized_wire_json_value<T: Serialize>(
+    value: &T,
+) -> Result<Value, serde_json::Error> {
+    let wire = serde_json::to_vec(value)?;
+    serde_json::from_slice(&wire)
+}
+
 struct ParameterDescriptor {
     contract_hash: ContractHash,
     schema: Value,
@@ -261,7 +272,7 @@ impl SiteLabCatalog {
                 local_decoder: Some(Box::new(|value: &Value| {
                     let decoded: T = serde_json::from_value(value.clone())
                         .map_err(|_| "invalid typed parameters".to_owned())?;
-                    let normalized = serde_json::to_value(&decoded)
+                    let normalized = normalized_wire_json_value(&decoded)
                         .map_err(|_| "parameter normalization failed".to_owned())?;
                     if !preserves_authored_fields(value, &normalized) {
                         return Err(
