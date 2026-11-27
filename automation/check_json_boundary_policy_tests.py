@@ -69,6 +69,11 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
             "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v2.rs",
             "app/rust/services/temporal_qdrant_effects/src/owner_generic_v1.rs",
+            # The only newly reviewed operator JSON seams: a bounded,
+            # private, typed one-node Start intent and a tenant-scoped,
+            # read-only server History inspection request.
+            "app/rust/services/temporal_pg_effects/src/operator_single_step_start_v2.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs",
         })
         for relative in NATIVE_OWNER_V2_JSON_BOUNDARIES:
             with self.subTest(relative=relative):
@@ -76,10 +81,32 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
         for relative in (
             "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v3.rs",
             "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v3.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_single_step_start_v3.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_read_v3.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_single_step_start_v2/owner_rpc.rs",
             "app/rust/services/temporal_qdrant_effects/src/owner_generic_v2.rs",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
+    def test_v2_single_step_operator_json_requires_strict_typed_private_ingress(self) -> None:
+        # The narrow per-file exceptions are justified only while Start and
+        # Read use their own strict DTO, operator-owned SQL identity, and
+        # immutable Temporal History. They are not general-purpose JSON APIs.
+        start = (ROOT / "app/rust/services/temporal_pg_effects/src/operator_single_step_start_v2.rs").read_text()
+        reader = (ROOT / "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs").read_text()
+        for code in (start, reader):
+            self.assertIn("#[serde(deny_unknown_fields)]", code)
+            self.assertNotIn("serde_json::Value", code)
+            self.assertNotIn("serde_json::from_value", code)
+            self.assertIn("read_private_operator_file(", code)
+        self.assertIn("preflight_unadmitted_single_operation_v2_start(", start)
+        self.assertIn("assert_active_independent_business_root(", start)
+        self.assertIn("tenant_read_only_pool(", start)
+        self.assertIn("WorkflowIdReusePolicy::RejectDuplicate", start)
+        self.assertIn("run_unavailable_or_untrusted", reader)
+        self.assertIn("owner_receipt_attestation: \"not_independently_verified\"", reader)
+        self.assertIn("attest_one_owner_child(", reader)
 
     def test_extracted_owner_json_grants_are_exact_files(self) -> None:
         self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {

@@ -792,6 +792,169 @@ mod tests {
 
     use std::io::{Read, Write};
 
+    fn read_fixture_request(socket: &mut std::net::TcpStream) -> String {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 2048];
+        let header_end = loop {
+            let n = socket.read(&mut buffer).expect("read fixture request");
+            assert!(n > 0, "stub HTTP request must have headers");
+            request.extend_from_slice(&buffer[..n]);
+            assert!(request.len() < 8192, "unexpected oversized fixture request");
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        while request.len() - header_end < content_length {
+            let n = socket.read(&mut buffer).expect("read fixture request body");
+            assert!(n > 0, "incomplete fixture request body");
+            request.extend_from_slice(&buffer[..n]);
+            assert!(request.len() < 8192, "unexpected oversized fixture request body");
+        }
+        String::from_utf8(request).expect("fixture HTTP request is UTF-8")
+    }
+
+    #[tokio::test]
+    async fn physical_stub_post_then_retry_get_never_posts_twice() {
+        // Exercises real loopback POST/GET bytes, including a transient GET
+        // failure. This is intentionally NOT a Temporal/SQL admission test;
+        // those boundaries have independent physical suites.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = std::thread::spawn(move || {
+            let post_response = r#"{"status_code":20000,"tasks":[{"status_code":20100,"id":"stub-serp-7"}]}"#;
+            let get_response = r#"{"status_code":20000,"tasks":[{"status_code":20000,"result":[{"items":[{"type":"organic","rank_absolute":1,"title":"Fixture page","url":"https://example.org/kitchens","description":"Fixture only"}]}]}]}"#;
+            let mut observed = Vec::new();
+            for (status, body) in [
+                ("200 OK", post_response),
+                ("503 Service Unavailable", ""),
+                ("200 OK", get_response),
+            ] {
+                let (mut socket, peer) = listener.accept().unwrap();
+                assert!(peer.ip().is_loopback(), "only loopback fixture accepted");
+                observed.push(read_fixture_request(&mut socket));
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).unwrap();
+            }
+            observed
+        });
+
+        let input = DataForSeoGoogleOrganicSearchInputV1 {
+            schema_revision: SCHEMA_REVISION,
+            scope: operation_protocol::RunScope {
+                tenant_id: "fixture-tenant".into(),
+                run_id: "123e4567-e89b-42d3-a456-426614174000".into(),
+            },
+            keyword: "custom kitchens customer problems".into(),
+            language_code: "en".into(),
+            location_code: 2840,
+            depth: 5,
+            max_cost_usd_micros: 100_000,
+        };
+        let endpoint = Url::parse(&format!("http://{address}/")).unwrap();
+        validate_stub_url(&endpoint).unwrap();
+        let task_id = stub_task_post(&endpoint, &input)
+            .await
+            .expect("fixture accepts one POST");
+        assert_eq!(task_id, "stub-serp-7");
+
+        let first_get = stub_task_get(&endpoint, &task_id, input.depth)
+            .await
+            .expect_err("first GET is transiently unavailable");
+        assert!(
+            retryable_posted_stub_get(&first_get),
+            "only the posted GET is retryable after the durable task ID"
+        );
+        let (response_bytes, hits) = stub_task_get(&endpoint, &task_id, input.depth)
+            .await
+            .expect("GET-only resume recovers the fixture");
+        assert!(!response_bytes.is_empty());
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source_url, "https://example.org/kitchens");
+
+        let requests = serving.join().expect("fixture server completed");
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("POST "))
+                .count(),
+            1,
+            "GET recovery must never duplicate the task-creating POST"
+        );
+        assert!(requests[0].starts_with("POST /v3/serp/google/organic/task_post HTTP/1.1"));
+        assert!(requests[0].contains("custom kitchens customer problems"));
+        for request in &requests[1..] {
+            assert!(request.starts_with(
+                "GET /v3/serp/google/organic/task_get/advanced/stub-serp-7 HTTP/1.1"
+            ));
+        }
+        for request in requests {
+            assert!(
+                !request.to_ascii_lowercase().contains("authorization:"),
+                "offline stub must never send provider credentials"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_stub_post_with_lost_response_is_ambiguous_not_replayed() {
+        // A server may have accepted task creation while the reply is lost.
+        // The Activity's surrounding SQL preclaim must remain `uncertain`;
+        // the HTTP function itself must not retry this unsafe POST.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = std::thread::spawn(move || {
+            let (mut socket, peer) = listener.accept().unwrap();
+            assert!(peer.ip().is_loopback());
+            let request = read_fixture_request(&mut socket);
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4096\r\nConnection: close\r\n\r\n{\"status_code\":20000",
+                )
+                .unwrap();
+            request
+        });
+        let input = DataForSeoGoogleOrganicSearchInputV1 {
+            schema_revision: SCHEMA_REVISION,
+            scope: operation_protocol::RunScope {
+                tenant_id: "fixture-tenant".into(),
+                run_id: "123e4567-e89b-42d3-a456-426614174000".into(),
+            },
+            keyword: "made-to-order kitchens".into(),
+            language_code: "en".into(),
+            location_code: 2840,
+            depth: 5,
+            max_cost_usd_micros: 100_000,
+        };
+        let endpoint = Url::parse(&format!("http://{address}/")).unwrap();
+        let error = stub_task_post(&endpoint, &input)
+            .await
+            .expect_err("lost POST receipt is an unknown outcome, not success");
+        assert!(
+            error.downcast_ref::<reqwest::Error>().is_some_and(|err| err.is_body()),
+            "a prematurely closed accepted POST must be a transport/body error"
+        );
+        let request = serving.join().unwrap();
+        assert!(request.starts_with("POST /v3/serp/google/organic/task_post HTTP/1.1"));
+        assert!(request.contains("made-to-order kitchens"));
+        assert!(!request.to_ascii_lowercase().contains("authorization:"));
+    }
+
     async fn stub_get_status_error(status: &str) -> anyhow::Error {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")
             .expect("bind disposable local-only GET test listener");

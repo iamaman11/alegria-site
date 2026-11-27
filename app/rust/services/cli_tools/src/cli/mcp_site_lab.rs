@@ -7,6 +7,12 @@ const SITE_LAB_MCP_PROTOCOL: &str = "2025-11-25";
 // Two sealed plans and two V2 receipts may each reach the existing 512 KiB
 // DAG boundary; allow envelope overhead, without accepting unbounded input.
 const SITE_LAB_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
+// Recipe authoring is much smaller than the transport envelope needed for
+// comparing two already bounded saved V2 receipts. Enforce the distinction
+// on the server, not just in the advertised MCP JSON Schema.
+const SITE_LAB_MCP_AUTHORING_MAX_BYTES: usize = 2 * SITE_LAB_RECIPE_MAX_BYTES as usize + 4096;
+const SITE_LAB_MCP_MAX_RECIPE_EDITS: usize = 128;
+const SITE_LAB_MCP_MAX_SCOPE_ID_BYTES: usize = 128;
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -280,6 +286,26 @@ fn mcp_site_lab_authoring_payload_too_large(payload: &impl serde::Serialize) -> 
         .map_or(true, |bytes| bytes.len() > SITE_LAB_RECIPE_MAX_BYTES as usize)
 }
 
+fn mcp_site_lab_authoring_envelope_too_large(payload: &impl serde::Serialize) -> bool {
+    serde_json::to_vec(payload)
+        .map_or(true, |bytes| bytes.len() > SITE_LAB_MCP_AUTHORING_MAX_BYTES)
+}
+
+fn mcp_site_lab_authoring_problem() -> Value {
+    site_lab_problem(
+        "authoring_payload_too_large",
+        "Site Lab authoring input exceeds the bounded recipe and edit budget.",
+        "Limit each recipe to 256 KiB, each edit batch to 128 changes and split large experiments into separate recipes.",
+    )
+}
+
+fn mcp_site_lab_scope_id_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= SITE_LAB_MCP_MAX_SCOPE_ID_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
 fn mcp_edit_preview_status(preview_status: &str) -> &'static str {
     match preview_status {
         "valid_preview_only" => "draft_validated",
@@ -294,6 +320,18 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
         compare_executions, describe_tools, diff_recipes, inspect_execution, preview_recipe,
         preview_consumer_need_evidence, revise_recipe, suggest_compatible_inputs, SiteRecipe,
     };
+
+    // `tools/list` declares limits for model convenience, but the MCP caller
+    // is untrusted and can bypass every JSON Schema annotation. This protects
+    // the edit/diff/evidence paths without changing the larger saved-result
+    // envelope or granting any path/Temporal/provider capability.
+    if matches!(name,
+        "site_lab_operation" | "site_lab_one_step" | "site_lab_new" |
+        "site_lab_edit" | "site_lab_check" | "site_lab_diff" |
+        "site_lab_connections" | "site_lab_evidence"
+    ) && mcp_site_lab_authoring_envelope_too_large(&args) {
+        return (mcp_site_lab_authoring_problem(), true);
+    }
 
     match name {
         "site_lab_tools" => {
@@ -335,7 +373,8 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_new" => match serde_json::from_value::<McpNewRecipe>(args) {
-            Ok(input) if !input.tenant_id.trim().is_empty() && !input.run_id.trim().is_empty() => {
+            Ok(input) if mcp_site_lab_scope_id_is_valid(&input.tenant_id)
+                && mcp_site_lab_scope_id_is_valid(&input.run_id) => {
                 let recipe = SiteRecipe {
                     schema_revision: seo_application::site_lab::SITE_RECIPE_SCHEMA_REVISION,
                     scope: seo_application::site_lab::RunScope {tenant_id:input.tenant_id,run_id:input.run_id},
@@ -343,37 +382,54 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
                 };
                 (json!({"status":"draft_unchecked","recipe":recipe,"execution":"not_started"}), false)
             }
-            Ok(_) => (mcp_bad_arguments("tenant_id and run_id must be nonempty"), true),
+            Ok(_) => (mcp_bad_arguments("tenant_id and run_id must be bounded identifiers"), true),
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_edit" => match serde_json::from_value::<McpEditRecipe>(args) {
+            Ok(input) if input.changes.len() > SITE_LAB_MCP_MAX_RECIPE_EDITS
+                || mcp_site_lab_authoring_payload_too_large(&input.recipe)
+                || mcp_site_lab_authoring_payload_too_large(&input.changes) =>
+            {
+                (mcp_site_lab_authoring_problem(), true)
+            }
             Ok(input) => match revise_recipe(&input.recipe, &input.changes) {
+                Ok(recipe) if mcp_site_lab_authoring_payload_too_large(&recipe) =>
+                    (mcp_site_lab_authoring_problem(), true),
                 Ok(recipe) => match preview_recipe(&recipe, catalog) {
                     Ok(preview) => (json!({"status":mcp_edit_preview_status(preview.status),"recipe":recipe,"preview":preview}), false),
-                    Err(error) => (json!({"status":"draft_needs_changes","recipe":recipe,"problem":error.problem(),"execution":"not_started"}), false),
+                    Err(error) => (json!({"status":"draft_needs_changes","recipe":recipe,"problem":site_lab_safe_recipe_problem(&error),"execution":"not_started"}), false),
                 },
-                Err(error) => (json!({"status":"invalid","code":"recipe_edit_rejected","message":error.to_string(),"next_action":"Fix the referenced step or batch; no partial edits were applied."}), true),
+                Err(_) => (json!({"status":"invalid","code":"recipe_edit_rejected","message":"The requested edit cannot be applied to this versioned recipe.","next_action":"Fix the referenced step or batch; no partial edits were applied."}), true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_check" => match serde_json::from_value::<McpOneRecipe>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.recipe) =>
+                (mcp_site_lab_authoring_problem(), true),
             Ok(input) => match preview_recipe(&input.recipe, catalog) {
                 Ok(preview) => (json!(preview), false),
-                Err(error) => (json!(error.problem()), true),
+                Err(error) => (site_lab_safe_recipe_problem(&error), true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_diff" => match serde_json::from_value::<McpTwoRecipes>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.first)
+                || mcp_site_lab_authoring_payload_too_large(&input.second) =>
+            {
+                (mcp_site_lab_authoring_problem(), true)
+            }
             Ok(input) => match diff_recipes(&input.first, &input.second, catalog) {
                 Ok(diff) => (json!(diff), false),
-                Err(error) => (json!(error.problem()), true),
+                Err(error) => (site_lab_safe_recipe_problem(&error), true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_connections" => match serde_json::from_value::<McpOneRecipe>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.recipe) =>
+                (mcp_site_lab_authoring_problem(), true),
             Ok(input) => match suggest_compatible_inputs(&input.recipe, catalog) {
                 Ok(preview) => (json!(preview), false),
-                Err(error) => (json!(error.problem()), true),
+                Err(error) => (site_lab_safe_recipe_problem(&error), true),
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
@@ -395,11 +451,13 @@ fn mcp_site_lab_call(name: &str, args: Value, catalog: &seo_application::site_la
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_lab_evidence" => match serde_json::from_value::<McpNeedEvidence>(args) {
+            Ok(input) if mcp_site_lab_authoring_payload_too_large(&input.batch) =>
+                (mcp_site_lab_authoring_problem(), true),
             Ok(input) => match preview_consumer_need_evidence(&input.batch) {
                 Ok(assessment) => (json!(assessment), false),
                 Err(error) => (json!({
                     "status":"invalid", "code":"consumer_evidence_invalid",
-                    "message":error.to_string(),
+                    "message":"Consumer evidence does not satisfy the installed typed source, hash or scope contract.",
                     "next_action":"Correct the typed source identities, hashes, tenant scope or bounded observations. Separate source/owner attestation remains required."
                 }), true),
             },
@@ -664,6 +722,75 @@ mod site_lab_mcp_tests {
             "operation_settings_too_large"
         );
         assert!(too_large.to_string().len() < 2048);
+    }
+
+    #[test]
+    fn mcp_all_authoring_paths_enforce_bounded_inputs_before_processing() {
+        let huge = "SENTINEL-PRIVATE-JSON".repeat(28 * 1024);
+        for (name, arguments) in [
+            ("site_lab_new", json!({"tenant_id":"lab","run_id":huge.clone()})),
+            ("site_lab_check", json!({"recipe":{"extra":huge.clone()}})),
+            ("site_lab_diff", json!({"first":{"extra":huge.clone()},"second":{}})),
+            ("site_lab_connections", json!({"recipe":{"extra":huge.clone()}})),
+            ("site_lab_evidence", json!({"batch":{"extra":huge}})),
+        ] {
+            let response = tool_call(name, arguments);
+            assert_eq!(response["result"]["isError"], true, "{name}");
+            assert_eq!(
+                response["result"]["structuredContent"]["code"],
+                "authoring_payload_too_large",
+                "{name}"
+            );
+            assert!(!response.to_string().contains("SENTINEL-PRIVATE-JSON"));
+        }
+    }
+
+    #[test]
+    fn mcp_edit_enforces_change_count_and_never_echoes_failing_step_values() {
+        let draft = tool_call("site_lab_new", json!({"tenant_id":"lab","run_id":"draft"}));
+        let recipe = draft["result"]["structuredContent"]["recipe"].clone();
+        let changes: Vec<Value> = (0..129)
+            .map(|_| json!({"action":"remove_step","step":"absent"}))
+            .collect();
+        let oversized = tool_call("site_lab_edit", json!({"recipe":recipe.clone(),"changes":changes}));
+        assert_eq!(oversized["result"]["isError"], true);
+        assert_eq!(oversized["result"]["structuredContent"]["code"], "authoring_payload_too_large");
+
+        let sensitive = "SENTINEL-PRIVATE-STEP-VALUE";
+        let failed = tool_call("site_lab_edit", json!({"recipe":recipe,"changes":[
+            {"action":"remove_step","step":sensitive}
+        ]}));
+        assert_eq!(failed["result"]["structuredContent"]["code"], "recipe_edit_rejected");
+        assert!(!failed.to_string().contains(sensitive));
+    }
+
+    #[test]
+    fn mcp_recipe_errors_keep_typed_codes_without_leaking_author_supplied_ids() {
+        let sensitive = "SENTINEL-PRIVATE-OPERATION-VALUE";
+        let invalid_recipe = json!({
+            "schema_revision":2,
+            "scope":{"tenant_id":"tenant","run_id":"draft"},
+            "sources":{},
+            "steps":[{"id":"extract","operation":{"id":sensitive,"revision":1},"inputs":{}}]
+        });
+        for (name, arguments) in [
+            ("site_lab_check", json!({"recipe":invalid_recipe.clone()})),
+            ("site_lab_connections", json!({"recipe":invalid_recipe})),
+        ] {
+            let response = tool_call(name, arguments);
+            assert_eq!(response["result"]["isError"], true);
+            assert_eq!(response["result"]["structuredContent"]["code"], "operation_unavailable");
+            assert!(!response.to_string().contains(sensitive));
+        }
+    }
+
+    #[test]
+    fn mcp_scope_identifiers_are_bounded_and_do_not_echo_invalid_inputs() {
+        let sensitive = "SENTINEL-PRIVATE-SCOPE".repeat(12);
+        let invalid = tool_call("site_lab_new", json!({"tenant_id":sensitive,"run_id":"draft"}));
+        assert_eq!(invalid["result"]["isError"], true);
+        assert_eq!(invalid["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+        assert!(!invalid.to_string().contains("SENTINEL-PRIVATE-SCOPE"));
     }
 
     fn evidence_observation(id: &str, kind: &str, origin: &str, document: &str) -> Value {

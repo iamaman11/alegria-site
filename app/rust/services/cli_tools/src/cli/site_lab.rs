@@ -131,6 +131,31 @@ fn site_lab_safe_operation_problem(error: &seo_application::site_lab::SiteLabErr
     )
 }
 
+/// Authored step names and source locators are untrusted. Keep typed error
+/// codes and the exact offending *ordinary* step identifier, but never echo
+/// provider parameters, URLs or arbitrary strings from PlanError::Display.
+fn site_lab_safe_recipe_problem(error: &seo_application::site_lab::SiteLabError) -> Value {
+    let problem = error.problem();
+    let mut output = site_lab_problem(
+        problem.code,
+        "The recipe failed an installed typed operation, parameter or DAG check.",
+        problem.next_action,
+    );
+    if let Some(step) = problem.step {
+        if let Ok(Value::String(name)) = serde_json::to_value(&step) {
+            if !name.is_empty()
+                && name.len() <= 64
+                && name.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                })
+            {
+                output["step"] = Value::String(name);
+            }
+        }
+    }
+    output
+}
+
 fn site_lab_operation_inspection(
     catalog: &SiteLabCatalog,
     operation: &OperationRef,
@@ -160,7 +185,7 @@ fn site_lab_one_step_preview(
     let operation =
         site_lab_operation_inspection(catalog, &step.operation, Some(&step.parameters))?;
     let preview = preview_recipe(recipe, catalog)
-        .map_err(|error| site_lab_safe_operation_problem(&error))?;
+        .map_err(|error| site_lab_safe_recipe_problem(&error))?;
     Ok(json!({
         "status": "single_step_preview_only",
         "operation": operation,
@@ -331,7 +356,7 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
             match preview_recipe(&recipe, catalog) {
                 Ok(report) => site_lab_print(&report)?,
                 Err(error) => {
-                    site_lab_print(&error.problem())?;
+                    site_lab_print(&site_lab_safe_recipe_problem(&error))?;
                     return Ok(2);
                 }
             }
@@ -361,7 +386,7 @@ fn site_lab_command(action: SiteLabCommand) -> Result<i32> {
             match diff_recipes(&first, &second, catalog) {
                 Ok(report) => site_lab_print(&report)?,
                 Err(error) => {
-                    site_lab_print(&error.problem())?;
+                    site_lab_print(&site_lab_safe_recipe_problem(&error))?;
                     return Ok(2);
                 }
             }

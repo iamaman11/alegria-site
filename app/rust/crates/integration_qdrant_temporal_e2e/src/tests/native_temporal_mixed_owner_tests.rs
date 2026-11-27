@@ -2589,10 +2589,12 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "v2-one-step-exact-run-read",
         &serde_json::json!({"canonical_run_id":single_id}).to_string(),
     );
-    let invoke_one_read = |sql_file: &std::path::Path, reader_tenant: &str| {
+    let invoke_one_read = |sql_file: &std::path::Path,
+                           reader_tenant: &str,
+                           locator: &std::path::Path| {
         Command::new(&pg_bin)
             .arg("--operator-read-dag-run-v2")
-            .arg(&one_read_locator)
+            .arg(locator)
             .env("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2", "true")
             .env("OPERATION_DAG_READ_V2_DATABASE_URL_FILE", sql_file)
             .env("OPERATION_DAG_READ_V2_TENANT_ID", reader_tenant)
@@ -2602,13 +2604,43 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             .env_remove("DATABASE_URL")
             .output().expect("invoke tenant-bound exact server Temporal V2 reader")
     };
-    let foreign_read = invoke_one_read(&foreign_reader_dsn, "ci-unrelated-read-only-tenant");
+    let foreign_read = invoke_one_read(
+        &foreign_reader_dsn, "ci-unrelated-read-only-tenant", &one_read_locator,
+    );
     assert!(!foreign_read.status.success(),
         "RLS must refuse a genuine foreign-tenant reader even for an existing run");
     let foreign_diagnostic: serde_json::Value = serde_json::from_slice(&foreign_read.stdout)
         .expect("foreign reader must return bounded redacted diagnostic JSON");
     assert_eq!(foreign_diagnostic["status"], "refused");
     assert_eq!(foreign_diagnostic["code"], "run_unavailable_or_untrusted");
+    // A caller controls only the canonical run UUID, never the tenant or
+    // server execution identity. Nonexistent and malformed locators must be
+    // indistinguishable from a cross-tenant lookup at the public boundary.
+    let absent_read_locator = private_locators.request(
+        "v2-one-step-absent-run-read",
+        &serde_json::json!({"canonical_run_id":Uuid::new_v4()}).to_string(),
+    );
+    let absent_read = invoke_one_read(&one_reader_dsn, tenant, &absent_read_locator);
+    assert!(!absent_read.status.success(), "a nonexistent V2 run must be refused");
+    let absent_diagnostic: serde_json::Value = serde_json::from_slice(&absent_read.stdout)
+        .expect("unknown run must return bounded redacted diagnostic JSON");
+    assert_eq!(absent_diagnostic, foreign_diagnostic,
+        "foreign and nonexistent runs must not be distinguishable by response");
+    let forged_read_locator = private_locators.request(
+        "v2-one-step-forged-tenant-read",
+        &serde_json::json!({
+            "canonical_run_id":single_id,
+            "tenant_id":"ci-unrelated-read-only-tenant",
+            "parent_workflow_run_id":one_parent_run,
+        }).to_string(),
+    );
+    let forged_read = invoke_one_read(&one_reader_dsn, tenant, &forged_read_locator);
+    assert!(!forged_read.status.success(),
+        "a user-supplied tenant or Temporal Run ID cannot influence read-only authority");
+    let forged_diagnostic: serde_json::Value = serde_json::from_slice(&forged_read.stdout)
+        .expect("forged locator must return bounded redacted diagnostic JSON");
+    assert_eq!(forged_diagnostic, foreign_diagnostic,
+        "malformed locators must not disclose whether the underlying run exists");
     let (one_child_id, one_child_run) = timeout(Duration::from_secs(70), async {
         loop {
             let history = one_parent.fetch_history(
@@ -2648,7 +2680,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1",
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(q_before, 0, "one-step provider effect cannot precede independent issuer");
-    let pending_read = invoke_one_read(&one_reader_dsn, tenant);
+    let pending_read = invoke_one_read(&one_reader_dsn, tenant, &one_read_locator);
     assert!(pending_read.status.success(),
         "admitted-but-not-yet-executed one-step run must be readable: stdout={} stderr={}",
         String::from_utf8_lossy(&pending_read.stdout),
@@ -2739,7 +2771,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(final_effects, (1, 1),
         "refused duplicate Start cannot cause another durable Qdrant effect or receipt");
-    let completed_read = invoke_one_read(&one_reader_dsn, tenant);
+    let completed_read = invoke_one_read(&one_reader_dsn, tenant, &one_read_locator);
     assert!(completed_read.status.success(),
         "completed one-step read from exact server History: stdout={} stderr={}",
         String::from_utf8_lossy(&completed_read.stdout),
@@ -2753,8 +2785,13 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     assert_eq!(completed_view["step_count"], 1);
     assert_eq!(completed_view["owner_result_count"], 1);
     assert_eq!(completed_view["temporal_history_attestation"],
-        "exact_server_parent_start_and_completion");
+        "exact_server_parent_validation_and_effect_child_histories",
+        "completed V2 proof must attest genuine parent, ValidateOnly and effect Child server histories");
     assert_eq!(completed_view["owner_receipt_attestation"], "not_independently_verified");
+    assert_eq!(completed_view["source_authentication"], "not_independently_attested",
+        "Temporal Histories cannot substitute for authenticated source bytes");
+    assert_eq!(completed_view["parent_start_sha256"].as_str().map(str::len), Some(64),
+        "reader must bind the server-issued parent Start to independent SQL governance");
     assert_eq!(completed_view["result_blake3"].as_str().map(str::len), Some(64));
     assert!(!String::from_utf8_lossy(&completed_read.stdout).contains(&one_command.keyword_key),
         "run diagnostics must not emit a provider keyword or private payload");

@@ -9,8 +9,10 @@ use std::{env, path::Path};
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
     enforce_json_budget, operation_dag_parent_workflow_id_v2, owner_child_workflow_id_v2,
-    owner_content_hash, OperationDagReceiptV1, OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
-    TrustedRouteCatalog, DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES, OPERATION_DAG_PARENT_QUEUE_V2,
+    owner_content_hash, owner_validation_child_workflow_id_v1, OperationDagReceiptV1,
+    OperationDagRunV6, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
+    OwnerValidationResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog,
+    DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES, OPERATION_DAG_PARENT_QUEUE_V2,
     OPERATION_DAG_PARENT_TYPE_V2, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 use serde::{Deserialize, Serialize};
@@ -24,7 +26,7 @@ use super::operator_dag_governance::{
 };
 use super::operator_v4::{fetch_exact_history, first_started_payload};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct RunLocator {
     canonical_run_id: Uuid,
@@ -50,6 +52,16 @@ struct SafeRunInspection {
 }
 
 const OPERATION: &str = "read_operation_dag_run_v2";
+
+fn decode_canonical_run_locator(bytes: &[u8]) -> Result<RunLocator> {
+    ensure!(bytes.len() <= 256, "V2 run locator exceeds bounded UUID request");
+    let locator: RunLocator = serde_json::from_slice(bytes)?;
+    ensure!(
+        !locator.canonical_run_id.is_nil() && serde_json::to_vec(&locator)?.as_slice() == bytes,
+        "business run locator must be a canonical nonnil UUID-only JSON request"
+    );
+    Ok(locator)
+}
 
 /// Even a refused lookup must not echo raw Workflow/SQL/provider errors or
 /// distinguish a nonexistent run from somebody else's tenant-scoped run.
@@ -83,15 +95,7 @@ async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
         "native V2 read-only operator disabled"
     );
     let bytes = read_private_operator_file(path, "V2 read-only run locator")?;
-    ensure!(
-        bytes.len() <= 256,
-        "V2 run locator exceeds bounded UUID request"
-    );
-    let locator: RunLocator = serde_json::from_slice(&bytes)?;
-    ensure!(
-        !locator.canonical_run_id.is_nil(),
-        "canonical business run UUID is nil"
-    );
+    let locator = decode_canonical_run_locator(&bytes)?;
     let tenant = env::var("OPERATION_DAG_READ_V2_TENANT_ID")?;
     ensure!(
         !tenant.is_empty() && tenant.trim() == tenant,
@@ -143,7 +147,11 @@ async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
         "trusted governance differs from the canonical business root"
     );
     let temporal_run_id = admitted.get::<String, _>("parent_workflow_run_id");
-    Uuid::parse_str(&temporal_run_id).context("noncanonical Temporal server Run ID")?;
+    ensure!(
+        Uuid::parse_str(&temporal_run_id)
+            .is_ok_and(|id| id.to_string() == temporal_run_id && !id.is_nil()),
+        "noncanonical Temporal server Run ID"
+    );
     let governance_active = root
         .get::<Option<chrono::DateTime<chrono::Utc>>, _>("revoked_at")
         .is_none()
@@ -237,7 +245,7 @@ async fn read_verified_run(path: &Path) -> Result<SafeRunInspection> {
         result_blake3: receipt_hash,
         governance_currently_active: governance_active,
         temporal_history_attestation: if status == "temporal_completed_owner_unverified" {
-            "exact_server_parent_and_owner_child_histories"
+            "exact_server_parent_validation_and_effect_child_histories"
         } else {
             temporal_proof
         },
@@ -387,6 +395,12 @@ async fn attest_one_owner_child(
 ) -> Result<()> {
     let node = &run.plan.nodes[0];
     let route = &run.pinned_routes[0];
+    let parent_identity = TemporalExecutionIdentityV4 {
+        workflow_id: parent_workflow_id.to_owned(),
+        run_id: parent_run_id.to_owned(),
+    };
+    let validation_id =
+        owner_validation_child_workflow_id_v1(&parent_identity, &run.plan.hash, &node.instance);
     let wire = run
         .owner_commands
         .get(&node.instance)
@@ -398,12 +412,26 @@ async fn attest_one_owner_child(
             && route.workflow_type == OWNER_OPERATION_CHILD_TYPE_V1,
         "one-owner trusted route/command mismatch"
     );
+    let child_initiations = parent
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(_))
+            )
+        })
+        .count();
+    ensure!(
+        child_initiations == 2,
+        "one-node V2 run must schedule exactly one ValidateOnly and one effect Child"
+    );
     let validations = parent
         .events
         .iter()
         .filter_map(|event| match &event.attributes {
             Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs))
-                if attrs.workflow_id.starts_with("alegria-owner-validate-v1-") =>
+                if attrs.workflow_id == validation_id =>
             {
                 Some((event, attrs))
             }
@@ -426,19 +454,148 @@ async fn attest_one_owner_child(
                 == Some(route.task_queue.as_str()),
         "exactly one typed owner ValidateOnly must be scheduled"
     );
+    let validate_request_bytes = validations[0]
+        .1
+        .input
+        .as_ref()
+        .and_then(|input| {
+            (input.payloads.len() == 1).then_some(input.payloads[0].data.as_slice())
+        })
+        .context("ValidateOnly ChildInitiated lacks exact typed request bytes")?;
+    ensure!(
+        !validate_request_bytes.is_empty() && validate_request_bytes.len() <= DAG_MAX_INPUT_BYTES,
+        "ValidateOnly typed request exceeds bounded one-node input"
+    );
+    let validate_request: OwnerValidationRequestV1 =
+        serde_json::from_slice(validate_request_bytes)?;
+    validate_request.verify_against_run(run)?;
+    ensure!(
+        serde_json::to_vec(&validate_request)?.as_slice() == validate_request_bytes
+            && validate_request.parent == parent_identity
+            && validate_request.instance == node.instance
+            && validate_request.operation == node.operation
+            && validate_request.owner == route.owner
+            && validate_request.contract_hash == wire.contract_hash
+            && validate_request.command_bytes == wire.command_bytes,
+        "ValidateOnly request does not match exact immutable parent command"
+    );
+    let validate_starts = parent
+        .events
+        .iter()
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs))
+                if attrs.initiated_event_id == validations[0].0.event_id =>
+            {
+                Some((event, attrs))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        validate_starts.len() == 1,
+        "ValidateOnly Child must start exactly once"
+    );
+    let validate_server_run = validate_starts[0]
+        .1
+        .workflow_execution
+        .as_ref()
+        .context("ValidateOnly Child lacks independently issued server Run ID")?;
+    ensure!(
+        validate_server_run.workflow_id == validation_id
+            && validate_starts[0]
+                .1
+                .workflow_type
+                .as_ref()
+                .map(|typed| typed.name.as_str()) == Some(OWNER_VALIDATION_CHILD_TYPE_V1),
+        "ValidateOnly server ChildStarted mismatches pinned workflow identity"
+    );
     let validated = parent
         .events
         .iter()
-        .filter(|event| {
-            matches!(&event.attributes,
-                Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs))
-                    if attrs.initiated_event_id == validations[0].0.event_id)
+        .filter_map(|event| match &event.attributes {
+            Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs))
+                if attrs.initiated_event_id == validations[0].0.event_id
+                    && attrs.started_event_id == validate_starts[0].0.event_id =>
+            {
+                Some((event, attrs))
+            }
+            _ => None,
         })
         .collect::<Vec<_>>();
     ensure!(
         validated.len() == 1,
         "owner ValidateOnly did not complete once"
     );
+    let validate_parent_result = validated[0]
+        .1
+        .result
+        .as_ref()
+        .and_then(|result| {
+            (result.payloads.len() == 1).then_some(result.payloads[0].data.as_slice())
+        })
+        .context("ValidateOnly parent completion lacks typed result")?;
+    let validate_child = fetch_exact_history(
+        client,
+        namespace,
+        &validation_id,
+        &validate_server_run.run_id,
+    )
+    .await?;
+    ensure!(
+        validate_child.events.len() <= 1_000,
+        "ValidateOnly own server History exceeds one-node budget"
+    );
+    let validate_child_start =
+        first_started_payload(&validate_child, OWNER_VALIDATION_CHILD_TYPE_V1, &route.task_queue)?;
+    ensure!(
+        validate_child_start == validate_request_bytes,
+        "ValidateOnly own server Start differs from parent ChildInitiated bytes"
+    );
+    let own_first = validate_child
+        .events
+        .first()
+        .context("ValidateOnly own server History lacks Start")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(own_start)) =
+        own_first.attributes.as_ref()
+    else {
+        bail!("ValidateOnly own server History has no Start attributes")
+    };
+    let validation_parent = own_start
+        .parent_workflow_execution
+        .as_ref()
+        .context("ValidateOnly own server Start lacks real parent identity")?;
+    ensure!(
+        validation_parent.workflow_id == parent_workflow_id
+            && validation_parent.run_id == parent_run_id
+            && own_start.parent_initiated_event_id == validations[0].0.event_id,
+        "ValidateOnly reciprocal server parent identity mismatches"
+    );
+    let validate_done = validate_child
+        .events
+        .last()
+        .context("ValidateOnly own server History lacks completion")?;
+    let Some(Attributes::WorkflowExecutionCompletedEventAttributes(validate_done)) =
+        validate_done.attributes.as_ref()
+    else {
+        bail!("ValidateOnly own server History did not complete successfully")
+    };
+    let validate_own_result = validate_done
+        .result
+        .as_ref()
+        .and_then(|result| {
+            (result.payloads.len() == 1).then_some(result.payloads[0].data.as_slice())
+        })
+        .context("ValidateOnly own completion lacks exact typed result")?;
+    ensure!(
+        validate_own_result == validate_parent_result,
+        "ValidateOnly completed bytes differ between independent server Histories"
+    );
+    let accepted: OwnerValidationResultV1 = serde_json::from_slice(validate_own_result)?;
+    ensure!(
+        serde_json::to_vec(&accepted)?.as_slice() == validate_own_result,
+        "ValidateOnly typed acceptance contains noncanonical bytes"
+    );
+    accepted.verify_success(&validate_request)?;
 
     let effects = parent
         .events
@@ -480,7 +637,7 @@ async fn attest_one_owner_child(
         })
         .collect::<Vec<_>>();
     ensure!(
-        started.len() == 1 && validated[0].event_id < started[0].0.event_id,
+        started.len() == 1 && validated[0].0.event_id < started[0].0.event_id,
         "owner effect started before typed ValidateOnly completed"
     );
     let child_run = started[0]
@@ -753,18 +910,30 @@ mod tests {
         let id = Uuid::new_v4();
         let valid = format!("{{\"canonical_run_id\":\"{id}\"}}");
         assert_eq!(
-            serde_json::from_str::<RunLocator>(&valid)
+            decode_canonical_run_locator(valid.as_bytes())
                 .unwrap()
                 .canonical_run_id,
             id
         );
-        assert!(serde_json::from_str::<RunLocator>(&format!(
-            "{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"forged\"}}"
-        ))
-        .is_err());
-        assert!(serde_json::from_str::<RunLocator>(&format!(
-            "{{\"canonical_run_id\":\"{id}\",\"parent_workflow_run_id\":\"forged\"}}"
-        ))
+        assert!(
+            decode_canonical_run_locator(
+                format!("{{\"canonical_run_id\":\"{id}\",\"tenant_id\":\"forged\"}}").as_bytes()
+            )
+            .is_err()
+        );
+        assert!(
+            decode_canonical_run_locator(
+                format!("{{\"canonical_run_id\":\"{id}\",\"parent_workflow_run_id\":\"forged\"}}").as_bytes()
+            )
+            .is_err()
+        );
+        let uppercase_uuid = format!("{{\"canonical_run_id\":\"{}\"}}", id.to_string().to_uppercase());
+        assert!(decode_canonical_run_locator(uppercase_uuid.as_bytes()).is_err());
+        assert!(decode_canonical_run_locator(format!("{valid}\n").as_bytes()).is_err());
+        assert!(decode_canonical_run_locator(&[b' '; 257]).is_err());
+        assert!(decode_canonical_run_locator(
+            b"{\"canonical_run_id\":\"00000000-0000-0000-0000-000000000000\"}"
+        )
         .is_err());
     }
 
@@ -781,7 +950,7 @@ mod tests {
             owner_result_count: 1,
             result_blake3: Some("c".repeat(64)),
             governance_currently_active: false,
-            temporal_history_attestation: "exact_server_parent_start_and_completion",
+            temporal_history_attestation: "exact_server_parent_validation_and_effect_child_histories",
             owner_receipt_attestation: "not_independently_verified",
             source_authentication: "not_independently_attested",
             next_action: "Get an independently verified owner receipt.",
