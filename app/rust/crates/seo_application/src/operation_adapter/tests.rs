@@ -353,20 +353,31 @@ fn historical_v3_serde_ingress_keeps_prior_duplicate_key_semantics() {
         vec![seed::<LayerRoute>("source", &router_input())],
     );
     admitted.get_mut(&ArtifactId::from("source")).unwrap().payload =
-        br#"{"section_id":"verified-visa","section_id":"prior-last-wins", "heading_text":"Docs", "raw_text":"Passport", "source_tier":"official", "block_type":"instruction"}"#.to_vec();
+        br#"{"section_id":"verified-visa","section_id":"duplicate", "heading_text":"Docs", "raw_text":"Passport", "source_tier":"official", "block_type":"instruction"}"#.to_vec();
 
+    let strict_error = execute_pure_dag(
+        "test-run",
+        &PureDagRun {
+            plan: plan.clone(),
+            admitted: admitted.clone(),
+        },
+    )
+    .unwrap_err();
     assert!(matches!(
-        execute_pure_dag(
-            "test-run",
-            &PureDagRun {
-                plan: plan.clone(),
-                admitted: admitted.clone()
-            }
-        ),
-        Err(OperationRunError::InvalidInput { .. })
+        strict_error,
+        OperationRunError::InvalidInput { reason, .. }
+            if reason.contains("duplicate operation JSON field")
     ));
-    let replayed = execute_pure_dag_legacy_v3("test-run", &PureDagRun { plan, admitted }).unwrap();
-    assert_eq!(replayed.order, [OperationInstanceId::from("only")]);
+    // Direct serde into a Rust struct was *already* strict about duplicates
+    // in V3. Its original error must survive replay unchanged; only Serde
+    // Value authoring (not this typed route) ever had last-wins semantics.
+    let legacy_error =
+        execute_pure_dag_legacy_v3("test-run", &PureDagRun { plan, admitted }).unwrap_err();
+    assert!(matches!(
+        legacy_error,
+        OperationRunError::InvalidInput { reason, .. }
+            if reason.contains("duplicate field `section_id`")
+    ));
 }
 
 #[test]
