@@ -92,7 +92,17 @@ BEGIN
             'pipeline.operation_dag_business_runs_v1','INSERT')
        OR has_table_privilege(session_user,
             'pipeline.operation_dag_run_governance_v2','INSERT')
+       -- An issuer must not be able to create OR rewrite its own purported
+       -- source of truth. Fail closed on misprovisioned source-writer powers,
+       -- even when the current immutable snapshot happens to be intact.
        OR has_table_privilege(session_user,'raw.pages','INSERT')
+       OR has_table_privilege(session_user,'raw.pages','UPDATE')
+       OR has_table_privilege(session_user,'raw.pages','DELETE')
+       OR has_table_privilege(session_user,'raw.pages','TRUNCATE')
+       OR has_table_privilege(session_user,'raw.sections','INSERT')
+       OR has_table_privilege(session_user,'raw.sections','UPDATE')
+       OR has_table_privilege(session_user,'raw.sections','DELETE')
+       OR has_table_privilege(session_user,'raw.sections','TRUNCATE')
        OR EXISTS (SELECT 1 FROM pg_catalog.pg_roles r
           WHERE r.rolname=session_user
             AND (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole

@@ -232,6 +232,27 @@ async fn external_source_attestation_pg_issuer_reader_roles_and_revocation() {
     .await
     .unwrap();
     assert_eq!(hidden, 0, "cross-tenant source grant must be invisible");
+    // Even accidental DBA provisioning of raw UPDATE makes this LOGIN an
+    // ineligible independent issuer. The negative uses a distinct artifact:
+    // UNIQUE(run_id,artifact_id) must not be the reason for rejection.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT UPDATE ON raw.pages TO {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    assert!(sqlx::query(insert)
+        .bind(Uuid::new_v4()).bind(run_id).bind(&tenant)
+        .bind(&context_key).bind(&plan_hash).bind("source_misprovisioned_writer")
+        .bind(&schema).bind(&payload_hash).bind(page_id).bind(page_hash)
+        .execute(&issuer).await.is_err(),
+        "raw UPDATE authority must disqualify a source-issuer LOGIN");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "REVOKE UPDATE ON raw.pages FROM {issuer_name};"
+    )))
+    .execute(&pg.pool)
+    .await
+    .unwrap();
     assert!(sqlx::query(insert)
         .bind(Uuid::new_v4()).bind(run_id).bind(&foreign_tenant)
         .bind(&context_key).bind(&plan_hash).bind("source_tenant_spoof").bind(&schema)
