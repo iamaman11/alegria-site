@@ -452,7 +452,10 @@ mod tests {
     fn redacted_failure_phase_reports_only_reviewed_fixed_labels() {
         let error =
             anyhow!("postgres_password=must-not-leak").context("issuer_phase_typed_preflight");
-        assert_eq!(redacted_failure_phase(&error), "issuer_phase_typed_preflight");
+        assert_eq!(
+            redacted_failure_phase(&error),
+            "issuer_phase_typed_preflight"
+        );
         let error = anyhow!("private path and SQL must not appear");
         assert_eq!(redacted_failure_phase(&error), "issuer_phase_other");
     }
