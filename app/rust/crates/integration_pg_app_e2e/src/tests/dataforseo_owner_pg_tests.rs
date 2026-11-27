@@ -242,6 +242,14 @@ async fn dataforseo_owner_pg_independent_admission_and_durable_stub_ledger() {
     let child_run_id = format!("server-child-{run_id}");
     let command_bytes = b"bounded-local-dataforseo-stub-command".to_vec();
     sqlx::query(
+        "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
+         VALUES ($1,'ZZ','tourist','BY')",
+    )
+    .bind(&context_key)
+    .execute(&pg.pool)
+    .await
+    .expect("establish canonical context before tenant ownership");
+    sqlx::query(
         "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id)
          VALUES ($1,$2)",
     )

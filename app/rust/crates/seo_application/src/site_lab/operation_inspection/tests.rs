@@ -65,7 +65,7 @@ fn individual_operation_inspection_returns_exact_installed_metadata_without_exec
     assert!(report.tool.contract_hash.len() > 16);
     assert_eq!(report.status, "registered_operation_inspection_only");
     assert_eq!(report.input_bindings, "not_checked");
-    assert_eq!(report.owner_validate_only, "not_run");
+    assert_eq!(report.owner_validate_only, "required_not_run");
     assert_eq!(report.operator_admission, "not_issued_by_inspection");
     assert_eq!(report.executable_owner, "not_verified");
     assert_eq!(report.provider_connectivity, "not_checked");
