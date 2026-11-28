@@ -29,6 +29,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
         self.assertEqual(ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES, {
             "app/rust/crates/operation_protocol/src/one_step_request_grant_json.rs",
             "app/rust/crates/operation_protocol/src/signed_mcp_admission_v1.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_signed_ingress_v1.rs",
             "app/rust/services/one_step_request_issuer/src/issue_json.rs",
             "app/rust/services/one_step_request_issuer/src/catalog.rs",
             "app/rust/crates/integration_pg_app_e2e/src/tests/one_step_request_grant_pg_tests.rs",
@@ -47,6 +48,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/acquisition_source_issuer/src/unreviewed_json.rs",
             "app/rust/services/one_step_request_issuer/src/main.rs",
             "app/rust/services/one_step_request_issuer/src/unreviewed_json.rs",
+            "app/rust/services/temporal_pg_effects/src/unreviewed_http_ingress.rs",
         ):
             self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 
