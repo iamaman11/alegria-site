@@ -68,9 +68,12 @@ function Assert-Isolated([object]$Data, [string]$Name) {
         $Data.HostConfig.NetworkMode -cne $script:network) {
         throw "Ingress is not on the dedicated private network: $Name"
     }
-    if ($Name -ceq $script:connector -and
-        -not $Data.HostConfig.NetworkMode.StartsWith('container:')) {
-        throw 'cloudflared must share the ingress network namespace'
+    if ($Name -ceq $script:connector) {
+        $ingressData = Container $script:ingress
+        if (-not $ingressData -or
+            $Data.HostConfig.NetworkMode -cne ('container:' + $ingressData.Id)) {
+            throw 'cloudflared must share the exact ingress network namespace'
+        }
     }
 }
 function Assert-Empty-Intents {
@@ -246,7 +249,9 @@ if ($unmanaged.Count) {
         }
     }
 }
-Invoke-Compose @('up', '-d', '--no-build', '--pull', 'never', '--force-recreate', '--remove-orphans')
+$upArgs = @('up', '-d', '--no-build', '--pull', 'never', '--remove-orphans')
+if ($Action -eq 'Update') { $upArgs += '--force-recreate' }
+Invoke-Compose $upArgs
 foreach ($name in @($ingress, $connector)) {
     $data = Container $name
     if (-not $data -or $data.State.Status -cne 'running' -or
