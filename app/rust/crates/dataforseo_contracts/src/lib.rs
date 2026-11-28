@@ -16,6 +16,7 @@ use operation_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use url::Url;
 
 pub const OPERATION_ID: &str = "dataforseo.google_organic.search";
 pub const OPERATION_REVISION: u32 = 1;
@@ -329,6 +330,11 @@ pub fn validate_discovery_shape_only(
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     };
     let task_id = &result.provider_task_id;
+    let distinct_ranks = result
+        .organic_results
+        .iter()
+        .map(|hit| hit.rank)
+        .collect::<BTreeSet<_>>();
     if result.schema_revision != SCHEMA_REVISION
         || result.input_hash != expected_hash
         || !canonical_hash(&result.provider_response_hash)
@@ -347,19 +353,35 @@ pub fn validate_discovery_shape_only(
             }
         })
         || result.organic_results.len() > usize::try_from(request.depth).unwrap_or(0)
+        || distinct_ranks.len() != result.organic_results.len()
+        // Even a discovery-only result must report its provider cost. A
+        // nullable cost cannot silently imply that a real paid task was free.
+        || result.provider_reported_cost_usd_micros.is_none()
         || result
             .provider_reported_cost_usd_micros
             .is_some_and(|amount| amount > request.max_cost_usd_micros)
         || (result.source_status == DataForSeoSourceStatusV1::StubFixtureOnly
             && result.provider_reported_cost_usd_micros != Some(0))
         || result.organic_results.iter().any(|hit| {
+            let direct_source = Url::parse(&hit.source_url).ok().is_some_and(|source| {
+                source.scheme() == "https"
+                    && source.username().is_empty()
+                    && source.password().is_none()
+                    && source.fragment().is_none()
+                    && source.host_str().is_some_and(|host| {
+                        // Never trust an asserted domain alongside a forged
+                        // URL. The future HTTPS owner still decides whether
+                        // this hostname/IP is safe to fetch.
+                        hit.domain_norm == host.to_ascii_lowercase()
+                    })
+            });
             hit.rank == 0
                 || hit.rank > request.depth
                 || hit.title.len() > 4_096
                 || hit.snippet.len() > 8_192
                 || hit.source_url.len() > 2_048
                 || hit.domain_norm.len() > 256
-                || !hit.source_url.starts_with("https://")
+                || !direct_source
                 || hit.domain_norm.is_empty()
         })
         || serde_json::to_vec(result)
@@ -632,6 +654,34 @@ mod tests {
         forged = valid.clone();
         forged.organic_results[0].source_url = "http://127.0.0.1/".into();
         assert!(validate_discovery_shape_only(&forged, &input).is_err());
+        for malicious_source in [
+            "https://attacker:password@example.com/reviews/1",
+            "https://example.com/reviews/1#not-canonical",
+            "https://example.com.evil.test/reviews/1",
+            "https:///no-authority",
+        ] {
+            forged = valid.clone();
+            forged.organic_results[0].source_url = malicious_source.into();
+            assert!(
+                validate_discovery_shape_only(&forged, &input).is_err(),
+                "URL/domain binding must reject {malicious_source}"
+            );
+        }
+        forged = valid.clone();
+        forged.organic_results[0].domain_norm = "forged-other-source.test".into();
+        assert!(validate_discovery_shape_only(&forged, &input).is_err());
+        forged = valid.clone();
+        forged.organic_results.push(forged.organic_results[0].clone());
+        assert!(
+            validate_discovery_shape_only(&forged, &input).is_err(),
+            "duplicate organic ranks must be rejected at the typed output boundary"
+        );
+        forged = valid.clone();
+        forged.provider_reported_cost_usd_micros = None;
+        assert!(
+            validate_discovery_shape_only(&forged, &input).is_err(),
+            "missing provider cost must never be interpreted as a free real paid task"
+        );
         forged = valid.clone();
         forged.provider_reported_cost_usd_micros = Some(input.max_cost_usd_micros + 1);
         assert!(validate_discovery_shape_only(&forged, &input).is_err());

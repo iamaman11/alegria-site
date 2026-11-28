@@ -74,6 +74,18 @@ struct McpNewRecipe {
     run_id: String,
 }
 
+/// A trusted one-step draft scaffold. The author supplies only identity and
+/// the exact installed operation reference; input source identities, owner
+/// routes and provider parameters cannot be invented by this helper.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpPrepareStep {
+    tenant_id: String,
+    run_id: String,
+    step_id: String,
+    operation: seo_application::site_architect::OperationRef,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpOneRecipe {
@@ -316,6 +328,17 @@ fn mcp_site_architect_tools() -> Value {
             "name":"site_architect_new", "title":"Create a blank research recipe",
             "description":"Create a blank scoped recipe; drafts cannot run.",
             "inputSchema":mcp_object_schema(json!({"tenant_id":{"type":"string","minLength":1},"run_id":{"type":"string","minLength":1}}), &["tenant_id","run_id"]),
+            "annotations":{"readOnlyHint":true,"openWorldHint":false}
+        },
+        {
+            "name":"site_architect_prepare_step", "title":"Prepare a typed one-step draft",
+            "description":"Select an exact trusted operation contract; return an unbound one-step draft and versioned required input artifact identities. No owner DTO validation, source or Start is invented.",
+            "inputSchema":mcp_object_schema(json!({
+                "tenant_id":{"type":"string","minLength":1,"maxLength":128},
+                "run_id":{"type":"string","minLength":1,"maxLength":128},
+                "step_id":{"type":"string","minLength":1,"maxLength":64},
+                "operation":mcp_operation_schema()
+            }), &["tenant_id","run_id","step_id","operation"]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
@@ -655,6 +678,7 @@ fn mcp_site_architect_call(
         "site_architect_operation"
             | "site_architect_one_step"
             | "site_architect_new"
+            | "site_architect_prepare_step"
             | "site_architect_edit"
             | "site_architect_check"
             | "site_architect_diff"
@@ -734,6 +758,69 @@ fn mcp_site_architect_call(
                 (json!({"status":"draft_unchecked","recipe":recipe,"execution":"not_started"}), false)
             }
             Ok(_) => (mcp_bad_arguments("tenant_id and run_id must be bounded identifiers"), true),
+            Err(error) => (mcp_bad_arguments(error), true),
+        },
+        "site_architect_prepare_step" => match serde_json::from_value::<McpPrepareStep>(args) {
+            Ok(input)
+                if mcp_site_architect_scope_id_is_valid(&input.tenant_id)
+                    && mcp_site_architect_scope_id_is_valid(&input.run_id)
+                    && !input.step_id.is_empty()
+                    && input.step_id.len() <= 64
+                    && input.step_id.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    }) =>
+            {
+                match seo_application::site_architect::inspect_operation(
+                    catalog, &input.operation, None,
+                ) {
+                    Ok(inspection) => {
+                        let required_input_bindings: Vec<Value> = inspection.tool.inputs.iter()
+                            .map(|(port, schema)| json!({
+                                "port":port,
+                                "schema":schema,
+                                "binding":"unbound",
+                                "owner_dto_validation":"required_not_run",
+                                "source_authentication":"not_checked"
+                            })).collect();
+                        let has_required_inputs = !required_input_bindings.is_empty();
+                        let step_id = match serde_json::from_value(json!(input.step_id)) {
+                            Ok(id) => id,
+                            Err(_) => return (mcp_bad_arguments("invalid typed step identifier"), true),
+                        };
+                        let recipe = SiteRecipe {
+                            schema_revision: seo_application::site_architect::SITE_RECIPE_SCHEMA_REVISION,
+                            scope: seo_application::site_architect::RunScope {
+                                tenant_id:input.tenant_id,
+                                run_id:input.run_id,
+                            },
+                            sources:Default::default(),
+                            steps:vec![seo_application::site_architect::RecipeStep {
+                                id:step_id,
+                                operation:input.operation,
+                                inputs:Default::default(),
+                                parameters:Default::default(),
+                                after:Default::default(),
+                            }],
+                        };
+                        (json!({
+                            "status":if has_required_inputs {"draft_input_bindings_required"} else {"draft_pending_local_check"},
+                            "recipe":recipe,
+                            "required_input_bindings":required_input_bindings,
+                            "parameter_schema":inspection.tool.parameters,
+                            "output_ports":inspection.tool.outputs,
+                            "executable_owner":"not_verified",
+                            "parameters":"not_checked",
+                            "owner_validate_only":"required_not_run",
+                            "source_authentication":"not_checked",
+                            "operator_admission":"not_issued",
+                            "execution":"not_started",
+                            "next_action":"Bind each required input through site_architect_edit with a real source identity or compatible Produced step; set owner parameters, then call site_architect_check. Runtime authorization and independent ValidateOnly are still required before Start."
+                        }), false)
+                    },
+                    Err(error) => (site_architect_safe_operation_problem(&error), true),
+                }
+            }
+            Ok(_) => (mcp_bad_arguments("bounded scope and step identifiers required"), true),
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_architect_edit" => match serde_json::from_value::<McpEditRecipe>(args) {
@@ -989,7 +1076,7 @@ mod site_architect_mcp_tests {
             replies[0]["result"]["capabilities"]["tools"]["listChanged"],
             false
         );
-        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 12);
+        assert_eq!(replies[1]["result"]["tools"].as_array().unwrap().len(), 13);
         assert!(replies[1]["result"]["tools"].as_array().unwrap().iter().all(|tool| {
             tool["name"].as_str().is_some_and(|name| name.starts_with("site_architect_"))
         }));
@@ -1000,6 +1087,7 @@ mod site_architect_mcp_tests {
         for name in [
             "site_architect_operation",
             "site_architect_one_step",
+            "site_architect_prepare_step",
             "site_architect_run_status",
             "site_architect_connections",
             "site_architect_inspect",
@@ -1091,6 +1179,76 @@ mod site_architect_mcp_tests {
         );
         assert_eq!(unknown["result"]["isError"], true);
         assert!(!unknown.to_string().contains("unregistered_secret-SENTINEL"));
+    }
+
+    #[test]
+    fn mcp_prepare_step_uses_installed_contract_and_leaves_every_source_unbound() {
+        let response = tool_call(
+            "site_architect_prepare_step",
+            json!({
+                "tenant_id":"lab",
+                "run_id":"study-1",
+                "step_id":"extract",
+                "operation":{"id":"semantic.entity_spans","revision":1}
+            }),
+        );
+        assert_eq!(response["result"]["isError"], false);
+        let prepared = &response["result"]["structuredContent"];
+        assert_eq!(prepared["status"], "draft_input_bindings_required");
+        assert_eq!(prepared["recipe"]["schema_revision"], 2);
+        assert_eq!(prepared["recipe"]["steps"][0]["id"], "extract");
+        assert_eq!(prepared["recipe"]["steps"][0]["operation"]["id"], "semantic.entity_spans");
+        assert_eq!(prepared["recipe"]["steps"][0]["inputs"], json!({}));
+        assert_eq!(prepared["recipe"]["steps"][0]["parameters"], json!({}));
+        assert_eq!(prepared["recipe"]["sources"], json!({}));
+        let bindings = prepared["required_input_bindings"].as_array().unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0]["port"], "input");
+        assert_eq!(bindings[0]["schema"]["id"], "semantic.entity_span_input");
+        assert_eq!(bindings[0]["binding"], "unbound");
+        assert_eq!(bindings[0]["owner_dto_validation"], "required_not_run");
+        assert_eq!(bindings[0]["source_authentication"], "not_checked");
+        assert_eq!(prepared["executable_owner"], "not_verified");
+        assert_eq!(prepared["operator_admission"], "not_issued");
+        assert_eq!(prepared["execution"], "not_started");
+
+        let unbound = tool_call("site_architect_one_step", json!({
+            "recipe":prepared["recipe"]
+        }));
+        assert_eq!(unbound["result"]["isError"], true,
+            "a prepared draft is not an executable plan without actual input bindings");
+    }
+
+    #[test]
+    fn mcp_prepare_step_rejects_uninstalled_routes_and_forged_authority() {
+        let normal = json!({
+            "tenant_id":"lab", "run_id":"draft", "step_id":"s1",
+            "operation":{"id":"semantic.entity_spans","revision":1}
+        });
+        let mut unknown = normal.clone();
+        unknown["operation"]["id"] = json!("uninstalled-SECRET-SENTINEL");
+        let result = tool_call("site_architect_prepare_step", unknown);
+        assert_eq!(result["result"]["isError"], true);
+        assert_eq!(result["result"]["structuredContent"]["code"], "operation_unavailable");
+        assert!(!result.to_string().contains("SECRET-SENTINEL"));
+
+        for (key, value) in [
+            ("task_queue", json!("private-worker-SENTINEL")),
+            ("parameters", json!({"bearer_token":"SECRET-SENTINEL"})),
+            ("operator_admission", json!("forged")),
+        ] {
+            let mut forged = normal.clone();
+            forged[key] = value;
+            let denied = tool_call("site_architect_prepare_step", forged);
+            assert_eq!(denied["result"]["isError"], true, "{key}");
+            assert_eq!(denied["result"]["structuredContent"]["code"], "invalid_tool_arguments");
+            assert!(!denied.to_string().contains("SENTINEL"));
+        }
+        let mut invalid_step = normal;
+        invalid_step["step_id"] = json!("private/SENTINEL");
+        let denied = tool_call("site_architect_prepare_step", invalid_step);
+        assert_eq!(denied["result"]["isError"], true);
+        assert!(!denied.to_string().contains("SENTINEL"));
     }
 
     #[test]

@@ -108,9 +108,10 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 
-    def test_site_architect_trusted_owner_e2e_json_is_one_exact_test_file(self) -> None:
+    def test_site_architect_trusted_owner_e2e_json_is_two_exact_test_files(self) -> None:
         self.assertEqual(SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES, {
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_architect_owner_catalog_tests.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_pure_composition_tests.rs",
         })
         for relative in SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES:
             self.assertTrue(is_allowed_json_boundary(ROOT / relative))

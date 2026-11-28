@@ -107,6 +107,7 @@ mod tests {
     include!("tests/native_temporal_acquisition_tests.rs");
     include!("tests/native_temporal_seo_steps_tests.rs");
     include!("tests/native_temporal_truth_tests.rs");
+    include!("tests/native_temporal_mixed_pure_composition_tests.rs");
     include!("tests/native_one_step_grant_tests.rs");
     include!("tests/trusted_site_architect_owner_catalog_tests.rs");
 }

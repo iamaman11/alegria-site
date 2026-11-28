@@ -80,11 +80,11 @@
     "knowledge.vector_candidates.search@1": ["EX-03", "KN-02a"]
   },
   "legacy_phase_mapping": {
-    "load_verified_support_bundle": [],
+    "load_verified_support_bundle": ["KN-02c"],
     "serp_ingest": ["PL-01"],
     "crawl_sources": ["ACQ-07"],
-    "raw_knowledge_ingestion": [],
-    "load_verified_support_bundle.refresh": [],
+    "raw_knowledge_ingestion": ["ACQ-07", "EX-04", "TR-05", "TR-06", "TR-07"],
+    "load_verified_support_bundle.refresh": ["KN-02c"],
     "serp_normalize": ["PL-02"],
     "opportunity_build": ["PL-03"],
     "ia_build": ["PL-04"],
@@ -103,10 +103,36 @@
     "finalize_publish": ["PUB-03"],
     "rebuild_detect": ["PUB-04"]
   },
+  "legacy_phase_dispositions": {
+    "load_verified_support_bundle": {
+      "kind": "reuse_proposed_action",
+      "action": "knowledge.verified_rules.load@1",
+      "evidence": [
+        "app/rust/crates/seo_application/src/scenario/initial_phase.rs",
+        "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/verified_support.rs"
+      ],
+      "reason": "Initial support loading is one scope/profile-filtered verified-rule read with a runtime snapshot; it does not need a separate public action ID. The owner implementation is still proposed."
+    },
+    "raw_knowledge_ingestion": {
+      "kind": "decompose_legacy_macro",
+      "evidence": [
+        "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/raw_section_ingestion.rs",
+        "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/truth_candidate_persistence.rs",
+        "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs"
+      ],
+      "reason": "The legacy Activity loads existing raw sections, registers source/context, extracts candidate rules, validates/adjudicates them, can commit verified truth under governance, and observes projection barriers. It is a compatibility macro, not another independently selectable authority or hidden forward-path owner. The five candidate rows are functional coverage, not evidence of five installed routes."
+    },
+    "load_verified_support_bundle.refresh": {
+      "kind": "reuse_proposed_action",
+      "action": "knowledge.verified_rules.load@1",
+      "evidence": [
+        "app/rust/crates/seo_application/src/scenario/planning_phase.rs",
+        "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/verified_support.rs"
+      ],
+      "reason": "Refresh calls exactly the same verified-rule support query after a Truth change; Temporal invalidation/scheduling is internal. The same future typed read action may be invoked again, without a duplicate refresh action ID."
+    }
+  },
   "open_source_gaps": [
-    "Decide typed owner action versus internal ingress for load_verified_support_bundle.",
-    "Decide typed owner action versus internal ingress for raw_knowledge_ingestion.",
-    "Decide typed owner action versus internal ingress for load_verified_support_bundle.refresh.",
     "Explicit public PDF download and file import actions need source inventory before claiming complete external-provider coverage.",
     "Expand provider inventory by actual useful SEO actions, not by declaring the existing 52 code candidates deployable."
   ]

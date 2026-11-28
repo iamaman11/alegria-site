@@ -1003,6 +1003,40 @@ SUITE_OWNERS = {
             "--lib", "one_step_grant_native_v1_", "--locked", "--", "--nocapture",
         ),
     },
+    # Native mixed-owner composition reuses the same exact-source Temporal
+    # and independently compiled pure owner artifacts as the Acquisition
+    # one-step shard. No extra compiler or full runner job is required.
+    "mixed_pure_composition_native_v1": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_pure_composition_tests.rs",
+            "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/owner_pure_operations.rs",
+            "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/procedural_extraction_step.rs",
+            "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
+            "app/rust/crates/truth_domain/src/operations.rs",
+            "app/rust/crates/truth_domain/src/completeness.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_seo_steps_pure/",
+            "app/rust/services/temporal_truth_pure/",
+        ),
+        "lock_crates": {"operation_protocol", "seo_steps", "truth_domain",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "temporal_seo_steps_pure", "temporal_truth_pure",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ONE_STEP_GRANT_NATIVE_V1_PREPARE,
+        "runtime_binaries": ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_pure_native_", "--locked", "--", "--nocapture",
+        ),
+    },
     "temporal_restart": {
         "paths": {
             "app/rust/services/temporal/Cargo.toml",
@@ -1546,6 +1580,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "temporal_acquisition": (
         ("acquisition_native_v2", "acquisition_native_v2_", 2),
         ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
+        ("mixed_pure_composition_native_v1", "mixed_pure_native_", 1),
     ),
     "temporal_seo_steps": (("seo_steps_native_v2", "seo_steps_native_v2_", 1),),
     "temporal_truth": (("truth_native_v2", "truth_native_v2_", 1),),

@@ -48,7 +48,12 @@ pub fn persist_captured_html_v1(
     tenant_id: &str,
     capture: &NativePageCaptureV1,
 ) -> io::Result<StoredPageBytesV1> {
-    if !trusted_archive_root.is_absolute() || tenant_id.is_empty() || tenant_id.len() > 128 {
+    if !trusted_archive_root.is_absolute()
+        || tenant_id.is_empty()
+        || tenant_id.len() > 128
+        || tenant_id.trim() != tenant_id
+        || tenant_id.chars().any(char::is_control)
+    {
         return Err(invalid_data("operator archive root/tenant must be bounded"));
     }
     let result = &capture.checked_transport;
@@ -90,6 +95,13 @@ pub fn persist_captured_html_v1(
     let tenant_hash = blake3::hash(tenant_id.as_bytes()).to_hex().to_string();
     let rel_dir = PathBuf::from(ARCHIVE_DIRECTORY).join(&tenant_hash);
     let directory = trusted_archive_root.join(&rel_dir);
+    // The operator must provision a private, existing root. Creating an
+    // arbitrary caller-selected root or following an intermediate symlink
+    // could redirect otherwise immutable evidence outside the intended
+    // tenant archive. Once the root is private, untrusted principals cannot
+    // race the child directory creation below.
+    validate_private_archive_root(trusted_archive_root)?;
+    create_private_directory(&trusted_archive_root.join(ARCHIVE_DIRECTORY))?;
     create_private_directory(&directory)?;
 
     let filename = format!("{digest}.html");
@@ -183,6 +195,27 @@ fn sync_archive_directory(directory: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+fn validate_private_archive_root(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "trusted archive root must be a private directory, never a symlink",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_private_archive_root(path: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(path)?.file_type().is_dir() {
+        return Err(invalid_data("operator archive root must be a directory"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn create_private_directory(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     let mut builder = fs::DirBuilder::new();
@@ -244,7 +277,7 @@ mod tests {
     #[test]
     fn content_addressed_archive_keeps_tenant_and_bytes_immutable() {
         let temp = std::env::temp_dir().join(format!("web-fetch-archive-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&temp).unwrap();
+        create_private_directory(&temp).unwrap();
         let page = capture(b"<!doctype html><h1>Safe public page</h1>");
         let first = persist_captured_html_v1(&temp, "tenant-a", &page).unwrap();
         let second = persist_captured_html_v1(&temp, "tenant-a", &page).unwrap();
@@ -273,7 +306,7 @@ mod tests {
     #[test]
     fn archive_stores_independent_robots_and_redirect_evidence() {
         let temp = std::env::temp_dir().join(format!("web-fetch-archive-{}", uuid::Uuid::new_v4()));
-        fs::create_dir(&temp).unwrap();
+        create_private_directory(&temp).unwrap();
         let mut page = capture(b"<html>source</html>");
         let robots = RobotsResponseEvidenceV1 {
             status_code: 200,
@@ -301,5 +334,31 @@ mod tests {
         page.robots_by_url.clear();
         assert!(persist_captured_html_v1(&temp, "tenant-a", &page).is_err());
         fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn untrusted_archive_root_or_intermediate_symlink_never_receives_source_bytes() {
+        use std::os::unix::fs::symlink;
+        let temp = std::env::temp_dir().join(format!("web-fetch-archive-{}", uuid::Uuid::new_v4()));
+        let elsewhere = std::env::temp_dir().join(format!("web-fetch-elsewhere-{}", uuid::Uuid::new_v4()));
+        create_private_directory(&temp).unwrap();
+        create_private_directory(&elsewhere).unwrap();
+        let page = capture(b"<html>cannot escape private root</html>");
+
+        let root_alias = temp.with_extension("alias");
+        symlink(&temp, &root_alias).unwrap();
+        assert_eq!(persist_captured_html_v1(&root_alias, "tenant-a", &page)
+            .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+
+        let intermediate = temp.join(ARCHIVE_DIRECTORY);
+        symlink(&elsewhere, &intermediate).unwrap();
+        assert_eq!(persist_captured_html_v1(&temp, "tenant-a", &page)
+            .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+        fs::remove_file(root_alias).unwrap();
+        fs::remove_dir_all(temp).unwrap();
+        fs::remove_dir_all(elsewhere).unwrap();
     }
 }

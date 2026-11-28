@@ -206,6 +206,13 @@ fn provider_task(bytes: &[u8], cap: usize) -> Result<Value> {
     Ok(tasks[0].clone())
 }
 
+fn task_data_matches_query(data: &Value, input: &DataForSeoGoogleOrganicSearchInputV1) -> bool {
+    data["keyword"].as_str() == Some(input.keyword.as_str())
+        && data["language_code"].as_str() == Some(input.language_code.as_str())
+        && data["location_code"].as_i64() == Some(input.location_code)
+        && data["depth"].as_u64() == Some(u64::from(input.depth))
+}
+
 pub(super) fn parse_post_receipt(
     bytes: &[u8],
     input: &DataForSeoGoogleOrganicSearchInputV1,
@@ -217,12 +224,8 @@ pub(super) fn parse_post_receipt(
     );
     let task_id = task["id"].as_str().context("missing provider task ID")?;
     ensure!(valid_task_id(task_id), "unexpected provider task ID");
-    let data = &task["data"];
     ensure!(
-        data["keyword"].as_str() == Some(input.keyword.as_str())
-            && data["language_code"].as_str() == Some(input.language_code.as_str())
-            && data["location_code"].as_i64() == Some(input.location_code)
-            && data["depth"].as_u64() == Some(u64::from(input.depth)),
+        task_data_matches_query(&task["data"], input),
         "DataForSEO provider task identity differs from requested query"
     );
     let cost = usd_micros(&task["cost"])?;
@@ -306,6 +309,16 @@ pub(super) fn parse_get_response(
         task["id"].as_str() == Some(task_id),
         "DataForSEO GET task ID mismatch"
     );
+    // Some provider responses omit echoed task parameters; whenever they
+    // exist, enforce the same immutable keyword/location/language/depth as
+    // the original approved POST. A known task ID alone is not sufficient
+    // to accept a contradictory provider body as the requested SERP result.
+    if !task["data"].is_null() {
+        ensure!(
+            task_data_matches_query(&task["data"], input),
+            "DataForSEO GET task parameters differ from approved query"
+        );
+    }
     let status = task["status_code"]
         .as_i64()
         .context("missing task status")?;
@@ -515,6 +528,37 @@ mod tests {
             &input
         )
         .is_err());
+    }
+
+    #[test]
+    fn completed_get_echo_must_not_substitute_a_different_approved_query() {
+        let input = query();
+        let task_id = "11151548-1307-0066-0000-aecf8c56ea58";
+        let mut echoed: Value = serde_json::from_slice(&get()).unwrap();
+        echoed["tasks"][0]["data"] = json!({
+            "keyword": input.keyword.clone(),
+            "language_code": input.language_code.clone(),
+            "location_code": input.location_code,
+            "depth": input.depth,
+        });
+        assert!(matches!(
+            parse_get_response(&serde_json::to_vec(&echoed).unwrap(), task_id, &input),
+            Ok(TaskRead::Completed(_))
+        ));
+        for (field, altered) in [
+            ("keyword", json!("unapproved query")),
+            ("language_code", json!("de")),
+            ("location_code", json!(2203)),
+            ("depth", json!(100)),
+        ] {
+            let mut tampered = echoed.clone();
+            tampered["tasks"][0]["data"][field] = altered;
+            assert!(
+                parse_get_response(&serde_json::to_vec(&tampered).unwrap(), task_id, &input)
+                    .is_err(),
+                "{field}: GET cannot relabel an approved query"
+            );
+        }
     }
 
     #[test]

@@ -69,10 +69,34 @@ class ActionMatrixTests(unittest.TestCase):
         manifest["legacy_phase_mapping"].pop("raw_knowledge_ingestion")
         self.assertIn("22 legacy phases not fully reconciled", " ".join(self.check(manifest)))
 
-    def test_gap_cannot_be_silently_declared_complete(self) -> None:
+    def test_reviewed_legacy_macro_cannot_be_collapsed_into_one_action(self) -> None:
         manifest = copy.deepcopy(self.original)
         manifest["legacy_phase_mapping"]["raw_knowledge_ingestion"] = ["ACQ-07"]
-        self.assertIn("gap disposition changed", " ".join(self.check(manifest)))
+        self.assertIn("source-reviewed legacy phase mapping drift", " ".join(self.check(manifest)))
+
+    def test_reviewed_support_refresh_reuses_exact_action(self) -> None:
+        manifest = copy.deepcopy(self.original)
+        manifest["legacy_phase_dispositions"]["load_verified_support_bundle.refresh"]["action"] = (
+            "truth.verified.commit@1"
+        )
+        self.assertIn("source-reviewed disposition kind/action drift", " ".join(self.check(manifest)))
+
+    def test_reviewed_legacy_source_evidence_cannot_be_invented(self) -> None:
+        manifest = copy.deepcopy(self.original)
+        manifest["legacy_phase_dispositions"]["raw_knowledge_ingestion"]["evidence"] = [
+            "docs/source-not-present.rs"
+        ]
+        self.assertIn("invalid source evidence path", " ".join(self.check(manifest)))
+
+    def test_reviewed_legacy_phase_cannot_remain_open(self) -> None:
+        manifest = copy.deepcopy(self.original)
+        manifest["open_source_gaps"].append("Decide raw_knowledge_ingestion.")
+        self.assertIn("reviewed legacy phase cannot remain", " ".join(self.check(manifest)))
+
+    def test_external_inventory_gap_cannot_disappear_by_relabeling(self) -> None:
+        manifest = copy.deepcopy(self.original)
+        manifest["open_source_gaps"] = []
+        self.assertIn("pending external provider inventory gap disappeared", " ".join(self.check(manifest)))
 
     def test_proposed_contract_cannot_claim_runtime_readiness(self) -> None:
         manifest = copy.deepcopy(self.original)

@@ -262,11 +262,13 @@ PURE_OWNER_LOCAL_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
 })
 
-# A single opt-in cross-owner integration fixture constructs protected catalog
-# JSON and typed Temporal plan wire values for a real PG/Qdrant contract test.
-# No production owner, DAG runner, or sibling E2E file inherits this exception.
+# Exactly two opt-in cross-owner integration fixtures construct protected
+# catalog JSON and typed Temporal plan/receipt wire values for actual native
+# independent-owner tests. No production owner, DAG runner, or future sibling
+# E2E file inherits either boundary exception.
 SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_architect_owner_catalog_tests.rs",
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_pure_composition_tests.rs",
 })
 
 # The new native DataForSEO owner has two *exact* typed wire boundaries:

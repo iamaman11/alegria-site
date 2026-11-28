@@ -361,6 +361,12 @@ pub fn robots_allows_v1(
     {
         return Err(RuntimeWebFetchError::RobotsNotAllowed);
     }
+    // RFC 9309 §2.2.2: a percent-escaped *unreserved* URI octet must be
+    // decoded before matching robots rules. Without this step, a disallowed
+    // `/private` path could be fetched as `/%70rivate` without matching the
+    // rule. Preserve reserved escapes (including `%2F`, `%2A` and `%24`) so
+    // encoded slash, wildcard and anchor bytes cannot acquire syntax.
+    let request_target = normalize_robots_octets_v1(request_target)?;
     let requested_agent = user_agent.to_ascii_lowercase();
     let mut group_agents = Vec::<String>::new();
     let mut current_rules = Vec::<(bool, String)>::new();
@@ -441,8 +447,9 @@ pub fn robots_allows_v1(
             continue;
         }
         for (allow, pattern) in rules {
-            if robots_prefix_pattern_matches_v1(&pattern, request_target)? {
-                let length = pattern.chars().filter(|c| *c != '*' && *c != '$').count();
+            let normalized_pattern = normalize_robots_octets_v1(&pattern)?;
+            if robots_prefix_pattern_matches_v1(&normalized_pattern, &request_target)? {
+                let length = robots_specificity_octets_v1(&normalized_pattern);
                 if best_rule.is_none_or(|(existing, existing_allow)| {
                     length > existing || (length == existing && allow && !existing_allow)
                 }) {
@@ -452,6 +459,69 @@ pub fn robots_allows_v1(
         }
     }
     Ok(best_rule.is_none_or(|(_, allow)| allow))
+}
+
+fn normalize_robots_octets_v1(input: &str) -> Result<String, RuntimeWebFetchError> {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(bytes.len());
+    let mut offset = 0;
+    while offset < bytes.len() {
+        if bytes[offset] == b'%' {
+            let digits = bytes.get(offset + 1..offset + 3)
+                .ok_or(RuntimeWebFetchError::RobotsNotAllowed)?;
+            let upper = digits[0].to_ascii_uppercase();
+            let lower = digits[1].to_ascii_uppercase();
+            if !upper.is_ascii_hexdigit() || !lower.is_ascii_hexdigit() {
+                return Err(RuntimeWebFetchError::RobotsNotAllowed);
+            }
+            let hex = |byte: u8| if byte.is_ascii_digit() {
+                byte - b'0'
+            } else {
+                byte - b'A' + 10
+            };
+            let decoded = hex(upper) * 16 + hex(lower);
+            if decoded.is_ascii_alphanumeric() || b"-._~".contains(&decoded) {
+                output.push(char::from(decoded));
+            } else {
+                output.push('%');
+                output.push(char::from(upper));
+                output.push(char::from(lower));
+            }
+            offset += 3;
+        } else if !bytes[offset].is_ascii() {
+            let byte = bytes[offset];
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            output.push('%');
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            offset += 1;
+        } else {
+            output.push(char::from(bytes[offset]));
+            offset += 1;
+        }
+    }
+    Ok(output)
+}
+
+fn robots_specificity_octets_v1(pattern: &str) -> usize {
+    let bytes = pattern.as_bytes();
+    let mut offset = 0;
+    let mut count = 0;
+    while offset < bytes.len() {
+        match bytes[offset] {
+            b'*' | b'$' => offset += 1,
+            b'%' => {
+                // A valid percent-escaped octet is one logical rule octet.
+                offset += 3;
+                count += 1;
+            }
+            _ => {
+                offset += 1;
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 fn robots_prefix_pattern_matches_v1(
@@ -549,5 +619,35 @@ mod tests {
     #[test]
     fn no_rules_means_allowed() {
         assert!(robots_allows_v1("User-agent: *\nDisallow:\n", BOT_AGENT, "/").unwrap());
+    }
+
+    #[test]
+    fn percent_encoded_unreserved_uri_and_rules_cannot_bypass_disallow() {
+        for (rule, target) in [
+            ("/private", "/%70rivate/customer"),
+            ("/%70rivate", "/private/customer"),
+            ("/private", "/%50rivate/customer"),
+            ("/caf\u{00e9}", "/caf%C3%A9/order"),
+        ] {
+            let robots = format!("User-agent: *\nDisallow: {rule}\n");
+            // URI matching stays case-sensitive: `%50` is uppercase P.
+            assert_eq!(
+                robots_allows_v1(&robots, BOT_AGENT, target).unwrap(),
+                rule == "/private" && target == "/%50rivate/customer",
+                "{rule} must be evaluated against {target} without decoding reserved syntax",
+            );
+        }
+    }
+
+    #[test]
+    fn encoded_reserved_octets_remain_literal_and_malformed_escapes_fail_closed() {
+        let robots = "User-agent: *\nDisallow: /file%2A.txt\n";
+        assert!(!robots_allows_v1(robots, BOT_AGENT, "/file%2a.txt").unwrap());
+        assert!(robots_allows_v1(robots, BOT_AGENT, "/file-name.txt").unwrap());
+        let robots = "User-agent: *\nDisallow: /private\n";
+        for malformed in ["/priva%", "/priva%2", "/priva%GG"] {
+            assert_eq!(robots_allows_v1(robots, BOT_AGENT, malformed),
+                Err(RuntimeWebFetchError::RobotsNotAllowed));
+        }
     }
 }

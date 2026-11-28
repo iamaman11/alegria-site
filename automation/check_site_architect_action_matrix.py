@@ -19,11 +19,15 @@ ROOT = Path(__file__).resolve().parent.parent
 MATRIX = ROOT / "docs/site_architect_action_matrix_v1.json"
 ACTION_ID = re.compile(r"^[a-z][a-z0-9]*(?:[._][a-z][a-z0-9_]*)+@[1-9][0-9]*$")
 DECISIONS = {"KEEP": 29, "SPLIT": 12, "INTERNAL": 11}
-SOURCE_GAPS = {
-    "load_verified_support_bundle",
-    "raw_knowledge_ingestion",
-    "load_verified_support_bundle.refresh",
+RESOLVED_LEGACY_PHASES = {
+    "load_verified_support_bundle": (["KN-02c"], "reuse_proposed_action", "knowledge.verified_rules.load@1"),
+    "raw_knowledge_ingestion": (["ACQ-07", "EX-04", "TR-05", "TR-06", "TR-07"], "decompose_legacy_macro", None),
+    "load_verified_support_bundle.refresh": (["KN-02c"], "reuse_proposed_action", "knowledge.verified_rules.load@1"),
 }
+PENDING_INVENTORY_GAPS = (
+    "public PDF download and file import",
+    "Expand provider inventory",
+)
 
 
 def validate(
@@ -138,12 +142,39 @@ def validate(
             errors.append(f"{phase}: mapped to unknown candidates")
         if set(candidate_ids) & {r.get("id") for r in rows if isinstance(r, dict) and r.get("decision") == "INTERNAL"}:
             errors.append(f"{phase}: mapped to user-invisible INTERNAL candidate")
-        if not candidate_ids and phase not in SOURCE_GAPS:
+        if not candidate_ids:
             errors.append(f"{phase}: unexplained legacy phase gap")
-        if candidate_ids and phase in SOURCE_GAPS:
-            errors.append(f"{phase}: gap disposition changed without reviewed source update")
-    if not isinstance(manifest.get("open_source_gaps"), list) or len(manifest["open_source_gaps"]) < len(SOURCE_GAPS):
-        errors.append("missing explicit source gap decisions")
+        if phase in RESOLVED_LEGACY_PHASES and candidate_ids != RESOLVED_LEGACY_PHASES[phase][0]:
+            errors.append(f"{phase}: source-reviewed legacy phase mapping drift")
+
+    dispositions = manifest.get("legacy_phase_dispositions")
+    if not isinstance(dispositions, dict) or set(dispositions) != set(RESOLVED_LEGACY_PHASES):
+        errors.append("three source-reviewed legacy phase dispositions must be complete")
+    else:
+        for phase, (_, expected_kind, expected_action) in RESOLVED_LEGACY_PHASES.items():
+            detail = dispositions[phase]
+            if not isinstance(detail, dict):
+                errors.append(f"{phase}: legacy phase disposition must be an object")
+                continue
+            if detail.get("kind") != expected_kind or detail.get("action") != expected_action:
+                errors.append(f"{phase}: source-reviewed disposition kind/action drift")
+            if not isinstance(detail.get("reason"), str) or len(detail["reason"].strip()) < 32:
+                errors.append(f"{phase}: source-reviewed disposition requires a concrete reason")
+            evidence = detail.get("evidence")
+            if not isinstance(evidence, list) or not evidence or not all(isinstance(path, str) for path in evidence):
+                errors.append(f"{phase}: missing exact Rust source evidence")
+            else:
+                for path in evidence:
+                    full = (root / path).resolve()
+                    if not full.is_relative_to(root.resolve()) or not full.is_file():
+                        errors.append(f"{phase}: invalid source evidence path: {path}")
+    gaps = manifest.get("open_source_gaps")
+    if not isinstance(gaps, list) or not all(isinstance(gap, str) for gap in gaps):
+        errors.append("open_source_gaps must be a list of pending external inventories")
+    elif any(phase in gap for phase in RESOLVED_LEGACY_PHASES for gap in gaps):
+        errors.append("reviewed legacy phase cannot remain an unresolved source gap")
+    elif any(not any(marker in gap for gap in gaps) for marker in PENDING_INVENTORY_GAPS):
+        errors.append("pending external provider inventory gap disappeared without source review")
 
     return errors
 
@@ -164,7 +195,7 @@ def main() -> int:
         f"52 candidates: 29 KEEP + 12 SPLIT + 11 INTERNAL; "
         f"{len(selected)} proposed unique actions, {len(declared)} source-declared "
         f"contracts, {len(selected - declared)} proposed-only, 22 legacy phases "
-        f"({len(SOURCE_GAPS)} explicit gaps); 0 readiness claims"
+        f"({len(RESOLVED_LEGACY_PHASES)} source-reviewed dispositions, 0 unresolved legacy phases); 0 readiness claims"
     )
     return 0
 

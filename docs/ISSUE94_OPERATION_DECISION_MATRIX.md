@@ -3,11 +3,34 @@
 **Принятая предметная декомпозиция 28.11.2026:** [`site_architect_action_matrix_v1.json`](site_architect_action_matrix_v1.json)
 содержит точное соответствие всех 52 исходных строк проектным действиям
 (29 KEEP, 12 SPLIT, 11 INTERNAL), 55 уникальных предложенных action IDs
-и карту 22 исторических фаз с тремя нерешёнными границами.
+и карту 22 исторических фаз. Три ранее открытые границы
+— `load_verified_support_bundle`, `raw_knowledge_ingestion` и
+`load_verified_support_bundle.refresh` — получили **source-reviewed решения**
+без изменения количества публичных действий. Внешние inventory-пробелы
+(PDF/file import и новые поставщики) остаются открытыми.
 `python3 automation/check_site_architect_action_matrix.py` сверяет этот
 read-only план с исходным Rust/source-аудитом. Это **не** runtime registry,
 не решение о допуске эффектов и не утверждение, что 55 действий исполняются.
 Нормативное решение — [Issue #94](https://github.com/iamaman11/alegria-site/issues/94).
+
+### Закрытие трёх legacy phase disposition gaps (28.11.2026)
+
+| Legacy phase | Решение по исходному коду | Связь с предложенными действиями |
+| --- | --- | --- |
+| `load_verified_support_bundle` | Исходная загрузка уже подтверждённых правил из PostgreSQL с проверкой контекста, scope и applicant profile. Публичная функция — одна типизированная операция чтения; запись run-scoped snapshot остаётся делом владельца. | `KN-02c` → **проектный** `knowledge.verified_rules.load@1` |
+| `raw_knowledge_ingestion` | Историческая составная Activity, а не самостоятельная пользовательская операция. Реальный код читает готовые `raw.sections`, регистрирует source/context, вызывает extraction, сохраняет кандидатов, валидирует/адъюдицирует, при подтверждении может записать Verified Truth и проверяет projection barrier. В новом пути эти обязанности должны принадлежать соответствующим отдельным владельцам с их границами прав. | `ACQ-07`, `EX-04`, `TR-05`, `TR-06`, `TR-07`; покрытие **по функциям**, не утверждение о пяти установленных маршрутах |
+| `load_verified_support_bundle.refresh` | Повторный вызов того же PostgreSQL reader после изменения Truth. Событие инвалидации и порядок повторного вызова — Temporal runtime, отдельное действие `refresh` не нужно. | Тот же `KN-02c` → `knowledge.verified_rules.load@1` |
+
+Source evidence: `seo_application/src/scenario/{initial_phase,planning_phase}.rs`,
+`infrastructure/src/adapters/sqlx_seo_adapter/verified_support.rs`,
+`infrastructure/src/adapters/raw_crawl_adapter/{raw_section_ingestion,truth_candidate_persistence}.rs`,
+`services/temporal/src/activities/registry/mod_registry_impl.rs` (все под `app/rust`).
+Все три решения представлены в проверяемом поле
+`legacy_phase_dispositions` JSON-манифеста. **Ни один из предложенных здесь
+контрактов не становится `ready` автоматически**; `raw_knowledge_ingestion`
+должен остаться только историческим compat/drain-путём до подтверждённой
+замены. Source-audit продолжает фиксировать 52 строки / 55 проектных IDs /
+22 legacy phases; нового публичного шага эта сверка не создала.
 
 Decision baseline: Draft PR #95 at `851c3fa`, reconciled with canonical [Issue #94 §6.3](https://github.com/iamaman11/alegria-site/issues/94).
 Latest fully green exact-SHA PR CI checked for this ledger:
