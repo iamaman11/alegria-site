@@ -76,6 +76,14 @@ jobs:
           toolchain: "1.100.1"
           components: rustfmt
 
+      - name: Verify Cargo.lock before parallel Rust jobs
+        run: |
+          if ! (cd app/rust && cargo metadata --locked --no-deps --format-version 1 > /dev/null); then
+            (cd app/rust && cargo metadata --no-deps --format-version 1 > /dev/null) || true
+            git diff -- app/rust/Cargo.lock
+            exit 1
+          fi
+
       - name: Enforce source-document layout even when every owner is not applicable
         run: python3 automation/check_docs_layout.py
 

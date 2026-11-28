@@ -5622,7 +5622,6 @@ name = "temporal_web_fetch"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "chrono",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
