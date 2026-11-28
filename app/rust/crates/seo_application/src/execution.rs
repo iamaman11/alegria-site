@@ -196,7 +196,7 @@ pub fn run_mode_for_scenario(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SeoPhaseKey {
     LoadVerifiedSupportBundle,
     SerpIngest,
@@ -345,7 +345,9 @@ pub fn planning_phase_keys(plan: &SeoExecutionPlan, refresh_support: bool) -> Ve
 }
 
 pub fn should_publish(plan: &SeoExecutionPlan) -> bool {
-    if plan.policy.persistence == RunPersistencePolicy::PersistWithoutPublish {
+    // Publication requires explicit write permission from both orthogonal
+    // policies. A custom run policy must never turn a DryRun into a publisher.
+    if plan.policy.persistence != RunPersistencePolicy::PersistAll {
         return false;
     }
     matches!(plan.policy.publish, RunPublishPolicy::PublishIfApproved)
@@ -410,6 +412,20 @@ pub fn advance_cursor(cursor: &mut SeoExecutionCursor) {
     cursor.phase_index += 1;
 }
 
+// The site-build scenario and the durable Temporal workflow share one typed
+// description of step inputs, outputs and supported ordering. A recipe does
+// not run steps or own their side effects; execution remains with each owner.
+mod durable_plan;
+mod recipe;
+pub use durable_plan::{
+    SeoDurableArtifact, SeoDurablePlan, SeoDurablePlanError, SeoDurableScenario, SeoDurableStep,
+    SeoDurableStepContract, SEO_DURABLE_PLAN_SCHEMA_VERSION,
+};
+pub use recipe::{
+    SeoPhaseRecipe, SeoRecipeManifest, SeoStepArtifact, SeoStepContract, SeoStepRecipeError,
+    SEO_RECIPE_SCHEMA_VERSION,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +462,22 @@ mod tests {
             },
         };
         assert!(!page_phase_keys(&plan).contains(&SeoPhaseKey::CmsRequestReview));
+    }
+
+    #[test]
+    fn dry_run_cannot_admit_publish_effects_from_a_conflicting_policy() {
+        let plan = SeoExecutionPlan {
+            scenario: SeoScenarioKind::Full,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy {
+                persistence: RunPersistencePolicy::DryRun,
+                interaction: RunInteractionPolicy::FailIfHitlRequired,
+                projection: RunProjectionPolicy::WarnOnly,
+                publish: RunPublishPolicy::PublishIfApproved,
+            },
+        };
+        assert!(!should_publish(&plan));
+        assert!(!page_phase_keys(&plan).contains(&SeoPhaseKey::FinalizePublish));
     }
 
     #[test]

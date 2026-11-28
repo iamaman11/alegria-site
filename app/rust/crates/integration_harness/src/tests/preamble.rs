@@ -9,15 +9,24 @@
         dataforseo_serp_adapter::{DataForSeoConfig, DataForSeoSerpClient},
         editorial_llm_adapter,
         proto_runtime_payload_store::RuntimeProtoPayload,
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     };
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     #[cfg(feature = "e2e")]
     use infrastructure::adapters::{
         raw_crawl_adapter,
-        temporalio_sdk_adapter::{
-            connect_client, RawValue, UntypedWorkflow, WorkflowGetResultOptions,
-            WorkflowStartOptions,
-        },
+    };
+    #[cfg(feature = "e2e")]
+    use temporal_gateway::connect_client;
+    #[cfg(feature = "e2e")]
+    use temporalio_client::{
+        UntypedWorkflow, WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowStartOptions,
+    };
+    #[cfg(feature = "e2e")]
+    use temporalio_common::data_converters::RawValue;
+    #[cfg(feature = "e2e")]
+    use temporalio_common::protos::temporal::api::{
+        enums::v1::EventType,
+        history::v1::{history_event::Attributes, History},
     };
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
@@ -236,7 +245,11 @@
     }
 
     fn truth_certification_fixtures_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        // Read the sole checked-in corpus from its canonical source package;
+        // this helper is compiled by multiple real E2E test owners.
+        workspace_root()
+            .join("crates")
+            .join("integration_harness")
             .join("fixtures")
             .join("visa_truth_certification")
     }
@@ -304,6 +317,104 @@
             eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=nested");
             nested_worker_binaries().0.clone()
         }
+    }
+
+    /// Exercise the *actual* registered workflow implementation against bytes
+    /// fetched from the real Temporal server. This confirms deterministic
+    /// offline replay on the same source SHA; cross-version replay still needs
+    /// immutable histories captured before the code changed. The subprocess
+    /// uses no DB, poller, network client, metrics, or Activity adapter.
+    #[cfg(feature = "e2e")]
+    fn assert_saved_temporal_history_replays(history_json: &[u8]) {
+        assert!(
+            history_json.len() > 100,
+            "Temporal server returned no meaningful workflow history"
+        );
+        let history_path = env::temp_dir().join(format!(
+            "alegria-canonical-history-{}-{}.json",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::write(&history_path, history_json).expect("write actual Temporal history for replay");
+        let output = Command::new(build_temporal_worker_binary())
+            .arg("--replay-history")
+            .arg(&history_path)
+            .current_dir(workspace_root())
+            .output();
+        fs::remove_file(&history_path).expect("remove disposable Temporal history fixture");
+        let output = output.expect("run exact-source Temporal history replayer");
+        assert!(
+            output.status.success(),
+            "V1 Temporal history failed actual SDK replay: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("CI_TEMPORAL_HISTORY_REPLAY=PASS"),
+            "offline Temporal replay did not report completion"
+        );
+    }
+
+    /// Read actual scheduled Activity commands, preserving Temporal event order.
+    /// A missing or unknown history layout is rejected, never interpreted as
+    /// an empty command sequence.
+    #[cfg(feature = "e2e")]
+    fn scheduled_temporal_activities(history_json: &[u8]) -> Vec<String> {
+        // WorkflowHistory::to_json() serializes precisely this generated
+        // protobuf `History`; `HistoryEvent.attributes` is a nested oneof,
+        // not an `activityTaskScheduledEventAttributes` key on the event.
+        let history: History =
+            serde_json::from_slice(history_json).expect("decode SDK-generated Temporal History");
+        assert!(
+            !history.events.is_empty(),
+            "actual Temporal History must contain events"
+        );
+        history
+            .events
+            .iter()
+            .filter_map(|event| {
+                if event.event_type != EventType::ActivityTaskScheduled as i32 {
+                    return None;
+                }
+                let Some(Attributes::ActivityTaskScheduledEventAttributes(attributes)) =
+                    event.attributes.as_ref()
+                else {
+                    panic!(
+                        "scheduled Temporal Activity event {} lacks matching attributes",
+                        event.event_id
+                    );
+                };
+                Some(
+                    attributes
+                        .activity_type
+                        .as_ref()
+                        .expect("scheduled Temporal Activity missing activity_type")
+                        .name
+                        .clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// Assert the actual command stream persisted by Temporal, not merely the
+    /// typed recipe or final result. Both recipes schedule the same Activities,
+    /// but a different topological order is an observable runtime contract.
+    #[cfg(feature = "e2e")]
+    fn assert_composable_activity_order(history_json: &[u8], support_first: bool) {
+        let activities = scheduled_temporal_activities(history_json);
+        let support_index = activities
+            .iter()
+            .position(|activity| activity == "AlegriaActivities::load_verified_support_bundle")
+            .unwrap_or_else(|| panic!("missing scheduled support Activity in {activities:?}"));
+        let source_index = activities
+            .iter()
+            .position(|activity| activity == "AlegriaActivities::run_serp_ingest_step")
+            .unwrap_or_else(|| panic!("missing scheduled source Activity in {activities:?}"));
+        assert_eq!(
+            support_index < source_index,
+            support_first,
+            "V2 executed a different real Activity command order: {activities:?}"
+        );
     }
 
     fn build_outbox_worker_binary() -> PathBuf {

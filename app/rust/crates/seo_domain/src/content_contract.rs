@@ -166,6 +166,207 @@ pub fn validate(input: &ContentContract<'_>) -> Vec<Violation> {
     violations
 }
 
+/// Independent authoring check of a concrete draft content contract. These
+/// owned DTOs deliberately exclude mutable CMS state and database effects.
+pub mod operations {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::convert::Infallible;
+
+    use operation_protocol::{
+        ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId,
+        OperationOwnerId, OperationRef, PortId,
+    };
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    use super::{validate, ContentContract, Evidence, LinkObligation, PublishLinkCoverage};
+    use crate::editorial::ContentBlock;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct ContentBlockInput {
+        pub role: String,
+        pub block_type: String,
+        pub heading: String,
+        pub markdown: String,
+        pub required: bool,
+        pub support_refs: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct EvidenceInput {
+        pub validation_verdict: String,
+        pub traceability_label: String,
+        pub support_refs: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct LinkObligationInput {
+        pub required: bool,
+        pub bound_exactly: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct LinkCoverageInput {
+        pub related_pages_body: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct ContentContractInput {
+        pub blocks: Vec<ContentBlockInput>,
+        pub claims: Vec<EvidenceInput>,
+        pub traceability: Vec<EvidenceInput>,
+        pub links: Vec<LinkObligationInput>,
+        pub publish_links: Option<LinkCoverageInput>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct ContentContractViolation {
+        pub code: String,
+        pub next_action: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct ContentContractOutput {
+        pub valid: bool,
+        pub violations: Vec<ContentContractViolation>,
+    }
+
+    pub struct ValidateContentContract;
+
+    impl Operation for ValidateContentContract {
+        type Input = ContentContractInput;
+        type Output = ContentContractOutput;
+        type Failure = Infallible;
+
+        fn contract() -> OperationContract {
+            OperationContract {
+                reference: OperationRef {
+                    id: OperationId::from("editorial.validate_content_contract"),
+                    revision: 1,
+                },
+                owner: OperationOwnerId::from("editorial_policy"),
+                inputs: BTreeMap::from([(
+                    PortId::from("input"),
+                    ArtifactSchema {
+                        id: "editorial.content_contract_input".into(),
+                        revision: 1,
+                    },
+                )]),
+                outputs: BTreeMap::from([(
+                    PortId::from("output"),
+                    ArtifactSchema {
+                        id: "editorial.content_contract_output".into(),
+                        revision: 1,
+                    },
+                )]),
+                invalidates: BTreeSet::new(),
+                effects: BTreeSet::new(),
+                idempotency: IdempotencyPolicy::Pure,
+            }
+        }
+    }
+
+    impl ValidateContentContract {
+        pub fn evaluate(input: &ContentContractInput) -> ContentContractOutput {
+            let blocks = input
+                .blocks
+                .iter()
+                .map(|block| ContentBlock {
+                    role: &block.role,
+                    block_type: &block.block_type,
+                    heading: &block.heading,
+                    markdown: &block.markdown,
+                    required: block.required,
+                    support_refs: &block.support_refs,
+                })
+                .collect::<Vec<_>>();
+            let claims = input
+                .claims
+                .iter()
+                .map(|entry| Evidence {
+                    validation_verdict: &entry.validation_verdict,
+                    traceability_label: &entry.traceability_label,
+                    support_refs: &entry.support_refs,
+                })
+                .collect::<Vec<_>>();
+            let traceability = input
+                .traceability
+                .iter()
+                .map(|entry| Evidence {
+                    validation_verdict: &entry.validation_verdict,
+                    traceability_label: &entry.traceability_label,
+                    support_refs: &entry.support_refs,
+                })
+                .collect::<Vec<_>>();
+            let links = input
+                .links
+                .iter()
+                .map(|link| LinkObligation {
+                    required: link.required,
+                    bound_exactly: link.bound_exactly,
+                })
+                .collect::<Vec<_>>();
+            let publish_links = input
+                .publish_links
+                .as_ref()
+                .map(|coverage| PublishLinkCoverage {
+                    related_pages_body: &coverage.related_pages_body,
+                });
+            let violations = validate(&ContentContract {
+                blocks: &blocks,
+                claims: &claims,
+                traceability: &traceability,
+                links: &links,
+                publish_links,
+            })
+            .into_iter()
+            .map(|violation| ContentContractViolation {
+                code: violation.reason_code().to_owned(),
+                next_action: violation.required_next_action().to_owned(),
+            })
+            .collect::<Vec<_>>();
+            ContentContractOutput {
+                valid: violations.is_empty(),
+                violations,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn owner_content_contract_detects_unbound_required_links_without_effects() {
+            let contract = ValidateContentContract::contract();
+            assert!(contract.effects.is_empty());
+            assert_eq!(contract.idempotency, IdempotencyPolicy::Pure);
+            let result = ValidateContentContract::evaluate(&ContentContractInput {
+                blocks: Vec::new(),
+                claims: Vec::new(),
+                traceability: Vec::new(),
+                links: vec![LinkObligationInput {
+                    required: true,
+                    bound_exactly: false,
+                }],
+                publish_links: None,
+            });
+            assert!(!result.valid);
+            assert!(result
+                .violations
+                .iter()
+                .any(|violation| violation.code == "missing_required_internal_links"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

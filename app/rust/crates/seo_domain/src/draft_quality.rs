@@ -374,6 +374,270 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
     result
 }
 
+/// Pure, full-fidelity editorial draft QA. This operation reports policy
+/// diagnostics only; CMS approval and publication remain effectful owners.
+pub mod operations {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::convert::Infallible;
+
+    use operation_protocol::{
+        ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId,
+        OperationOwnerId, OperationRef, PortId,
+    };
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    use super::{evaluate, DraftQuality, Section, Traceability};
+    use crate::content_contract::operations::ContentBlockInput;
+    use crate::editorial::{ContentBlock, EditorialClaim, EditorialProposal, VerifiedSupport};
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct DraftSectionInput {
+        pub role: String,
+        pub heading: String,
+        pub body_markdown: String,
+        pub support_refs: Vec<String>,
+        pub required: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct TraceabilityInput {
+        pub fragment_kind: String,
+        pub fragment_text: String,
+        pub traceability_label: String,
+        pub validation_verdict: String,
+        pub support_refs: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct VerifiedSupportInput {
+        pub support_ref: String,
+        pub fragment_text: String,
+        pub role_type: String,
+        pub freshness_class: String,
+        pub source_url: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct EditorialProposalInput {
+        pub text: String,
+        pub question: String,
+        pub source_url: String,
+        pub evidence_spans: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct EditorialClaimInput {
+        pub source_section_key: String,
+        pub claim_kind: String,
+        pub validation_verdict: String,
+        pub traceability_label: String,
+        pub fragment_text: String,
+        pub support_refs: Vec<String>,
+        pub proposal: Option<EditorialProposalInput>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct DraftQualityInput {
+        pub body_markdown: String,
+        pub locale: String,
+        pub truth_snapshot_ref: String,
+        pub schema_markup_json: String,
+        pub sections: Vec<DraftSectionInput>,
+        pub expected_required_sections: Vec<String>,
+        pub blocks: Vec<ContentBlockInput>,
+        pub claims: Vec<EditorialClaimInput>,
+        pub traceability: Vec<TraceabilityInput>,
+        pub verified_support: Vec<VerifiedSupportInput>,
+        pub supported_fragments: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct DraftQualityDiagnostic {
+        pub code: String,
+        pub task_type: String,
+        pub next_action: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct DraftQualityOutput {
+        pub policy_passed: bool,
+        pub supported_claims: u32,
+        pub unsupported_claims: u32,
+        pub diagnostics: Vec<DraftQualityDiagnostic>,
+    }
+
+    pub struct ValidateDraftQuality;
+
+    impl Operation for ValidateDraftQuality {
+        type Input = DraftQualityInput;
+        type Output = DraftQualityOutput;
+        type Failure = Infallible;
+
+        fn contract() -> OperationContract {
+            OperationContract {
+                reference: OperationRef {
+                    id: OperationId::from("editorial.validate_draft_quality"),
+                    revision: 1,
+                },
+                owner: OperationOwnerId::from("editorial_policy"),
+                inputs: BTreeMap::from([(
+                    PortId::from("input"),
+                    ArtifactSchema {
+                        id: "editorial.draft_quality_input".into(),
+                        revision: 1,
+                    },
+                )]),
+                outputs: BTreeMap::from([(
+                    PortId::from("output"),
+                    ArtifactSchema {
+                        id: "editorial.draft_quality_output".into(),
+                        revision: 1,
+                    },
+                )]),
+                invalidates: BTreeSet::new(),
+                effects: BTreeSet::new(),
+                idempotency: IdempotencyPolicy::Pure,
+            }
+        }
+    }
+
+    impl ValidateDraftQuality {
+        pub fn evaluate(input: &DraftQualityInput) -> DraftQualityOutput {
+            let sections = input
+                .sections
+                .iter()
+                .map(|section| Section {
+                    role: &section.role,
+                    heading: &section.heading,
+                    body_markdown: &section.body_markdown,
+                    support_refs: &section.support_refs,
+                    required: section.required,
+                })
+                .collect::<Vec<_>>();
+            let blocks = input
+                .blocks
+                .iter()
+                .map(|block| ContentBlock {
+                    role: &block.role,
+                    block_type: &block.block_type,
+                    heading: &block.heading,
+                    markdown: &block.markdown,
+                    required: block.required,
+                    support_refs: &block.support_refs,
+                })
+                .collect::<Vec<_>>();
+            let claims = input
+                .claims
+                .iter()
+                .map(|claim| EditorialClaim {
+                    source_section_key: &claim.source_section_key,
+                    claim_kind: &claim.claim_kind,
+                    validation_verdict: &claim.validation_verdict,
+                    traceability_label: &claim.traceability_label,
+                    fragment_text: &claim.fragment_text,
+                    support_refs: &claim.support_refs,
+                    proposal: claim.proposal.as_ref().map(|proposal| EditorialProposal {
+                        text: &proposal.text,
+                        question: &proposal.question,
+                        source_url: &proposal.source_url,
+                        evidence_spans: &proposal.evidence_spans,
+                    }),
+                })
+                .collect::<Vec<_>>();
+            let traceability = input
+                .traceability
+                .iter()
+                .map(|entry| Traceability {
+                    fragment_kind: &entry.fragment_kind,
+                    fragment_text: &entry.fragment_text,
+                    traceability_label: &entry.traceability_label,
+                    validation_verdict: &entry.validation_verdict,
+                    support_refs: &entry.support_refs,
+                })
+                .collect::<Vec<_>>();
+            let verified_support = input
+                .verified_support
+                .iter()
+                .map(|entry| VerifiedSupport {
+                    support_ref: &entry.support_ref,
+                    fragment_text: &entry.fragment_text,
+                    role_type: &entry.role_type,
+                    freshness_class: &entry.freshness_class,
+                    source_url: &entry.source_url,
+                })
+                .collect::<Vec<_>>();
+            let result = evaluate(&DraftQuality {
+                body_markdown: &input.body_markdown,
+                locale: &input.locale,
+                truth_snapshot_ref: &input.truth_snapshot_ref,
+                schema_markup_json: &input.schema_markup_json,
+                sections: &sections,
+                expected_required_sections: &input.expected_required_sections,
+                blocks: &blocks,
+                claims: &claims,
+                traceability: &traceability,
+                verified_support: &verified_support,
+                supported_fragments: &input.supported_fragments,
+            });
+            let diagnostics = result
+                .violations
+                .into_iter()
+                .map(|violation| DraftQualityDiagnostic {
+                    code: violation.reason_code().to_owned(),
+                    task_type: violation.task_type().to_owned(),
+                    next_action: violation.required_next_action().to_owned(),
+                })
+                .collect::<Vec<_>>();
+            DraftQualityOutput {
+                policy_passed: diagnostics.is_empty(),
+                supported_claims: result.supported_claims,
+                unsupported_claims: result.unsupported_claims,
+                diagnostics,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn one_step_draft_quality_retains_full_owner_diagnostics() {
+            let contract = ValidateDraftQuality::contract();
+            assert!(contract.effects.is_empty());
+            assert_eq!(contract.idempotency, IdempotencyPolicy::Pure);
+            let result = ValidateDraftQuality::evaluate(&DraftQualityInput {
+                body_markdown: String::new(),
+                locale: String::new(),
+                truth_snapshot_ref: String::new(),
+                schema_markup_json: String::new(),
+                sections: Vec::new(),
+                expected_required_sections: Vec::new(),
+                blocks: Vec::new(),
+                claims: Vec::new(),
+                traceability: Vec::new(),
+                verified_support: Vec::new(),
+                supported_fragments: Vec::new(),
+            });
+            assert!(!result.policy_passed);
+            assert_eq!(result.diagnostics.len(), 6);
+            assert!(result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "missing_schema_markup"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

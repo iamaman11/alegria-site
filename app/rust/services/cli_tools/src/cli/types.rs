@@ -4,36 +4,56 @@ use contracts::generated::alegria::temporal::v1::{
     CrawlSourcesOutputPayload, FactExtractionInputPayload, ProjectionBarrierAuditOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
-use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
-use infrastructure::adapters::seo_workflow_control_adapter::TemporalSeoWorkflowControlAdapter;
+use temporal_gateway::TemporalSeoWorkflowControlAdapter;
+use postgres_store::sqlx_hitl_adapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
 use infrastructure::adapters::{
     raw_crawl_adapter,
     reqwest_adapter::new_default_client,
-    sqlx_hitl_adapter,
     sqlx_adapter::connect_pg,
-    tonic_adapter::AnalyticsClient,
 };
+use crate::analytics_client::AnalyticsClient;
 use crate::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
-use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
-use seo_application::scenario::{
-    execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
-};
-use seo_ports::{
-    CrawlIngestRepository, SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest,
-};
+use seo_ports::{CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest};
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::HashMap;
+use std::error::Error;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use uuid::Uuid;
+
+/// A narrow, explicit cutover boundary: old direct site commands are not
+/// silently reinterpreted as Temporal workflows. They remain discoverable in
+/// CLI help, but fail before any DB/network I/O until a canonical operation
+/// plan runner replaces their fixed four-stage implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsupportedDirectSiteCommand {
+    SeoRun,
+    CrawlPendingSources,
+}
+
+impl fmt::Display for UnsupportedDirectSiteCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = match self {
+            Self::SeoRun => "seo-run",
+            Self::CrawlPendingSources => "crawl-pending-sources",
+        };
+        write!(
+            f,
+            "CLI_DIRECT_SITE_COMMAND_DISABLED: {command} cannot execute during operation-plan cutover; use the canonical Temporal workflow operator, not direct SQL/provider execution"
+        )
+    }
+}
+
+impl Error for UnsupportedDirectSiteCommand {}
 
 #[derive(Parser, Debug)]
 #[command(name = "cli_tools")]
@@ -43,8 +63,78 @@ struct Cli {
     command: Command,
 }
 
+/// A native, offline authoring surface. This subcommand never starts a
+/// workflow, opens a provider connection or grants owner admission.
+#[derive(Subcommand, Debug)]
+enum SiteArchitectCommand {
+    /// Show the trusted, installed operation catalog and declared contracts.
+    Tools,
+    /// Inspect one installed operation and optionally check its typed settings.
+    Operation {
+        /// Exact installed operation identifier, not a provider URL or route.
+        #[arg(long)]
+        id: String,
+        /// Version of the exact installed operation contract.
+        #[arg(long)]
+        revision: u32,
+        /// Optional provider settings JSON object, or '-' for bounded stdin.
+        #[arg(long)]
+        parameters_file: Option<String>,
+    },
+    /// Check a recipe containing exactly one operation, without running it.
+    OneStep {
+        /// Single-step recipe JSON, or '-' for one bounded stdin payload.
+        #[arg(long)]
+        recipe_file: String,
+    },
+    /// Validate a versioned recipe without running or authenticating sources.
+    Check {
+        /// Recipe JSON path, or '-' for one bounded stdin JSON payload.
+        #[arg(long)]
+        recipe_file: String,
+    },
+    /// Compare two plans structurally; does not measure SEO outcomes.
+    Diff {
+        /// First recipe JSON path (or '-' for stdin).
+        #[arg(long)]
+        first_file: String,
+        /// Second recipe JSON path (or '-' for stdin; only one stdin permitted).
+        #[arg(long)]
+        second_file: String,
+    },
+    /// Inspect an already completed V2 DAG receipt, without live attestation.
+    Inspect {
+        /// Saved plan JSON path, or '-' for one bounded stdin payload.
+        #[arg(long)]
+        plan_file: String,
+        /// Saved receipt JSON path (or '-' if plan is a file).
+        #[arg(long)]
+        receipt_file: String,
+    },
+    /// Compare stored outputs only if both runs share exact external bytes.
+    CompareResults {
+        #[arg(long)]
+        first_plan_file: String,
+        #[arg(long)]
+        first_receipt_file: String,
+        #[arg(long)]
+        second_plan_file: String,
+        #[arg(long)]
+        second_receipt_file: String,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Serve siteArchitect authoring tools over local MCP stdio.
+    #[command(name = "mcp-site-architect")]
+    McpSiteArchitect,
+    /// Compose and inspect site hypotheses without rebuilding the application.
+    #[command(name = "site-architect")]
+    SiteArchitect {
+        #[command(subcommand)]
+        action: SiteArchitectCommand,
+    },
     /// Retrieve the next pending typed LLM request for manual execution.
     LlmNext {
         #[arg(long)]
@@ -175,6 +265,8 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+    /// Disabled during #94 cutover: use the existing Temporal source-acquisition workflow.
+    /// This command fails before any provider or database I/O.
     CrawlPendingSources {
         #[arg(long)]
         database_url: Option<String>,
@@ -313,6 +405,8 @@ enum Command {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Disabled during #94 cutover: use temporal_starter for registered workflows.
+    /// No old fixed-phase execution is silently translated into a new plan.
     SeoRun {
         #[command(subcommand)]
         scenario: SeoRunCommand,

@@ -1,0 +1,255 @@
+#[async_trait]
+impl SerpIngestRepository for SqlxSeoPgRepository<'_> {
+    async fn persist_serp_ingest_output(
+        &self,
+        input: &SerpIngestInputPayload,
+        output: &SerpIngestOutputPayload,
+    ) -> Result<(), DomainError> {
+        sqlx_seo_adapter::persist_serp_ingest_output(self.pool, input, output).await
+    }
+
+    async fn persist_live_serp_query_results(
+        &self,
+        run_id: &str,
+        query_batch_key: &str,
+        ordinal: usize,
+        query: &str,
+        response: &OrganicSerpResponse,
+    ) -> Result<(), DomainError> {
+        let job_id = primitives::hash::content_hash_v1(&format!(
+            "{run_id}|{query_batch_key}|{ordinal}|{query}"
+        ));
+        sqlx_serp_adapter::save_raw_snapshot(
+            self.pool,
+            &sqlx_serp_adapter::RawSnapshotRecord {
+                run_id: run_id.to_string(),
+                job_id: job_id.clone(),
+                url_norm: query.to_string(),
+                query: query.to_string(),
+                raw_payload_utf8: response.raw_payload_utf8.clone(),
+            },
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("save DataForSEO raw snapshot: {err}"),
+        })?;
+        let results = response
+            .organic_results
+            .iter()
+            .map(|result| dataforseo_serp_adapter::DataForSeoOrganicResult {
+                rank: result.rank,
+                title: result.title.clone(),
+                url: result.url.clone(),
+                url_norm: result.url_norm.clone(),
+                domain_norm: result.domain_norm.clone(),
+                source_tier: result.source_tier.clone(),
+                snippet: result.snippet.clone(),
+                raw_json: serde_json::Value::Null,
+            })
+            .collect::<Vec<_>>();
+        sqlx_serp_adapter::save_dataforseo_organic_results_and_enqueue(
+            self.pool,
+            run_id,
+            &job_id,
+            query_batch_key,
+            &results,
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("save DataForSEO organic results: {err}"),
+        })?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PlanningRepository for SqlxSeoPgRepository<'_> {
+    async fn persist_serp_normalize_output(
+        &self,
+        input: &SerpNormalizeInputPayload,
+        output: &SerpNormalizeOutputPayload,
+    ) -> Result<(), DomainError> {
+        sqlx_seo_adapter::persist_serp_normalize_output(self.pool, input, output).await
+    }
+
+    async fn persist_opportunity_build_output(
+        &self,
+        input: &OpportunityBuildInputPayload,
+        output: &OpportunityBuildOutputPayload,
+    ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+        sqlx_seo_adapter::persist_opportunity_build_output(self.pool, input, output).await
+    }
+
+    async fn existing_page_owners_by_cluster(
+        &self,
+        scope_signature: &str,
+        cluster_keys: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if cluster_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT keyword_cluster_key, page_node_key
+             FROM site.page_nodes
+             WHERE scope_signature = $1 AND keyword_cluster_key = ANY($2)
+               AND lifecycle_state <> 'deprecated'
+             ORDER BY keyword_cluster_key, created_at",
+        )
+        .bind(scope_signature)
+        .bind(cluster_keys)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|error| DomainError::InfraUnavailable {
+            message: format!("read canonical page ownership: {error}"),
+        })?;
+        let mut owners = std::collections::BTreeMap::<String, String>::new();
+        for row in rows {
+            let cluster: String = row.get("keyword_cluster_key");
+            let page: String = row.get("page_node_key");
+            if let Some(previous) = owners.insert(cluster.clone(), page.clone()) {
+                if previous != page {
+                    return Err(DomainError::ConflictViolation {
+                        message: format!("multiple active pages own keyword cluster {cluster}"),
+                    });
+                }
+            }
+        }
+        Ok(owners.into_iter().collect())
+    }
+
+    async fn persist_ia_build_output(
+        &self,
+        input: &IaBuildInputPayload,
+        output: &IaBuildOutputPayload,
+    ) -> Result<(), DomainError> {
+        sqlx_seo_adapter::persist_ia_build_output(self.pool, input, output).await
+    }
+
+    async fn persist_link_recommend_output(
+        &self,
+        input: &LinkRecommendInputPayload,
+        output: &LinkRecommendOutputPayload,
+    ) -> Result<(), DomainError> {
+        sqlx_seo_adapter::persist_link_recommend_output(self.pool, input, output).await
+    }
+
+    async fn persist_global_site_reconcile_output(
+        &self,
+        input: &GlobalSiteReconcileInputPayload,
+        output: &GlobalSiteReconcileOutputPayload,
+    ) -> Result<(), DomainError> {
+        // One global reconcile is one durable site-plan revision. Its IA,
+        // required links, content gaps, retirement and navigation cannot be
+        // committed independently: a late failure must leave the previous
+        // complete site plan visible, not a partially reconciled graph.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("begin global site reconcile transaction: {err}"),
+            })?;
+        sqlx_seo_adapter::persist_ia_build_output_in_tx(
+            &mut tx,
+            &IaBuildInputPayload {
+                verified_support: Vec::new(),
+                run_id: input.run_id.clone(),
+                scope: input.scope.clone(),
+                keyword_clusters: Vec::new(),
+                graph_context: None,
+            },
+            &IaBuildOutputPayload {
+                page_nodes: output.page_nodes.clone(),
+                page_blueprints: Vec::new(),
+                cannibalization_conflicts: Vec::new(),
+            },
+        )
+        .await?;
+        sqlx_seo_adapter::persist_link_recommend_output_in_tx(
+            &mut tx,
+            &LinkRecommendInputPayload {
+                run_id: input.run_id.clone(),
+                page_nodes: output.page_nodes.clone(),
+                max_links_per_page: 0,
+                graph_context: None,
+            },
+            &LinkRecommendOutputPayload {
+                link_recommendations: output.link_recommendations.clone(),
+            },
+        )
+        .await?;
+        sqlx_seo_adapter::persist_opportunity_build_output_in_tx(
+            &mut tx,
+            &OpportunityBuildInputPayload {
+                run_id: input.run_id.clone(),
+                scope: input.scope.clone(),
+                serp_patterns: Vec::new(),
+                graph_context: None,
+            },
+            &OpportunityBuildOutputPayload {
+                keyword_clusters: Vec::new(),
+                content_gaps: output.content_gaps.clone(),
+            },
+        )
+        .await?;
+        let (scope_signature, market, locale, country_code, visa_type, applicant_profile) =
+            match input.scope.as_ref() {
+                Some(payload) => {
+                    let canonical = seo_steps::seo_identity::derive_scope_from_payload(payload)?;
+                    (
+                        canonical.scope_signature,
+                        canonical.market,
+                        canonical.locale,
+                        canonical.country_code,
+                        canonical.visa_type,
+                        canonical.applicant_profile,
+                    )
+                }
+                None => (
+                    seo_steps::seo_identity::scope_signature_from_payload(None)?,
+                    "global".to_string(),
+                    "und".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            };
+        let current_keys = output
+            .page_nodes
+            .iter()
+            .map(|page| page.page_node_key.clone())
+            .collect::<Vec<_>>();
+        sqlx_seo_adapter::retire_opaque_unpublished_plans_in_tx(
+            &mut tx,
+            &input.run_id,
+            &scope_signature,
+            &current_keys,
+        )
+        .await?;
+        // New page scopes can have no keyword_cluster_key. Register the
+        // authoritative tuple inside this same transaction BEFORE the scoped
+        // navigation projection reads page_nodes.
+        sqlx_seo_adapter::upsert_site_scope_identity_in_tx(
+            &mut tx,
+            &scope_signature,
+            &market,
+            &locale,
+            &country_code,
+            &visa_type,
+            &applicant_profile,
+        )
+        .await?;
+        sqlx_seo_adapter::persist_global_navigation_from_active_pages_in_tx(
+            &mut tx,
+            &market,
+            &locale,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("commit global site reconcile transaction: {err}"),
+            })?;
+        Ok(())
+    }
+}

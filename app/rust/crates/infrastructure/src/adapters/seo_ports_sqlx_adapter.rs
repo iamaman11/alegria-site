@@ -1,9 +1,0 @@
-include!("seo_ports_sqlx_adapter/types_and_helpers.rs");
-include!("seo_ports_sqlx_adapter/build_and_support_ports.rs");
-include!("seo_ports_sqlx_adapter/crawl_ingest_ports.rs");
-include!("seo_ports_sqlx_adapter/source_context_projection_ports.rs");
-include!("seo_ports_sqlx_adapter/rebuild_ports.rs");
-include!("seo_ports_sqlx_adapter/search_ports.rs");
-include!("seo_ports_sqlx_adapter/graph_ports.rs");
-include!("seo_ports_sqlx_adapter/planning_ports.rs");
-include!("seo_ports_sqlx_adapter/draft_publish_context_ports.rs");

@@ -362,7 +362,7 @@ pub trait GraphCapabilityPort: Send + Sync {
 }
 
 #[async_trait]
-pub trait PlanningRepository: Send + Sync {
+pub trait SerpIngestRepository: Send + Sync {
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,
@@ -377,7 +377,10 @@ pub trait PlanningRepository: Send + Sync {
         query: &str,
         response: &OrganicSerpResponse,
     ) -> Result<(), DomainError>;
+}
 
+#[async_trait]
+pub trait PlanningRepository: Send + Sync {
     async fn persist_serp_normalize_output(
         &self,
         input: &SerpNormalizeInputPayload,

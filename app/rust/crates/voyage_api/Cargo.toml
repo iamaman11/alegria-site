@@ -1,0 +1,13 @@
+[package]
+name = "voyage_api"
+version = "0.1.0"
+edition = "2021"
+
+# Narrow HTTP provider; independent of infrastructure/acquisition/Playwright.
+[dependencies]
+anyhow = { workspace = true }
+http_client = { path = "../http_client" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

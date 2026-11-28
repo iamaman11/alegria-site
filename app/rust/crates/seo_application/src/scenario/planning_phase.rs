@@ -1,6 +1,5 @@
 async fn run_planning_phase<
     R: PlanningRepository
-        + GraphReasoningPort
         + VerifiedSupportRepository
         + ProjectionStatusRepository
         + SerpSearchPort

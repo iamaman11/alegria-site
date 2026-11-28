@@ -1,0 +1,17 @@
+[package]
+name = "acquisition_source_issuer"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately independent of the SQL/Temporal effect owner and of the pure
+# Acquisition Temporal worker: source issuance has separate DB privileges.
+[dependencies]
+acquisition = { path = "../../crates/acquisition" }
+operation_protocol = { path = "../../crates/operation_protocol" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+libc = "0.2"

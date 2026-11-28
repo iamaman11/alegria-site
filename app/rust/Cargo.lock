@@ -9,11 +9,30 @@ dependencies = [
  "anyhow",
  "ego-tree",
  "lopdf",
+ "operation_protocol",
  "primitives",
  "regex",
+ "schemars 1.2.3",
  "scraper",
  "serde",
  "serde_json",
+ "source_section_contracts",
+ "url",
+]
+
+[[package]]
+name = "acquisition_source_issuer"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "libc",
+ "operation_protocol",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -605,18 +624,26 @@ name = "cli_tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "contracts",
  "hex",
  "infrastructure",
+ "postgres_store",
  "primitives",
  "prost",
  "seo_application",
  "seo_ports",
  "seo_steps",
+ "serde",
  "serde_json",
  "sqlx",
+ "temporal_gateway",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "trusted_owner_catalog",
  "truth_domain",
  "uuid",
 ]
@@ -938,6 +965,19 @@ name = "data-encoding"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
+
+[[package]]
+name = "dataforseo_contracts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "operation_protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "deadpool"
@@ -1607,6 +1647,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph_capability"
+version = "0.1.0"
+dependencies = [
+ "graph_neo4j",
+ "primitives",
+]
+
+[[package]]
 name = "graph_neo4j"
 version = "0.1.0"
 dependencies = [
@@ -2092,18 +2140,16 @@ dependencies = [
  "bytes",
  "chrono",
  "contracts",
- "graph_neo4j",
  "http-body-util",
  "http_client",
  "hyper",
  "hyper-util",
- "neo4rs",
  "playwright-rs",
  "policies",
+ "postgres_store",
  "primitives",
  "prost",
  "pulldown-cmark",
- "qdrant-client",
  "reqwest 0.13.5",
  "runtime_models",
  "seo_domain",
@@ -2113,21 +2159,13 @@ dependencies = [
  "serde_json",
  "sqlx",
  "telemetry",
- "temporalio-client",
- "temporalio-common",
- "temporalio-macros",
- "temporalio-sdk",
- "temporalio-sdk-core",
  "tokio",
  "tokio-postgres",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
  "tower",
  "tracing",
  "truth_domain",
  "uuid",
- "vector_qdrant",
+ "voyage_api",
 ]
 
 [[package]]
@@ -2141,6 +2179,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_data_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sqlx",
+ "testcontainers",
+ "tokio",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_graph_e2e"
+version = "0.1.0"
+dependencies = [
+ "graph_capability",
+ "graph_neo4j",
+ "integration_graph_fixtures",
+ "integration_test_env",
+ "serial_test",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "integration_graph_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "graph_neo4j",
+ "testcontainers",
+ "tokio",
+]
+
+[[package]]
 name = "integration_harness"
 version = "0.1.0"
 dependencies = [
@@ -2148,13 +2221,19 @@ dependencies = [
  "async-trait",
  "axum",
  "contracts",
+ "graph_neo4j",
  "infrastructure",
- "neo4rs",
- "outbox_worker",
+ "integration_data_fixtures",
+ "integration_graph_fixtures",
+ "integration_temporal_fixtures",
+ "integration_test_env",
+ "operation_protocol",
+ "postgres_store",
  "primitives",
+ "projection_delivery",
  "prost",
- "qdrant-client",
  "reqwest 0.13.5",
+ "runtime_composition",
  "seo_application",
  "seo_domain",
  "seo_ports",
@@ -2163,12 +2242,180 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sqlx",
+ "temporal_gateway",
  "temporalio-client",
- "temporalio-sdk-core",
+ "temporalio-common",
  "testcontainers",
  "tokio",
  "uuid",
+ "vector_qdrant",
 ]
+
+[[package]]
+name = "integration_outbox_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "contracts",
+ "infrastructure",
+ "integration_data_fixtures",
+ "integration_harness",
+ "outbox_worker",
+ "postgres_store",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "seo_application",
+ "seo_ports",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_pg_app_e2e"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "contracts",
+ "infrastructure",
+ "integration_data_fixtures",
+ "integration_harness",
+ "pg_runtime_ports",
+ "reqwest 0.13.5",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "integration_pg_v3_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "postgres_store",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "testcontainers",
+ "tokio",
+ "truth_domain",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "integration_qdrant_e2e"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "integration_data_fixtures",
+ "integration_harness",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "runtime_composition",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_qdrant_temporal_e2e"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "dataforseo_contracts",
+ "integration_data_fixtures",
+ "operation_protocol",
+ "postgres_store",
+ "projection_contracts",
+ "qdrant_contracts",
+ "seo_domain",
+ "seo_steps",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "testcontainers",
+ "tokio",
+ "trusted_owner_catalog",
+ "truth_domain",
+ "url",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_temporal_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "contracts",
+ "graph_neo4j",
+ "infrastructure",
+ "integration_data_fixtures",
+ "integration_harness",
+ "operation_protocol",
+ "postgres_store",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "runtime_composition",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_temporal_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "temporalio-client",
+ "testcontainers",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "integration_test_env"
+version = "0.1.0"
 
 [[package]]
 name = "inventory"
@@ -2926,6 +3173,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "one_step_request_issuer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "operation_protocol",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "openssl"
 version = "0.10.82"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3043,6 +3304,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "operation_protocol"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3053,13 +3327,8 @@ name = "outbox_worker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "contracts",
- "infrastructure",
- "primitives",
- "prost",
- "seo_steps",
- "serde",
- "serde_json",
+ "postgres_store",
+ "projection_delivery",
  "sqlx",
  "telemetry",
  "tokio",
@@ -3175,6 +3444,23 @@ dependencies = [
  "fixedbitset",
  "hashbrown 0.15.5",
  "indexmap 2.14.2",
+]
+
+[[package]]
+name = "pg_runtime_ports"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "contracts",
+ "infrastructure",
+ "primitives",
+ "runtime_models",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "sqlx",
+ "uuid",
 ]
 
 [[package]]
@@ -3408,6 +3694,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres_store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "operation_protocol",
+ "primitives",
+ "projection_contracts",
+ "runtime_models",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "truth_domain",
+ "uuid",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3502,6 +3806,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "projection_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "serde",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "projection_delivery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "contracts",
+ "graph_neo4j",
+ "operation_protocol",
+ "postgres_store",
+ "primitives",
+ "prost",
+ "qdrant_effects_core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
+ "voyage_api",
 ]
 
 [[package]]
@@ -3686,6 +4020,31 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost",
+]
+
+[[package]]
+name = "qdrant_contracts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "operation_protocol",
+ "projection_contracts",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
+name = "qdrant_effects_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "qdrant_contracts",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]
@@ -3882,10 +4241,9 @@ name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "futures",
- "infrastructure",
- "seo_steps",
- "sqlx",
+ "postgres_store",
+ "runtime_models",
+ "temporal_gateway",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -4061,11 +4419,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime_composition"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "async-trait",
+ "contracts",
+ "graph_capability",
+ "graph_neo4j",
+ "infrastructure",
+ "pg_runtime_ports",
+ "postgres_store",
+ "primitives",
+ "prost",
+ "runtime_models",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
 name = "runtime_models"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "contracts",
+ "prost",
  "serde",
  "serde_json",
  "uuid",
@@ -4253,8 +4637,21 @@ checksum = "ab508826f74a77ca9d5aba6ff19b522583ee3eaf28a19384ff3d0e5835fadf6e"
 dependencies = [
  "dyn-clone",
  "ref-cast",
+ "schemars_derive",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1c3a92094fa7d61aa124645844facb6b554dfc797136d0f5fd1f890e2bffc69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -4332,23 +4729,34 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "contracts",
+ "dataforseo_contracts",
+ "operation_protocol",
  "primitives",
  "runtime_models",
+ "schemars 1.2.3",
  "seo_domain",
  "seo_ports",
  "seo_steps",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
+ "truth_domain",
+ "url",
+ "uuid",
+ "web_fetch_contracts",
 ]
 
 [[package]]
 name = "seo_domain"
 version = "0.1.0"
 dependencies = [
+ "operation_protocol",
  "primitives",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
+ "source_section_contracts",
 ]
 
 [[package]]
@@ -4371,10 +4779,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "contracts",
+ "operation_protocol",
  "primitives",
  "prost",
  "regex",
  "runtime_models",
+ "schemars 1.2.3",
  "seo_domain",
  "serde",
  "serde_json",
@@ -4405,6 +4815,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4669,6 +5090,15 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "source_section_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "schemars 1.2.3",
+ "serde",
 ]
 
 [[package]]
@@ -5034,24 +5464,95 @@ dependencies = [
 ]
 
 [[package]]
-name = "temporal_worker"
+name = "temporal_acquisition_pure"
 version = "0.1.0"
 dependencies = [
  "acquisition",
  "anyhow",
- "clap",
- "contracts",
+ "operation_protocol",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "temporal_dataforseo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "dataforseo_contracts",
+ "futures",
+ "operation_protocol",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "temporal_gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "primitives",
+ "seo_ports",
+ "temporalio-client",
+ "temporalio-common",
+ "url",
+]
+
+[[package]]
+name = "temporal_orchestrator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "operation_protocol",
+ "qdrant_contracts",
+ "seo_application",
+ "serde",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "trusted_owner_catalog",
+ "url",
+]
+
+[[package]]
+name = "temporal_pg_effects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
  "futures",
  "futures-util",
- "infrastructure",
- "policies",
- "primitives",
- "prometheus",
- "runtime_models",
- "seo_application",
- "seo_domain",
- "seo_ports",
- "seo_steps",
+ "libc",
+ "operation_protocol",
+ "postgres_store",
+ "projection_contracts",
  "serde",
  "serde_json",
  "sqlx",
@@ -5067,6 +5568,142 @@ dependencies = [
  "truth_domain",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "temporal_qdrant_effects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "futures-util",
+ "operation_protocol",
+ "projection_contracts",
+ "qdrant_contracts",
+ "qdrant_effects_core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "temporal_semantic_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "operation_protocol",
+ "prost",
+ "seo_application",
+ "serde",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "trusted_owner_catalog",
+ "url",
+]
+
+[[package]]
+name = "temporal_seo_steps_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "seo_steps",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "temporal_truth_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "truth_domain",
+ "url",
+]
+
+[[package]]
+name = "temporal_web_fetch"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+ "web_fetch_contracts",
+]
+
+[[package]]
+name = "temporal_worker"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "clap",
+ "contracts",
+ "futures",
+ "futures-util",
+ "graph_neo4j",
+ "infrastructure",
+ "policies",
+ "postgres_store",
+ "primitives",
+ "projection_delivery",
+ "prometheus",
+ "runtime_composition",
+ "runtime_models",
+ "seo_application",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-sdk-core",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "truth_domain",
+ "url",
+ "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]
@@ -5808,12 +6445,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "trusted_owner_catalog"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "truth_domain"
 version = "0.1.0"
 dependencies = [
+ "operation_protocol",
  "regex",
+ "schemars 1.2.3",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -6071,6 +6723,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "voyage_api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http_client",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6242,6 +6906,16 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "web_fetch_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "serde",
+ "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]

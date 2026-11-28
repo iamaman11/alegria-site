@@ -134,6 +134,19 @@ async fn upsert_verified_rule_instance_from_candidate(
     verification_method: &str,
     adjudication_reason: &str,
 ) -> std::result::Result<(), primitives::errors::DomainError> {
+    // The legacy adjudicator uses pool-scoped writes, so establish a real
+    // transaction here. A PostgreSQL advisory lock without the matching
+    // durable uncertainty check would allow late Qdrant effects to resurrect
+    // older verification after this canonical write commits.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &[rule_instance_id.to_string()],
+    )
+    .await
+    .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
+        message: format!("legacy adjudication lacks atomic Qdrant projection intent: {err}"),
+    })?;
     let role_key = canonical_role_key(&candidate.role);
     sqlx::query(
         "INSERT INTO verified.rule_instances (
@@ -216,9 +229,10 @@ async fn upsert_verified_rule_instance_from_candidate(
     .bind(&candidate.prompt_version)
     .bind(&candidate.model_version)
     .bind("truth_adjudication_runtime@1")
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -230,6 +244,15 @@ async fn demote_verified_semantic_slot(
     verification_method: &str,
     adjudication_reason: &str,
 ) -> std::result::Result<(), primitives::errors::DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &[rule_instance_id.to_string()],
+    )
+    .await
+    .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
+        message: format!("legacy adjudication demotion lacks Qdrant tombstone intent: {err}"),
+    })?;
     sqlx::query(
         "UPDATE verified.rule_instances
          SET status = $2,
@@ -244,8 +267,9 @@ async fn demote_verified_semantic_slot(
     .bind(publish_admissibility)
     .bind(verification_method)
     .bind(adjudication_reason)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }

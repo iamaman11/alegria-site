@@ -52,7 +52,10 @@ FORBIDDEN_TRANSITIVE = {
 
 def forbidden_source_references(source: str, tokens: tuple[str, ...]) -> list[str]:
     """Detect transport/runtime names even in fully qualified Rust signatures."""
-    return sorted(token for token in tokens if token in source)
+    return sorted(
+        token for token in tokens
+        if re.search(rf"\b{re.escape(token.removesuffix('::'))}\s*::", source)
+    )
 
 
 def lock_dependencies(lock_packages: list[dict], root_name: str) -> set[str]:
@@ -85,6 +88,11 @@ def main() -> int:
         CAPABILITY_FORBIDDEN_IMPORTS["seo_domain"],
     ) != ["contracts::"]:
         raise ValueError("domain transport-import guard does not detect a wire type")
+    if forbidden_source_references(
+        "pub fn prepare(v: source_section_contracts::EntitySpanInput) {}",
+        CAPABILITY_FORBIDDEN_IMPORTS["acquisition"],
+    ):
+        raise ValueError("domain transport-import guard matches the suffix of an allowed crate")
 
     for name, forbidden in CAPABILITY_FORBIDDEN_DIRECT.items():
         folder = RUST / "crates" / name

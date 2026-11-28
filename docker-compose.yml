@@ -18,6 +18,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
+      - temporal_pg_effect_data
 
   # 1b. Отдельная БД для Temporal (service persistence)
   postgres-temporal:
@@ -58,6 +61,9 @@ services:
       POOL_MODE: session
       MAX_CLIENT_CONN: 200
       DEFAULT_POOL_SIZE: 20
+    networks:
+      - default
+      - temporal_pg_effect_data
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
@@ -136,6 +142,12 @@ services:
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
     volumes:
       - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
+    # The pure Temporal orchestrators are attached only to this additional
+    # internal network. Provider stores and application Worker stay on default.
+    networks:
+      - default
+      - temporal_pure_control
+      - temporal_pg_effect_data
     ports:
       - "127.0.0.1:7233:7233"
     healthcheck:
@@ -273,6 +285,8 @@ services:
       # No Windows host-directory sharing is needed for publication state.
       - static_site_releases:/app/app/rust/dist
     depends_on:
+      outbox-worker:
+        condition: service_healthy
       temporal-server:
         condition: service_healthy
       pgbouncer:
@@ -283,6 +297,125 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:9464:9464"
+
+  # V3 experiment: isolated, provider-free Temporal Workflow owner.
+  # This opt-in profile does NOT replace the legacy Worker or admit production
+  # traffic. An exact source SHA and an explicit enable flag are required.
+  temporal-orchestrator-v3:
+    profiles: ["v3-evaluation"]
+    build:
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-pure-dag-v3
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: ${ALLOW_PURE_DAG_ORCHESTRATOR:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    networks:
+      - temporal_pure_control
+
+  # V4 effect DAG parent: a DIFFERENT explicit profile and Task Queue from
+  # the V3 pure orchestrator. Reuses the same provider-free native binary but
+  # starts in mutually exclusive V4 mode. No PG DSN, owner Activity or Outbox
+  # privilege enters this process. This is NOT a production routing cutover.
+  temporal-effect-dag-v4:
+    profiles: ["v4-effect-evaluation"]
+    build:
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v4
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: ${ALLOW_EFFECT_DAG_ORCHESTRATOR_V4:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    networks:
+      - temporal_pure_control
+
+  # V5 native parent is opt-in, versioned and on a disjoint Task Queue.
+  # Its L3 network contains Temporal only: no direct PostgreSQL, Neo4j,
+  # Qdrant, Outbox, provider credentials, or application-admin DSN.
+  # Do not route production traffic here until historical drain and parity.
+  temporal-effect-dag-v5:
+    profiles: ["v5-effect-evaluation"]
+    build:
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v5
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V5: ${ALLOW_EFFECT_DAG_ORCHESTRATOR_V5:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    networks:
+      - temporal_pure_control
+
+  # One least-privileged PostgreSQL child owner serves opt-in V3/V4/V5 parents.
+  # Each profile is separately gated; there is no duplicate binary/process
+  # for different parent versions and no legacy admin DATABASE_URL.
+  temporal-pg-effects-v3:
+    profiles: ["v3-evaluation", "v4-effect-evaluation", "v5-effect-evaluation"]
+    build:
+      context: ${V3_PG_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pg
+      args:
+        OWNER_PACKAGE: temporal_pg_effects
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      PG_EFFECT_WORKER_DATABASE_URL_FILE: /run/secrets/pg_effect_worker_dsn
+      ALEGRIA_ENABLE_PG_EFFECT_V3: ${ALEGRIA_ENABLE_PG_EFFECT_V3:-false}
+      RUST_LOG: info
+    secrets:
+      # Rust refuses world-readable secret files. The runtime image runs as
+      # UID 65532; a root-owned 0400 secret would be inaccessible to it.
+      - source: pg_effect_worker_dsn
+        target: pg_effect_worker_dsn
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # A third, private L3 plane admits only Temporal + PG endpoints. The
+    # PostgreSQL effect Activity cannot laterally reach Neo4j, Qdrant,
+    # providers, or the legacy multi-owner production Worker.
+    networks:
+      - temporal_pg_effect_data
 
   # 10. Runtime outbox materializer (PostgreSQL -> Neo4j/Qdrant projections)
   outbox-worker:
@@ -296,12 +429,19 @@ services:
       RUST_LOG: info
       WORKER_BUILD_ID: ${WORKER_BUILD_ID:-docker-dev}
       OUTBOX_WORKER_ID: ${OUTBOX_WORKER_ID:-docker-outbox-worker}
+      OUTBOX_READY_FILE: /tmp/alegria-outbox-ready
       NEO4J_URI: neo4j:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: neo4j_password
       QDRANT_URL: http://qdrant:6334
       VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
       VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4-large}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/outbox_worker", "--healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 4
+      start_period: 15s
     depends_on:
       pgbouncer:
         condition: service_started
@@ -331,6 +471,23 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+
+# External, operator-provisioned secret. No credential is embedded in Compose,
+# image layers, source control or `docker inspect` service environment.
+# Unused while every V3/V4/V5 effect-evaluation profile is disabled;
+# no implicit application-admin DSN in any provider-free parent.
+secrets:
+  pg_effect_worker_dsn:
+    external: true
+
+# Experimental pure Workflow parents have L3 reachability only to Temporal.
+# The legacy production temporal-worker remains on the default provider network
+# pending explicit historical drain and parity evidence; this is NOT cutover.
+networks:
+  temporal_pure_control:
+    internal: true
+  temporal_pg_effect_data:
+    internal: true
 
 volumes:
   # New PG18 volumes are intentionally disjoint from PG16: no implicit

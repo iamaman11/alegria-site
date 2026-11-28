@@ -1,19 +1,16 @@
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
-    ContentContractValidateInputPayload, CrawlSourcesInputPayload, DraftAssembleInputPayload,
-    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
-    DraftQaInputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    FinalizePublishInputPayload, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
-    LinkRecommendInputPayload, LinkRecommendationState, OpportunityBuildInputPayload,
-    PageBlueprintState, PageNodeState, ProjectionBarrierAuditInputPayload,
-    PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload,
-    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload, SeoScopePayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    ContentContractValidateInputPayload, CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
+    DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
+    DraftNormalizeOutputPayload, DraftQaInputPayload, EditorialDraftGenerateInputPayload,
+    EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload,
+    GlobalSiteReconcileInputPayload, IaBuildInputPayload, LinkRecommendInputPayload,
+    LinkRecommendationState, OpportunityBuildInputPayload, PageBlueprintState, PageNodeState,
+    ProjectionBarrierAuditInputPayload, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RebuildDetectInputPayload, RenderPreviewValidateInputPayload,
+    RenderPreviewValidateOutputPayload, SeoScopePayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpIngestOutputPayload,
     SerpNormalizeInputPayload,
-};
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
 };
 use seo_application::execution::{
     blocked_interaction_status, blocked_publish_gate_status, build_execution_plan,
@@ -23,6 +20,11 @@ use seo_application::execution::{
 };
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioRequest};
 use seo_ports::VerifiedSupportBundleRequest;
+use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
+use temporalio_sdk::{
+    SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
+};
 
 use crate::activities::operations::{
     CandidateValidationInput, CanonicalMappingSweepInput, CasGateInput,
@@ -62,18 +64,19 @@ pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()?;
     Ok(())
 }
-include!("seo_site_build_canonical_cutover/helpers.rs");
-include!("seo_site_build_canonical_cutover/page_publish.rs");
 
-// Every claimed batch has a different persisted step identity. Reusing the
-// same input would replay the first completed step and spin the workflow.
-fn advance_crawl_sweep(input: &mut CrawlSourcesInputPayload) -> WorkflowResult<()> {
-    input.sweep_index = input
-        .sweep_index
-        .checked_add(1)
-        .ok_or_else(|| super::runtime::workflow_contract_failure("crawl sweep index exhausted"))?;
+/// Register V1 for history replay without leaking the macro-generated private
+/// `Run` type into another module's public Temporal trait implementation.
+pub(super) fn register_for_replay(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()?;
     Ok(())
 }
+include!("seo_site_build_canonical_cutover/helpers.rs");
+include!("seo_site_build_canonical_cutover/page_publish.rs");
+mod manual_truth_gate;
+mod source_acquisition;
+use manual_truth_gate::await_manual_truth_candidates;
+use source_acquisition::{acquire_source_evidence, SourceAcquisitionResult};
 
 #[workflow_methods]
 impl SeoSiteBuildCanonicalCutoverWorkflow {
@@ -141,83 +144,10 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
 
-        ctx.state_mut(|s| s.phase = "serp_ingest".to_string());
-        let ingest = ctx
-            .start_activity(
-                AlegriaActivities::run_serp_ingest_step,
-                SerpIngestInputPayload {
-                    run_id: run_id.clone(),
-                    query_batch_key: site_input.query_batch_key.clone(),
-                    scope: Some(scope.clone()),
-                    queries: site_input.queries.clone(),
-                },
-                db_opts(1800),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
-        let mut crawl_input = CrawlSourcesInputPayload {
-            run_id: run_id.clone(),
-            query_batch_key: ingest.query_batch_key.clone(),
-            limit: 5,
-            emit_qdrant: true,
-            sweep_index: 0,
-        };
-        let mut crawled = ctx
-            .start_activity(
-                AlegriaActivities::run_crawl_sources_step,
-                crawl_input.clone(),
-                db_opts(600),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-        // Keep one durable workflow and claim all URLs, including multiple pages
-        // from the same domain. A single 25-item activity is not full coverage.
-        while crawled.status == "more" || crawled.status == "pending_retry" {
-            if crawled.status == "pending_retry" {
-                // A durable Temporal timer survives worker restarts and delayed retries.
-                // Do not end the workflow or start a second coordinator for pending URLs.
-                ctx.timer(Duration::from_secs(60)).await;
-                ctx.wait_condition(|s| !s.paused).await?;
-            }
-            advance_crawl_sweep(&mut crawl_input)?;
-            let next = ctx
-                .start_activity(
-                    AlegriaActivities::run_crawl_sources_step,
-                    crawl_input.clone(),
-                    db_opts(600),
-                )
-                .await?;
-            if crawled.status == "more" && next.claimed_count == 0 {
-                return Err(super::runtime::workflow_contract_failure(
-                    "crawl backlog is not claimable",
-                ));
-            }
-            crawled.claimed_count = crawled.claimed_count.saturating_add(next.claimed_count);
-            crawled.crawled_count = crawled.crawled_count.saturating_add(next.crawled_count);
-            crawled.failed_count = crawled.failed_count.saturating_add(next.failed_count);
-            crawled.raw_page_count = crawled.raw_page_count.saturating_add(next.raw_page_count);
-            crawled.raw_section_count = crawled
-                .raw_section_count
-                .saturating_add(next.raw_section_count);
-            crawled.qdrant_event_count = crawled
-                .qdrant_event_count
-                .saturating_add(next.qdrant_event_count);
-            crawled.raw_page_ids.extend(next.raw_page_ids);
-            crawled.failed_urls.extend(next.failed_urls);
-            crawled.status = next.status;
-            ctx.wait_condition(|s| !s.paused).await?;
-        }
-        if crawled.status != "done" && crawled.status != "partial" {
-            return Err(super::runtime::workflow_contract_failure(format!(
-                "unexpected crawl completion status: {}",
-                crawled.status
-            )));
-        }
-        if crawled.failed_count > 0 {
-            crawled.status = "partial".to_string();
-        }
+        // Source acquisition is a self-contained durable phase: it owns its
+        // retry timer, pagination and distinct persisted identity per sweep.
+        let SourceAcquisitionResult { ingest, crawled } =
+            acquire_source_evidence(ctx, &run_id, &site_input, &scope).await?;
 
         ctx.state_mut(|s| s.phase = "whole_page_semantic_pass".to_string());
         let semantic = ctx
@@ -573,44 +503,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             ontology: ontology_intake.clone(),
             schema_validate: schema_validate.clone(),
         };
-        ctx.state_mut(|s| s.phase = "manual_truth_prepare".to_string());
-        let manual_state: String = ctx
-            .start_activity(
-                AlegriaActivities::prepare_manual_truth_candidates,
-                validation_input.clone(),
-                db_opts(60),
-            )
-            .await?;
-        if manual_state == "awaiting_manual" {
-            ctx.state_mut(|s| s.phase = "manual_truth_wait".to_string());
-            loop {
-                // Saved task state wins over an ephemeral wakeup signal.
-                // Replay/Reset must resume completed manual work immediately.
-                let status: String = ctx
-                    .start_activity(
-                        AlegriaActivities::load_manual_truth_status,
-                        run_id.clone(),
-                        db_opts(30),
-                    )
-                    .await?;
-                if status == "done" {
-                    break;
-                }
-                if status != "awaiting_manual" {
-                    return Err(super::runtime::workflow_contract_failure(
-                        "manual truth job status invalid",
-                    ));
-                }
-                ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
-                    .await?;
-                ctx.state_mut(|s| s.llm_result_ready = false);
-            }
-        } else if manual_state != "done" {
-            return Err(super::runtime::workflow_contract_failure(
-                "manual truth preparation status invalid",
-            ));
-        }
-        ctx.wait_condition(|s| !s.paused).await?;
+        await_manual_truth_candidates(ctx, &run_id, &validation_input).await?;
         ctx.state_mut(|s| s.phase = "candidate_validation".to_string());
         let candidate_validation = ctx
             .start_activity(
@@ -1071,7 +964,7 @@ mod crawl_batch_identity_tests {
             &input,
         )
         .expect("initial keys");
-        assert!(advance_crawl_sweep(&mut input).is_ok());
+        assert!(source_acquisition::advance_crawl_sweep(&mut input).is_ok());
         let next = infrastructure::adapters::sqlx_pipeline_runtime_adapter::derive_step_keys(
             &input.run_id,
             "crawl_sources",
@@ -1089,6 +982,6 @@ mod crawl_batch_identity_tests {
         assert!(input.emit_qdrant);
 
         input.sweep_index = u32::MAX;
-        assert!(advance_crawl_sweep(&mut input).is_err());
+        assert!(source_acquisition::advance_crawl_sweep(&mut input).is_err());
     }
 }

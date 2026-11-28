@@ -26,8 +26,8 @@ def cargo_step_failures(workflow: str) -> list[str]:
     expected = (
         ("architecture-and-rust", "Changed Rust crates and dependent consumers",
          "python3 automation/run_scoped_cargo_feedback.py"),
-        ("verify", "Full workspace Rust unit tests (parallel with real E2E)",
-         "run: cargo test --workspace --locked"),
+        ("verify", "Full workspace Rust tests and both mandatory policy phases",
+         "cargo test --workspace --locked"),
     )
     for owner, name, command in expected:
         owner_marker = f"  {owner}:\n"

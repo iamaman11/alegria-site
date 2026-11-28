@@ -27,6 +27,9 @@ GLOBAL_PREFIXES = (
     ".github/",
     "automation/",
     "app/db/",
+    # Shared live PG/Qdrant test setup feeds *both* E2E owner packages.
+    # A fixture change cannot be assigned only to the new A14 package.
+    "app/rust/crates/integration_data_fixtures/",
     "contracts/",
     "analytics_lab/",
     "infra/",
@@ -36,6 +39,9 @@ GLOBAL_FILES = {
     "app/rust/Cargo.toml",
     "app/rust/rust-toolchain.toml",
     "rust-toolchain.toml",
+    # The concrete typed PG adapter root changes multiple application ports.
+    # Keep such edits full-source until per-trait impact can be proven.
+    "app/rust/crates/pg_runtime_ports/src/lib.rs",
 }
 
 # Only contracts with a verified generator/consumer are scoped. Other schemas
@@ -105,11 +111,20 @@ WORKER_NONDELIVERY_FILES = frozenset({
 # the mandatory `verify` owner. Keep ci.yml, the impact planner itself, unknown
 # workflows and arbitrary automation scripts fail-closed: they can change what
 # the required gate actually executes.
+# These two files run only in explicitly dispatched, opt-in physical studies.
+# They do not change the mandatory PR job plan, Cargo source, or Worker image.
+# Keep this an exact allowlist: unknown automation and CI selection changes
+# must still take the full fail-closed path.
+PHYSICAL_STUDY_ONLY_FILES = frozenset({
+    "automation/measure_owner_rebuild.py",
+    "automation/check_owner_rebuild.py",
+})
+
 CI_ONLY_VERIFY_FILES = {
     "automation/check_ci_workflow_contract.py",
     "automation/check_expert_core_activation_contract.py",
     "automation/report_sccache_failures.py",
-}
+} | PHYSICAL_STUDY_ONLY_FILES
 
 # Release packaging has a narrower input graph than PR verification. These
 # reviewed maintenance files do not enter the shipped Worker Docker context;
@@ -128,6 +143,8 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "automation/dev_rust_feedback.py",
     "automation/cargo_feedback.py",
     "automation/run_scoped_cargo_feedback.py",
+    "automation/rust_ci_artifacts.py",
+    "automation/check_rust_ci_artifacts.py",
     "automation/run_main_cache_prime.py",
     "automation/report_sccache_failures.py",
     "automation/report_ci_cargo_cache.py",
@@ -138,7 +155,7 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "infra/local/windows_staging.ps1",
     "docs/ci-fast-path.md",
     "docs/ARCHITECTURE_BOUNDARIES.md",
-}) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS
+}) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS | PHYSICAL_STUDY_ONLY_FILES
 
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
@@ -164,6 +181,7 @@ PUBLISHING_A17_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publication_release.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/renderer_refresh.rs",
     "app/rust/crates/integration_harness/src/tests/publication_delivery_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/publication_delivery_tests.rs",
 }
 
 # A14 exercises one real PostgreSQL lease/outbox and Qdrant materialization.
@@ -179,9 +197,14 @@ OUTBOX_A14_PATHS = {
     "app/rust/services/outbox_worker/src/materialize.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_runtime_outbox_adapter.rs",
-    "app/rust/crates/infrastructure/src/adapters/projection_materialize_adapter.rs",
+    "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
+    "app/rust/crates/projection_delivery/src/neo4j_materialization_adapter.rs",
+    "app/rust/crates/voyage_api/src/lib.rs",
+    "app/rust/crates/postgres_store/src/sqlx_projection_rows.rs",
     "app/rust/services/temporal/src/activities/operations/runtime_support_ops.rs",
-    "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+    "app/rust/crates/integration_outbox_e2e/src/lib.rs",
+    "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+    "app/rust/crates/integration_outbox_e2e/src/tests/pg_migration_upgrade_tests.rs",
 }
 
 # Truth adjudication is a real PostgreSQL/evidence operation distinct from
@@ -195,6 +218,8 @@ TRUTH_ADJUDICATION_PATHS = {
     "app/rust/services/temporal/src/activities/runtime.rs",
     "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
     "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/truth_adjudication_tests.rs",
 }
 
 # An actual PostgreSQL revision-bound human review exercises the domain
@@ -214,7 +239,7 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs",
-    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/draft_publish_ports.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
@@ -222,6 +247,11 @@ CMS_REVIEW_PATHS = {
     "app/rust/services/cli_tools/src/cli/cms_decision.rs",
     "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_review_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_cross_scope_pg_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/cms_navigation_pg_tests.rs",
 }
 
 # The full-scenario and fault-injected PostgreSQL tests exercise both
@@ -241,6 +271,8 @@ DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
     "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs",
+    "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
 }
 
 # Real PostgreSQL rollback checks for planning/link-recommendation writes.
@@ -249,12 +281,14 @@ DRAFT_QA_SCENARIO_PATHS = {
 PLANNING_ATOMICITY_PATHS = {
     "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
     "app/rust/crates/seo_domain/src/link_recommendation.rs",
-    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/planning_atomic_pg_tests.rs",
 }
 
 
@@ -270,6 +304,144 @@ WORKER_E2E_RUNTIME_BINARIES = {
     "INTEGRATION_TEMPORAL_WORKER_BIN": "temporal_worker",
     "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
 }
+# The A14 acceptance suite now launches the actual Outbox process. The old
+# in-process Rust function isn't equivalent to independent Worker lifecycle.
+OUTBOX_E2E_PREPARE = (
+    "cargo", "build", "--locked", "-p", "outbox_worker", "--bin", "outbox_worker",
+)
+
+# Historical Pure V3 replay is explicitly opted into the same frozen parent
+# that serves Qdrant V1 History. Default OperationDagV1/V2 remains standalone.
+# Reuse one physical compiled legacy variant instead of adding another build.
+PURE_V3_E2E_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "--bin", "temporal_orchestrator",
+    "--features", "legacy-qdrant-v1,legacy-workflows",
+)
+PURE_V3_E2E_RUNTIME_BINARIES = {
+    "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+}
+
+PG_V3_TEMPORAL_PREPARE = (
+    "cargo", "build", "--locked", "-p", "temporal_pg_effects",
+    "--bin", "temporal_pg_effects",
+)
+PG_V3_TEMPORAL_RUNTIME_BINARIES = {
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+}
+
+# V4/V5 parent->child replay uses the historical Workflow feature, never the
+# provider-free V1/V2 parent. PG child and historical parent are still
+# independently content-verified; no extra parent compilation is needed in CI.
+PG_V4_PARENT_CHILD_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--features", "temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows",
+)
+QDRANT_V7_PARENT_CHILD_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_qdrant_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_qdrant_effects",
+    "--features", "temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows",
+)
+QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+    "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+}
+MIXED_V6_NATIVE_OWNER_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "-p", "temporal_qdrant_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--bin", "temporal_qdrant_effects",
+)
+MIXED_V6_NATIVE_RUNTIME_BINARIES = {
+    # Mixed V6/V7 exercises the provider-free generic parent, NEVER the
+    # historical Qdrant V1-featured executable used by the frozen V8 suite.
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+    **PG_V3_TEMPORAL_RUNTIME_BINARIES,
+}
+DATAFORSEO_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "-p", "temporal_dataforseo",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--bin", "temporal_dataforseo",
+)
+DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+    "INTEGRATION_DATAFORSEO_EFFECT_WORKER_BIN": "temporal_dataforseo",
+}
+ACQUISITION_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "-p", "temporal_pg_effects", "-p", "acquisition_source_issuer",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+    "--bin", "temporal_pg_effects", "--bin", "acquisition_source_issuer",
+)
+ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
+    "INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN": "acquisition_source_issuer",
+    # Native privileged Start adapter is already part of the v3 SHA bundle;
+    # the Acquisition shard installs it without a second Rust compilation.
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+}
+SEO_STEPS_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_seo_steps_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_seo_steps_pure",
+)
+SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_SEO_STEPS_PURE_OWNER_BIN": "temporal_seo_steps_pure",
+}
+TRUTH_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_truth_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_truth_pure",
+)
+TRUTH_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_TRUTH_PURE_OWNER_BIN": "temporal_truth_pure",
+}
+SEMANTIC_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects", "-p", "temporal_semantic_pure",
+    "-p", "temporal_acquisition_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects", "--bin", "temporal_semantic_pure",
+    "--bin", "temporal_acquisition_pure",
+)
+SEMANTIC_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+    "INTEGRATION_SEMANTIC_PURE_OWNER_BIN": "temporal_semantic_pure",
+    "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
+}
+ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "-p", "temporal_seo_steps_pure", "-p", "temporal_truth_pure",
+    "-p", "temporal_pg_effects", "-p", "acquisition_source_issuer",
+    "-p", "one_step_request_issuer",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+    "--bin", "temporal_seo_steps_pure", "--bin", "temporal_truth_pure",
+    "--bin", "temporal_pg_effects", "--bin", "acquisition_source_issuer",
+    "--bin", "one_step_request_issuer",
+)
+ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES = {
+    **ACQUISITION_NATIVE_V2_RUNTIME_BINARIES,
+    "INTEGRATION_ONE_STEP_REQUEST_ISSUER_BIN": "one_step_request_issuer",
+    "INTEGRATION_SEO_STEPS_PURE_OWNER_BIN": "temporal_seo_steps_pure",
+    "INTEGRATION_TRUTH_PURE_OWNER_BIN": "temporal_truth_pure",
+}
+PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
+    **PG_V3_TEMPORAL_RUNTIME_BINARIES,
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+}
 
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
 # through the production SQLx reader and the active SEO generation operation.
@@ -278,16 +450,17 @@ KNOWLEDGE_A13_PATHS = {
     "app/rust/crates/seo_ports/src/knowledge.rs",
     "app/rust/crates/seo_ports/src/lib.rs",
     "app/rust/crates/seo_application/src/knowledge.rs",
-    "app/rust/crates/infrastructure/src/adapters/canonical_vector_search_adapter.rs",
-    "app/rust/crates/infrastructure/src/adapters/semantic_neighbor_search_adapter.rs",
+    "app/rust/crates/runtime_composition/src/adapters/canonical_vector_search_adapter.rs",
+    "app/rust/crates/runtime_composition/src/adapters/semantic_neighbor_search_adapter.rs",
     "app/rust/crates/seo_application/src/context_bundle.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_context_bundle_adapter.rs",
-    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
-    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
-    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
+    "app/rust/crates/pg_runtime_ports/src/draft_publish_ports.rs",
+    "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
+    "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
     "app/rust/crates/seo_application/src/drafting.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/crates/integration_harness/src/tests/knowledge_read_tests.rs",
+    "app/rust/crates/integration_qdrant_e2e/src/tests/knowledge_read_tests.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/triple_builder.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/completeness_resolution.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
@@ -298,13 +471,102 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    # Distinct authenticated PostgreSQL source issuer, immutable raw snapshot,
+    # live V2 business root and SELECT-only Temporal Start reader. This is a
+    # physical SQL permission proof; origin→typed-payload fidelity still
+    # requires a dedicated trusted transformer before public acceptance.
+    "external_source_attestation_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/external_source_attestation_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/operation_protocol/",
+            "app/rust/services/temporal_pg_effects/",
+        ),
+        "lock_crates": {"operation_protocol", "temporal_pg_effects", "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "external_source_attestation_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # One REAL disposable PostgreSQL admission boundary for the opt-in
+    # DataForSEO Temporal owner.  This test cannot attest live Temporal
+    # History or paid HTTP; it proves no missing operator grant can start an
+    # effect and that immutable attempts cannot be erased.  Keep it in the
+    # existing PG-app runner, not on the costly Qdrant/Temporal binary chain.
+    "dataforseo_owner_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_owner_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts", "operation_protocol"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "dataforseo_owner_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # The paid V2 owner is a separate, opt-in SQL authority from the V1
+    # fixture-only path. This genuine disposable PostgreSQL test covers
+    # independently approved USD bounds, one committed pre-POST claim,
+    # no re-POST after unknown, immutable provider bytes and FORCE RLS.
+    # It makes NO real paid API request and does not attest server History.
+    # Run with the same pg_app_harness and existing pg_app_truth shard.
+    "dataforseo_paid_owner_pg_v2": {
+        "paths": {
+            "app/db/migrations/20261128_0001_dataforseo_paid_owner_v2.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_paid_owner_v2_tests.rs",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+            "app/rust/services/one_step_request_issuer/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts",
+                        "one_step_request_issuer", "operation_protocol",
+                        "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "dataforseo_paid_owner_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "one_step_grant_pg_v1": {
+        "paths": {
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/one_step_request_grant_pg_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/one_step_request_issuer/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/operation_protocol/",
+        ),
+        "lock_crates": {"operation_protocol", "one_step_request_issuer",
+                        "temporal_pg_effects", "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "one_step_grant_pg_", "--locked", "--", "--nocapture",
+        ),
+    },
     "planning_atomicity": {
         "paths": PLANNING_ATOMICITY_PATHS,
         "prefixes": (),
         "lock_crates": {"infrastructure", "seo_application"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "planning_atomic_", "--locked", "--", "--nocapture",
         ),
     },
@@ -314,8 +576,19 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "runtime_models", "seo_application", "seo_steps"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "draft_qa_",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
+            "--lib", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    "draft_qa_pg_persistence": {
+        "paths": DRAFT_QA_SCENARIO_PATHS,
+        "prefixes": ("app/rust/crates/integration_pg_app_e2e/",),
+        "lock_crates": {"seo_domain", "runtime_models", "seo_application", "seo_steps"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -325,7 +598,7 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "seo_application", "seo_ports", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "cms_revision_",
             "--locked", "--", "--nocapture",
         ),
@@ -336,18 +609,20 @@ SUITE_OWNERS = {
         "lock_crates": {"seo_domain", "seo_application", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "publishing_a17_postgres_outbox_http_faults_and_recovery",
             "--locked", "--", "--nocapture",
         ),
     },
     "outbox_a14": {
         "paths": OUTBOX_A14_PATHS,
-        "prefixes": ("app/rust/services/outbox_worker/src/",),
+        "prefixes": ("app/rust/services/outbox_worker/src/", "app/rust/crates/integration_outbox_e2e/"),
         "lock_crates": {"outbox_worker", "infrastructure"},
         "on_unknown_global_input": True,
+        "prepare": OUTBOX_E2E_PREPARE,
+        "runtime_binaries": {"INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker"},
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_outbox_e2e", "--features", "e2e",
             "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
         ),
     },
@@ -357,17 +632,17 @@ SUITE_OWNERS = {
         "lock_crates": {"truth_domain"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
             "--lib", "truth_adjudication_", "--locked", "--", "--nocapture",
         ),
     },
     "knowledge_a13": {
         "paths": KNOWLEDGE_A13_PATHS,
-        "prefixes": (),
+        "prefixes": ("app/rust/crates/integration_qdrant_e2e/",),
         "lock_crates": {"seo_application", "seo_ports", "vector_qdrant", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
             "--lib", "knowledge_a13_", "--locked", "--", "--nocapture",
         ),
     },
@@ -384,24 +659,430 @@ SUITE_OWNERS = {
         ),
     },
     "graph_query": {
-        "paths": {"app/rust/crates/infrastructure/src/adapters/graph_capability_adapter.rs"},
-        "prefixes": ("app/rust/crates/graph_neo4j/",),
+        "paths": {
+            "app/rust/crates/runtime_composition/src/adapters/graph_capability_adapter.rs",
+            # Shared test-container setup is also the Neo4j uniqueness
+            # bootstrap boundary. Changing it must run the real graph race.
+            "app/rust/crates/integration_harness/src/containers.rs",
+            "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+            "app/rust/crates/integration_graph_e2e/src/lib.rs",
+            "app/rust/crates/integration_graph_e2e/src/tests/graph_capability_probe_tests.rs",
+            "app/rust/crates/integration_graph_e2e/src/tests/graph_capability_link_projection_tests.rs",
+            "app/rust/crates/integration_graph_fixtures/src/lib.rs",
+            "app/rust/crates/graph_capability/src/lib.rs",
+        },
+        "prefixes": ("app/rust/crates/graph_neo4j/", "app/rust/crates/integration_graph_e2e/",
+                     "app/rust/crates/integration_graph_fixtures/", "app/rust/crates/graph_capability/",
+                     "app/rust/crates/integration_test_env/"),
         "lock_crates": {"graph_neo4j"},
-        "on_unknown_global_input": False,
+        # Full CI requires rust-graph-e2e. This is its only executable suite.
+        "on_unknown_global_input": True,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "graph_capability_probe_binds_context_key", "--locked", "--", "--nocapture",
+            "cargo", "test", "-p", "integration_graph_e2e", "--features", "e2e",
+            # Both the context-key probe and real Neo4j scoped-edge regression
+            # share the graph capability prefix. This selects BOTH without
+            # adding a suite, job or unguarded provider-side traversal.
+            "--lib", "graph_capability_", "--locked", "--", "--nocapture",
         ),
     },
     "vector_projection": {
-        "paths": set(),
-        "prefixes": ("app/rust/crates/vector_qdrant/",),
+        "paths": {"app/rust/crates/integration_qdrant_e2e/src/lib.rs",
+                  "app/rust/crates/integration_qdrant_e2e/src/tests/qdrant_rest_projection_tests.rs"},
+        "prefixes": ("app/rust/crates/vector_qdrant/", "app/rust/crates/integration_qdrant_e2e/"),
         "lock_crates": {"vector_qdrant"},
         "on_unknown_global_input": False,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
             "--lib", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval",
             "--locked", "--", "--nocapture",
+        ),
+    },
+    # This is a distinct real PostgreSQL + Qdrant external-effect contract.
+    # Preserve the older REST-to-gRPC test as its own exact filter: broadening
+    # it would silently mask a missing newly admitted/recoverable projection.
+    "vector_admitted_projection": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+            "app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+            "app/rust/crates/integration_qdrant_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/projection_delivery/",
+            "app/rust/crates/integration_qdrant_e2e/",
+            "app/rust/crates/vector_qdrant/",
+        ),
+        "lock_crates": {"projection_delivery", "vector_qdrant"},
+        "on_unknown_global_input": False,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
+            "--lib", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # One native Temporal parent/child execution over a real PG admission and
+    # Qdrant mutation. It is NOT a broadening of the REST-only vector shard:
+    # distinct test executable and two exact-source independent Worker owners.
+    "temporal_qdrant_v8": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+            "app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/services/temporal_qdrant_effects/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/projection_delivery/",
+            "app/rust/crates/vector_qdrant/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/qdrant_contracts/",
+        ),
+        "lock_crates": {"temporal_orchestrator", "temporal_qdrant_effects",
+                        "projection_delivery", "vector_qdrant", "operation_protocol",
+                        "qdrant_contracts"},
+        "on_unknown_global_input": True,
+        "prepare": QDRANT_V7_PARENT_CHILD_PREPARE,
+        "runtime_binaries": QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
+        # Scoped developer feedback uses the same exact reviewed feature-
+        # gated source but Cargo names both outputs temporal_orchestrator.
+        # Stage the old V1 ABI under a separate immutable executable name.
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "qdrant_v8_native_temporal_history_operator_real_effect",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # Real independently admitted PG->Qdrant after-only native Temporal E2E,
+    # a strict Produced-schema/cross-tenant/forged-route negative, and a
+    # second valid plan with reversed provider order. All run in the EXISTING
+    # mandatory Qdrant Temporal shard, reusing its
+    # source-verified three Worker binaries. The unrelated PG receipt is never
+    # pretended to be a Qdrant vector command or a Produced dataflow edge.
+    "temporal_mixed_v6_contract": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/db/migrations/20261125_0017_qdrant_mixed_owner_v2.sql",
+            "app/db/migrations/20261125_0018_pg_generic_owner_v1.sql",
+            "app/db/migrations/20261125_0019_qdrant_generic_owner_v3.sql",
+            "app/db/migrations/20261125_0020_operation_dag_run_governance_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/qdrant_contracts/",
+            "app/rust/crates/truth_domain/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+        ),
+        "lock_crates": {"operation_protocol", "qdrant_contracts", "truth_domain",
+                        "seo_application", "temporal_orchestrator",
+                        "temporal_qdrant_effects", "temporal_pg_effects"},
+        "on_unknown_global_input": True,
+        "prepare": MIXED_V6_NATIVE_OWNER_PREPARE,
+        "runtime_binaries": MIXED_V6_NATIVE_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_v6_",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # True native PG-produced VectorProjectionV1 -> Temporal Child result ->
+    # independently admitted Qdrant Produced consumer, plus a fail-closed
+    # contract/tenant preflight. Preserve the older after-only V6 shard: both
+    # are mandatory and represent DIFFERENT guarantees.
+    "temporal_mixed_v7_produced": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/db/migrations/20261125_0018_pg_generic_owner_v1.sql",
+            "app/db/migrations/20261125_0019_qdrant_generic_owner_v3.sql",
+            "app/db/migrations/20261125_0020_operation_dag_run_governance_v1.sql",
+            "app/db/migrations/20261125_0021_pg_vector_projection_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/projection_contracts/",
+            "app/rust/crates/qdrant_contracts/",
+            "app/rust/crates/postgres_store/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_qdrant_effects/",
+        ),
+        "lock_crates": {"operation_protocol", "projection_contracts", "postgres_store",
+                        "qdrant_contracts", "seo_application", "temporal_orchestrator",
+                        "temporal_qdrant_effects", "temporal_pg_effects"},
+        "on_unknown_global_input": True,
+        "prepare": MIXED_V6_NATIVE_OWNER_PREPARE,
+        "runtime_binaries": MIXED_V6_NATIVE_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_v7_",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # NEW exact native V2 test: separate generic business authority, all
+    # owner ValidateOnly Children before first effect, real PG Produced ->
+    # Temporal -> Qdrant plus an independent parallel PG/Qdrant plan and
+    # malformed downstream command rejected with ZERO upstream effects.
+    # This is a mandatory dedicated shard, not a contract-only substitute.
+    "temporal_mixed_v2_native": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/db/migrations/20261125_0020_operation_dag_run_governance_v1.sql",
+            "app/db/migrations/20261125_0021_pg_vector_projection_v1.sql",
+            "app/db/migrations/20261125_0022_pg_owner_v2_admission.sql",
+            "app/db/migrations/20261125_0023_qdrant_owner_v2_admission.sql",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/projection_contracts/",
+            "app/rust/crates/qdrant_contracts/",
+            "app/rust/crates/qdrant_effects_core/",
+            "app/rust/crates/postgres_store/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_qdrant_effects/",
+        ),
+        "lock_crates": {"operation_protocol", "projection_contracts", "qdrant_contracts",
+                        "qdrant_effects_core", "postgres_store", "seo_application",
+                        "temporal_orchestrator", "temporal_pg_effects",
+                        "temporal_qdrant_effects"},
+        "on_unknown_global_input": True,
+        "prepare": MIXED_V6_NATIVE_OWNER_PREPARE,
+        "runtime_binaries": MIXED_V6_NATIVE_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_v2_native_",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # The only full-system DataForSEO proof uses REAL Temporal parent,
+    # ValidateOnly and effect Child Histories; distinct business, governance,
+    # provider issuer and Activity LOGINS; disposable PostgreSQL's immutable
+    # ledger; and real 127.0.0.1 POST/GET bytes. The native test kills the
+    # worker while GET is pending, and rejects ambiguous POST replays.
+    # It does NOT contact a paid DataForSEO endpoint.
+    "dataforseo_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_dataforseo_tests.rs",
+            "app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_pg_effects/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts",
+                        "operation_protocol", "temporal_orchestrator",
+                        "temporal_pg_effects", "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": DATAFORSEO_NATIVE_V2_PREPARE,
+        "runtime_binaries": DATAFORSEO_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "dataforseo_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "acquisition_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
+            "app/db/migrations/20261127_0002_operation_dag_external_source_attestation_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/services/acquisition_source_issuer/",
+            # Its separate privileged one-step gate now checks Acquisition
+            # source admission before submitting the generic Temporal DAG.
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/acquisition/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"acquisition", "acquisition_source_issuer",
+                        "operation_protocol", "trusted_owner_catalog",
+                        "temporal_acquisition_pure", "temporal_orchestrator", "temporal_pg_effects",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ACQUISITION_NATIVE_V2_PREPARE,
+        "runtime_binaries": ACQUISITION_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "acquisition_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # Three distinct compiled owner DTOs with native ValidateOnly, single-node
+    # Temporal Children, owner V3 schema pins, negative admission and replay.
+    # This is a real disposable-Temporal proof, never a public Start grant.
+    "seo_steps_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
+            "app/rust/crates/seo_steps/src/owner_pure_operations.rs",
+            "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/procedural_extraction_step.rs",
+            "app/rust/crates/seo_steps/src/serp_normalize_step.rs",
+            "app/rust/crates/seo_steps/src/opportunity_build_step.rs",
+            "app/rust/crates/seo_steps/src/seo_identity.rs",
+            "app/rust/crates/seo_steps/src/seo_step_support.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_seo_steps_pure/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"seo_steps", "temporal_seo_steps_pure", "operation_protocol",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": SEO_STEPS_NATIVE_V2_PREPARE,
+        "runtime_binaries": SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "seo_steps_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # Two separately selectable pure Truth operations: real parent/Child
+    # History + exact owner schema, negative DTO and native SDK replay.
+    "truth_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_truth_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_truth_pure/",
+            "app/rust/crates/truth_domain/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"truth_domain", "temporal_truth_pure", "operation_protocol",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": TRUTH_NATIVE_V2_PREPARE,
+        "runtime_binaries": TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "truth_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "semantic_pure_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_semantic_pure_tests.rs",
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs",
+            "app/rust/services/cli_tools/src/cli/site_architect.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_semantic_pure/",
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/crates/source_section_contracts/",
+            "app/rust/crates/acquisition/",
+            "app/rust/crates/seo_domain/src/extraction/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"seo_domain", "seo_application", "temporal_semantic_pure",
+                        "source_section_contracts", "acquisition", "temporal_acquisition_pure",
+                        "operation_protocol", "trusted_owner_catalog", "temporal_orchestrator",
+                        "temporal_pg_effects", "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": SEMANTIC_NATIVE_V2_PREPARE,
+        "runtime_binaries": SEMANTIC_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "semantic_pure_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "one_step_grant_native_v1": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_one_step_grant_tests.rs",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "infra/cloudflare/site-architect-mcp/src/admission.ts",
+            "infra/cloudflare/site-architect-mcp/test/loopback-admission.ts",
+        },
+        "prefixes": (
+            "app/rust/services/one_step_request_issuer/",
+            "app/rust/services/acquisition_source_issuer/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/acquisition/",
+            "app/rust/crates/trusted_owner_catalog/",
+        ),
+        "lock_crates": {"one_step_request_issuer", "acquisition_source_issuer",
+                        "temporal_pg_effects", "temporal_acquisition_pure",
+                        "temporal_orchestrator", "operation_protocol", "acquisition",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ONE_STEP_GRANT_NATIVE_V1_PREPARE,
+        "runtime_binaries": ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "one_step_grant_native_v1_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # Native mixed-owner composition reuses the same exact-source Temporal
+    # and independently compiled pure owner artifacts as the Acquisition
+    # one-step shard. No extra compiler or full runner job is required.
+    "mixed_pure_composition_native_v1": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_pure_composition_tests.rs",
+            "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/owner_pure_operations.rs",
+            "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/procedural_extraction_step.rs",
+            "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
+            "app/rust/crates/truth_domain/src/operations.rs",
+            "app/rust/crates/truth_domain/src/completeness.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/services/temporal_seo_steps_pure/",
+            "app/rust/services/temporal_truth_pure/",
+        ),
+        "lock_crates": {"operation_protocol", "seo_steps", "truth_domain",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "temporal_seo_steps_pure", "temporal_truth_pure",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": ONE_STEP_GRANT_NATIVE_V1_PREPARE,
+        "runtime_binaries": ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_pure_native_", "--locked", "--", "--nocapture",
         ),
     },
     "temporal_restart": {
@@ -409,6 +1090,9 @@ SUITE_OWNERS = {
             "app/rust/services/temporal/Cargo.toml",
             "app/contracts/proto/temporal_payloads.proto",
             "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_temporal_fixtures/src/lib.rs",
             # These domain/editorial decisions are executed by the real
             # canonical Temporal page workflow even when its orchestration
             # source is untouched. A policy-only diff must still exercise it.
@@ -424,7 +1108,8 @@ SUITE_OWNERS = {
             "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
             "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
         },
-        "prefixes": ("app/rust/services/temporal/src/",),
+        "prefixes": ("app/rust/services/temporal/src/", "app/rust/crates/integration_temporal_e2e/",
+                     "app/rust/crates/integration_temporal_fixtures/"),
         "lock_crates": {"temporal_worker"},
         # This separate live E2E also opens the canonical happy-path JSON and
         # its HTML pages. Do not let fixture-only narrowing skip its consumer.
@@ -436,9 +1121,118 @@ SUITE_OWNERS = {
         "prepare": WORKER_E2E_PREPARE,
         "runtime_binaries": WORKER_E2E_RUNTIME_BINARIES,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib", "canonical_temporal_",
             "--locked", "--", "--nocapture",
+        ),
+    },
+    "pure_dag_v3": {
+        "paths": {
+            "app/rust/services/temporal_orchestrator/Cargo.toml",
+            "app/rust/crates/integration_harness/src/lib.rs",
+            "app/rust/crates/integration_harness/src/tests/pure_v3_temporal_tests.rs",
+            "app/rust/crates/integration_temporal_e2e/src/tests/pure_v3_temporal_tests.rs",
+            "app/rust/crates/temporal_gateway/src/lib.rs",
+            # The Workflow calls this real executor; changes to immutable
+            # plan validation and payload handling require real History replay.
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/crates/seo_application/src/execution/durable_plan.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_orchestrator/src/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/operation_protocol/src/",
+        ),
+        "lock_crates": {"temporal_orchestrator", "temporal_gateway"},
+        # Unlike legacy certification, V3 is the mandatory source-to-runtime
+        # queue-isolation check for a new executable; exercise it when a global
+        # CI/runtime input changes, even when the diff cannot be mapped.
+        "on_unknown_global_input": True,
+        "prepare": PURE_V3_E2E_PREPARE,
+        "runtime_binaries": PURE_V3_E2E_RUNTIME_BINARIES,
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
+        "command": (
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
+            "--lib", "pure_v3_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "pg_effect_v3": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+            "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
+            "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
+            "app/db/migrations/20261125_0003_pg_effect_parent_child_v4.sql",
+            "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql",
+            "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
+            "app/db/migrations/20261125_0006_truth_hitl_writer_fence.sql",
+            "app/db/migrations/20261125_0007_authoritative_tenant_truth_rls.sql",
+            "app/db/migrations/20261125_0008_truth_source_authority_fence.sql",
+            "app/db/migrations/20261125_0009_tenant_ingress_writer_provenance.sql",
+            "app/db/migrations/20261125_0011_tenant_operator_truncate_fence.sql",
+            "app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
+            "app/rust/crates/postgres_store/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v5_ordered_children_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v6_tenant_ingress_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_pg_v3_e2e/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/truth_domain/src/review_effect_contract",
+            "app/rust/crates/operation_protocol/src/",
+        ),
+        "lock_crates": {
+            "temporal_pg_effects", "temporal_orchestrator", "seo_application",
+            "truth_domain", "postgres_store", "operation_protocol",
+        },
+        # The PostgreSQL-only fenced Activity owner must remain tested even
+        # when a global schema/CI input cannot be safely narrowed.
+        "on_unknown_global_input": True,
+        # Includes live parent/child V4 Temporal+PG: the two exact-source V3
+        # binary owners are mandatory, with no legacy Worker fallback.
+        "prepare": PG_V4_PARENT_CHILD_PREPARE,
+        "runtime_binaries": PG_V4_PARENT_CHILD_RUNTIME_BINARIES,
+        "stage_binaries": {"temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator"},
+        "command": (
+            "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
+            "--lib", "pg_v3_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "pg_temporal_v3": {
+        "paths": {
+            "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/db/schema.sql",
+            "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+            "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
+            "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
+            "app/db/migrations/20261125_0003_pg_effect_parent_child_v4.sql",
+            "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql",
+            "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_pg_v3_e2e/",
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/operation_protocol/src/",
+            "app/rust/crates/temporal_gateway/src/",
+        ),
+        "lock_crates": {"temporal_pg_effects", "temporal_gateway", "postgres_store"},
+        "on_unknown_global_input": True,
+        "prepare": PG_V3_TEMPORAL_PREPARE,
+        "runtime_binaries": PG_V3_TEMPORAL_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
+            "--lib", "temporal_effect_v3_", "--locked", "--", "--nocapture",
         ),
     },
 }
@@ -510,7 +1304,8 @@ def main_cache_prime_required(changed: list[str]) -> bool:
         raise ValueError("MAIN_CACHE_PRIME=FAIL invalid changed paths")
     return any(
         path.startswith("app/rust/")
-        and not path.startswith("app/rust/crates/integration_harness/src/tests/")
+        and not path.startswith(("app/rust/crates/integration_harness/src/tests/",
+                                 "app/rust/crates/integration_outbox_e2e/src/tests/"))
         and not path.startswith(TRUTH_FIXTURE_PREFIX)
         and not path.endswith("/Dockerfile")
         for path in changed
@@ -520,6 +1315,27 @@ def main_cache_prime_required(changed: list[str]) -> bool:
 # only this planner can mark an owner not applicable to an exact source diff.
 CI_PR_OWNERS = (
     "architecture-and-rust",
+    "rust-e2e-graph-harness",
+    "rust-e2e-qdrant-harness",
+    "rust-e2e-qdrant-temporal-harness",
+    "rust-e2e-pg-app-harness",
+    "rust-e2e-temporal-harness",
+    "rust-e2e-pg-harness",
+    "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
+    "rust-e2e-legacy-binaries",
+    "rust-e2e-v3-binaries",
+    "rust-e2e-qdrant-effects-binaries",
+    "rust-graph-e2e",
+    "rust-qdrant-e2e",
+    "rust-qdrant-temporal-e2e",
+    "rust-qdrant-temporal-legacy-e2e",
+    "rust-pg-app-e2e",
+    "rust-temporal-legacy-e2e",
+    "rust-temporal-v3-e2e",
+    "rust-pg-e2e",
+    "rust-outbox-e2e",
+    "rust-truth-e2e",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
@@ -540,7 +1356,14 @@ def ci_jobs_for_change(
     for the disposable PostgreSQL/Qdrant/Neo4j adapters exercised by suites.
     """
     if scope == "full":
-        return {name: ["fail-closed: global or unknown impact"] for name in CI_PR_OWNERS}
+        required = {name: ["fail-closed: global or unknown impact"] for name in CI_PR_OWNERS}
+        # Optional Truth certification still has one real broad-harness test;
+        # build/execute that physical compiler only when a live fixture
+        # selects this suite. No omitted test is silently reported as green.
+        if "truth_certification" not in suites:
+            del required["rust-e2e-truth-harness"]
+            del required["rust-truth-e2e"]
+        return required
 
     changed = set(paths)
     selected: dict[str, list[str]] = {}
@@ -712,10 +1535,195 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
-    "draft_qa_scenario", "knowledge_a13", "outbox_a14",
+    "dataforseo_owner_pg_v1", "dataforseo_paid_owner_pg_v2",
+    "external_source_attestation_pg_v1", "one_step_grant_pg_v1",
+    "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
-    "truth_adjudication_integrity",
+    "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
 })
+
+
+# Full-scope live suites execute on genuinely separate GitHub runners. This is
+# one static, typed routing table, NOT another operation registry: all the
+# executable commands and selection rules remain owned by SUITE_OWNERS.
+# A row is (source suite, exact Rust test-name filter, expected test count).
+# Each source suite is covered once except the canonical Temporal suite, whose
+# three individually audited test names deliberately run on two independent
+# servers/runners. Actual test counts are asserted by the binary runner, not
+# guessed from a successful subprocess exit status.
+E2E_ARCH_SHARDS = (
+    "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
+    "vector", "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
+    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+    "temporal_seo_steps", "temporal_truth", "temporal_semantic", "truth_certification",
+)
+E2E_VERIFY_SHARDS = (
+    "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
+    "pg_app_delivery", "temporal_draft", "temporal_pure", "verify_d", "outbox",
+)
+# The business-suite source owner (architecture/verify) is orthogonal to its
+# physical Cargo compiler and independent provider runner. Each shard belongs
+# to exactly one runtime job: none may wait for a broad harness dependency.
+E2E_GRAPH_SHARDS = ("graph",)
+E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
+E2E_QDRANT_TEMPORAL_SHARDS = (
+    "temporal_mixed_v6", "temporal_mixed_v7",
+    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+    "temporal_seo_steps", "temporal_truth", "temporal_semantic",
+)
+E2E_QDRANT_TEMPORAL_LEGACY_SHARDS = ("temporal_qdrant",)
+E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
+E2E_TEMPORAL_LEGACY_SHARDS = ("temporal_manual", "temporal_blocked", "temporal_draft")
+E2E_TEMPORAL_V3_SHARDS = ("temporal_pure",)
+E2E_PG_SHARDS = ("pg_temporal", "verify_d")
+E2E_OUTBOX_SHARDS = ("outbox",)
+E2E_TRUTH_SHARDS = ("truth_certification",)
+E2E_RUNNER_PARTITIONS = {
+    "rust-graph-e2e": E2E_GRAPH_SHARDS,
+    "rust-qdrant-e2e": E2E_QDRANT_SHARDS,
+    "rust-qdrant-temporal-e2e": E2E_QDRANT_TEMPORAL_SHARDS,
+    "rust-qdrant-temporal-legacy-e2e": E2E_QDRANT_TEMPORAL_LEGACY_SHARDS,
+    "rust-pg-app-e2e": E2E_PG_APP_SHARDS,
+    "rust-temporal-legacy-e2e": E2E_TEMPORAL_LEGACY_SHARDS,
+    "rust-temporal-v3-e2e": E2E_TEMPORAL_V3_SHARDS,
+    "rust-pg-e2e": E2E_PG_SHARDS,
+    "rust-outbox-e2e": E2E_OUTBOX_SHARDS,
+    "rust-truth-e2e": E2E_TRUTH_SHARDS,
+}
+if (set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values()))
+        != set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)
+        or sum(map(len, E2E_RUNNER_PARTITIONS.values())) != len(E2E_ARCH_SHARDS) + len(E2E_VERIFY_SHARDS)):
+    raise ValueError("independent E2E runner partition lost a required shard")
+E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
+    "graph": (("graph_query", "graph_capability_", 2),),
+    "pg_temporal": (("pg_temporal_v3", "temporal_effect_v3_", 1),),
+    "temporal_manual": (
+        ("temporal_restart", "canonical_temporal_manual_editorial_resumes_after_worker_restart", 1),
+        ("temporal_restart", "canonical_temporal_activity_history_wire_shape", 1),
+    ),
+    "temporal_blocked": (
+        ("temporal_restart", "canonical_temporal_blocked_review_ends_for_rework_without_publication", 1),
+    ),
+    "vector": (
+        ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+        ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+    ),
+    "temporal_qdrant": (
+        ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+    ),
+    "temporal_mixed_v6": (
+        ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+    ),
+    "temporal_mixed_v7": (
+        ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+    ),
+    "temporal_mixed_v2": (
+        # One live Temporal/PG/Qdrant V2 proof plus one isolated test of
+        # the exact trusted siteArchitect provider catalog on real owner contracts.
+        ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+    ),
+    "temporal_dataforseo": (
+        ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
+    ),
+    "temporal_acquisition": (
+        ("acquisition_native_v2", "acquisition_native_v2_", 2),
+        ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
+        ("mixed_pure_composition_native_v1", "mixed_pure_native_", 1),
+    ),
+    "temporal_seo_steps": (("seo_steps_native_v2", "seo_steps_native_v2_", 1),),
+    "temporal_truth": (("truth_native_v2", "truth_native_v2_", 1),),
+    "temporal_semantic": (("semantic_pure_native_v2", "semantic_pure_native_v2_", 1),),
+    "truth_certification": (
+        ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
+    ),
+    "temporal_draft": (("draft_qa_scenario", "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness", 1),),
+    "temporal_pure": (("pure_dag_v3", "pure_v3_", 1),),
+    "qdrant_knowledge": (("knowledge_a13", "knowledge_a13_", 3),),
+    "pg_app_truth": (
+        ("truth_adjudication_integrity", "truth_adjudication_", 3),
+        ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
+        ("dataforseo_paid_owner_pg_v2", "dataforseo_paid_owner_v2_", 1),
+        ("external_source_attestation_pg_v1", "external_source_attestation_pg_", 1),
+        ("one_step_grant_pg_v1", "one_step_grant_pg_", 1),
+    ),
+    "pg_app_cms": (("cms_review_revision", "cms_revision_", 4),),
+    "pg_app_planning": (("planning_atomicity", "planning_atomic_", 6),),
+    "pg_app_delivery": (
+        ("draft_qa_pg_persistence", "draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft", 1),
+        ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
+    ),
+    "outbox": (("outbox_a14", "outbox_a14_", 9),),
+    # All prior V3/V4/V5 tests plus V6 real native LOGIN/tenant ingress.
+    "verify_d": (("pg_effect_v3", "pg_v3_", 10),),
+}
+
+
+def e2e_shard_commands_for_report(
+    report: dict[str, Any],
+) -> dict[str, list[tuple[str, list[str], str, int]]]:
+    """Exact-source, exhaustive full-CI shard plan; empty shards are NOT runnable.
+
+    The caller publishes only nonempty shards to a GitHub matrix. Each
+    selected suite and its actual test-name filters must be exercised once,
+    with a known exact test count. Unknown/new suites fail the planning job
+    until their test coverage is explicitly allocated.
+    """
+    if set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS) != set(E2E_SHARD_RUNS) or (
+        set(E2E_ARCH_SHARDS) & set(E2E_VERIFY_SHARDS)
+    ):
+        raise ValueError("invalid unique full-scope E2E shard identity registry")
+    if report.get("analysis") != "full" or report.get("scope") != "full":
+        raise ValueError("full-scope E2E shard plan used by a non-full CI run")
+    assignments = suite_commands_by_ci_job(report)
+    expected_assignments = {
+        "architecture-and-rust": dict(assignments["architecture-and-rust"]),
+        "verify": dict(assignments["verify"]),
+    }
+    result: dict[str, list[tuple[str, list[str], str, int]]] = {}
+    coverage: dict[str, list[str]] = {}
+    for shard, specs in E2E_SHARD_RUNS.items():
+        owner = "architecture-and-rust" if shard in E2E_ARCH_SHARDS else "verify"
+        rows: list[tuple[str, list[str], str, int]] = []
+        for name, test_filter, count in specs:
+            if name not in SUITE_OWNERS or not isinstance(count, int) or count <= 0:
+                raise ValueError(f"invalid E2E source suite/count in shard {shard}")
+            command = list(SUITE_OWNERS[name]["command"])
+            try:
+                original_filter = command[command.index("--lib") + 1]
+            except (ValueError, IndexError) as error:
+                raise ValueError(f"missing canonical Rust lib filter for {name}") from error
+            if not test_filter.startswith(original_filter):
+                raise ValueError(f"shard {shard} illegally widens canonical filter for {name}")
+            coverage.setdefault(name, []).append(test_filter)
+            if name in expected_assignments[owner]:
+                if command != expected_assignments[owner][name]:
+                    raise ValueError(f"shard {shard} changed source suite {name} command")
+                rows.append((name, command, test_filter, count))
+            elif name in expected_assignments["verify" if owner == "architecture-and-rust" else "architecture-and-rust"]:
+                raise ValueError(f"source suite {name} selected under wrong E2E CI owner")
+        result[shard] = rows
+
+    if set(coverage) != set(SUITE_OWNERS):
+        raise ValueError("full-scope shard registry does not cover every source suite")
+    for name, filters in coverage.items():
+        if name == "temporal_restart":
+            expected = {
+                "canonical_temporal_manual_editorial_resumes_after_worker_restart",
+                "canonical_temporal_blocked_review_ends_for_rework_without_publication",
+                "canonical_temporal_activity_history_wire_shape",
+            }
+            if set(filters) != expected or len(filters) != len(expected):
+                raise ValueError("historical Temporal restart tests have incomplete shard coverage")
+        elif len(filters) != 1 or filters[0] != SUITE_OWNERS[name]["command"][7]:
+            raise ValueError(f"suite {name} has missing, duplicate or rewritten E2E filter")
+    actual = {
+        "architecture-and-rust": {name for shard in E2E_ARCH_SHARDS for name, *_ in result[shard]},
+        "verify": {name for shard in E2E_VERIFY_SHARDS for name, *_ in result[shard]},
+    }
+    for owner, commands in expected_assignments.items():
+        if actual[owner] != set(commands):
+            raise ValueError(f"full-scope E2E shard partition lost a mandatory {owner} suite")
+    return result
 
 
 def suite_commands_by_ci_job(report: dict[str, Any]) -> dict[str, list[tuple[str, list[str]]]]:
@@ -1091,8 +2099,16 @@ def analyze(
     scope = "full" if broad_reasons else "scoped" if affected else "none"
 
     suite_reasons: dict[str, list[str]] = {}
+    shared_provider_fixture_changed = any(
+        path.startswith("app/rust/crates/integration_data_fixtures/") for path in paths
+    )
     for name, rule in SUITE_OWNERS.items():
         matched = [path for path in sorted(set(paths)) if path in rule["paths"] or path.startswith(rule["prefixes"])]
+        # Both executable owners consume the same real provider fixtures;
+        # changes to that common setup require ALL mandatory 38 live checks,
+        # including architecture shards otherwise optional for global inputs.
+        if shared_provider_fixture_changed and name != "truth_certification":
+            matched.append("shared real provider fixture consumed by all mandatory E2E owners")
         if lock_changed and not broad_reasons:
             matched.extend(
                 f"locked dependency affects: {crate}"

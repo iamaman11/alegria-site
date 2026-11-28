@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import unittest
 import json
+import re
+import tomllib
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import patch
 
 from ci_impact import (
-    CI_PR_OWNERS, FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
+    CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
+    E2E_RUNNER_PARTITIONS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS, E2E_QDRANT_SHARDS,
+    FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
+    e2e_shard_commands_for_report,
     main_cache_prime_required,
     suite_commands_by_ci_job, suite_commands_for_report, suite_environment_for_report,
     truth_fixture_ids_for_paths,
@@ -21,6 +26,8 @@ from ci_impact import (
 from dev_rust_feedback import commands_for_report
 from run_main_cache_prime import prime_commands_for_report
 from run_scoped_cargo_feedback import require_clean_truth_filter_environment
+
+NONTRUTH_FULL_CI_OWNERS = set(CI_PR_OWNERS) - {"rust-e2e-truth-harness", "rust-truth-e2e"}
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -32,7 +39,14 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/graph_neo4j": "graph_neo4j",
             "app/rust/crates/http_client": "http_client",
             "app/rust/crates/infrastructure": "infrastructure",
+            "app/rust/crates/runtime_composition": "runtime_composition",
             "app/rust/crates/integration_harness": "integration_harness",
+            "app/rust/crates/integration_outbox_e2e": "integration_outbox_e2e",
+            "app/rust/crates/integration_pg_v3_e2e": "integration_pg_v3_e2e",
+            "app/rust/crates/integration_graph_e2e": "integration_graph_e2e",
+            "app/rust/crates/integration_qdrant_e2e": "integration_qdrant_e2e",
+            "app/rust/crates/integration_pg_app_e2e": "integration_pg_app_e2e",
+            "app/rust/crates/integration_temporal_e2e": "integration_temporal_e2e",
             "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
             "app/rust/crates/seo_domain": "seo_domain",
@@ -48,16 +62,23 @@ class ImpactFixtures(unittest.TestCase):
         self.reverse = {
             "contracts": {"primitives"},
             "primitives": {"temporal_worker"},
-            "graph_neo4j": {"analytics_svc", "temporal_worker"},
+            "graph_neo4j": {"analytics_svc", "temporal_worker", "runtime_composition"},
             "http_client": {"gsc_sync"},
-            "infrastructure": set(),
+            "infrastructure": {"runtime_composition"},
+            "runtime_composition": {"temporal_worker", "outbox_worker", "integration_harness"},
             "integration_harness": set(),
+            "integration_outbox_e2e": set(),
+            "integration_pg_v3_e2e": set(),
+            "integration_graph_e2e": set(),
+            "integration_qdrant_e2e": set(),
+            "integration_pg_app_e2e": set(),
+            "integration_temporal_e2e": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
             "seo_ports": set(),
             "seo_steps": {"seo_application", "temporal_worker"},
-            "vector_qdrant": {"temporal_worker"},
+            "vector_qdrant": {"temporal_worker", "runtime_composition"},
             "gsc_sync": set(),
             "cli_tools": set(),
             "analytics_svc": set(),
@@ -92,15 +113,46 @@ class ImpactFixtures(unittest.TestCase):
         paths = [".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"]
         report = self.impact(*paths)
         self.assertEqual(report["scope"], "full")
-        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS) - {
+            "rust-e2e-truth-harness", "rust-truth-e2e",
+        })
         self.assertIn("temporal-worker", report["selected_images"])
+        self.assertTrue(e2e_shard_commands_for_report(report)["graph"])
         decision = worker_release_decision(report, paths, manual=False)
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
 
+    def test_shared_real_provider_fixtures_fail_closed_across_both_e2e_crates(self) -> None:
+        report = self.impact("app/rust/crates/integration_data_fixtures/src/postgres.rs")
+        self.assertEqual(report["scope"], "full")
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS) - {
+            "rust-e2e-truth-harness", "rust-truth-e2e",
+        })
+        self.assertIn("outbox_a14", report["selected_suites"])
+        self.assertIn("knowledge_a13", report["selected_suites"])
+        self.assertIn("pg_effect_v3", report["selected_suites"])
+        self.assertIn("temporal_restart", report["selected_suites"])
+        self.assertIn("graph_query", report["selected_suites"])
+        self.assertNotIn("truth_certification", report["selected_suites"])
+        shards = e2e_shard_commands_for_report(report)
+        self.assertEqual(sum(count for rows in shards.values()
+                             for _, _, _, count in rows), 67)
+        self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
+                            if shard != "truth_certification"))
+
     def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
+        self.assertTrue({
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
+            "rust-e2e-qdrant-effects-binaries", "rust-e2e-pg-app-harness",
+            "rust-e2e-temporal-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+            "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-graph-e2e", "rust-qdrant-e2e", "rust-qdrant-temporal-e2e",
+            "rust-qdrant-temporal-legacy-e2e",
+            "rust-pg-app-e2e", "rust-temporal-legacy-e2e",
+            "rust-temporal-v3-e2e", "rust-outbox-e2e",
+        } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
         assignments = suite_commands_by_ci_job(report)
         architecture = dict(assignments["architecture-and-rust"])
@@ -111,8 +163,405 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(verify), FULL_VERIFY_E2E_SUITES)
         self.assertIn("cms_review_revision", verify)
         self.assertIn("truth_adjudication_integrity", verify)
+        self.assertIn("pure_dag_v3", verify)
+        self.assertIn("pg_effect_v3", verify)
+        self.assertNotIn("pure_dag_v3", architecture)
+        self.assertNotIn("pg_effect_v3", architecture)
         self.assertIn("temporal_restart", architecture)
+        self.assertIn("pg_temporal_v3", architecture)
+        self.assertIn("temporal_qdrant_v8", architecture)
+        for owner in ("pg_effect_v3", "pg_temporal_v3"):
+            self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_pg_v3_e2e")
+        self.assertEqual(SUITE_OWNERS["outbox_a14"]["command"][3], "integration_outbox_e2e")
+        package_owners = {
+            "integration_harness": {"truth_certification"},
+            "integration_graph_e2e": {"graph_query"},
+            "integration_qdrant_e2e": {"knowledge_a13", "vector_projection", "vector_admitted_projection"},
+            "integration_qdrant_temporal_e2e": {
+                "temporal_qdrant_v8", "temporal_mixed_v6_contract", "temporal_mixed_v7_produced",
+                "temporal_mixed_v2_native", "dataforseo_native_v2",
+                "acquisition_native_v2", "one_step_grant_native_v1",
+                "seo_steps_native_v2", "truth_native_v2", "mixed_pure_composition_native_v1",
+                "semantic_pure_native_v2",
+            },
+            "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
+            "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
+                                       "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity",
+                                       "dataforseo_owner_pg_v1", "dataforseo_paid_owner_pg_v2",
+                                       "external_source_attestation_pg_v1",
+                                       "one_step_grant_pg_v1"},
+            "integration_pg_v3_e2e": {"pg_effect_v3", "pg_temporal_v3"},
+            "integration_outbox_e2e": {"outbox_a14"},
+        }
+        self.assertEqual(set().union(*package_owners.values()), set(SUITE_OWNERS))
+        for package, suites in package_owners.items():
+            for suite in suites:
+                self.assertEqual(SUITE_OWNERS[suite]["command"][3], package)
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["command"][7], "temporal_effect_v3_")
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+        })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
+
+    def test_pg_v3_package_is_physically_isolated_and_owns_ten_pg_tests_once(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        owner_root = root / "app/rust/crates/integration_pg_v3_e2e"
+        manifest = tomllib.loads((owner_root / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["package"]["name"], "integration_pg_v3_e2e")
+        self.assertEqual(manifest["features"]["default"], [])
+        self.assertEqual(set(manifest["features"]["e2e"]), {
+            "dep:" + name for name in manifest["dependencies"]
+        })
+        self.assertTrue(all(isinstance(spec, dict) and spec.get("optional") is True
+                            for spec in manifest["dependencies"].values()))
+        self.assertFalse({
+            "integration_harness", "runtime_composition", "infrastructure",
+            "graph_neo4j", "vector_qdrant", "temporal_worker", "outbox_worker",
+        } & set(manifest["dependencies"]))
+
+        new_lib = (owner_root / "src/lib.rs").read_text(encoding="utf-8")
+        monolith = (root / "app/rust/crates/integration_harness/src/lib.rs").read_text(encoding="utf-8")
+        self.assertIn('#[cfg(all(test, feature = "e2e"))]', new_lib)
+        names = (
+            "pg_v3_truth_review_effect_tests.rs",
+            "pg_v3_admission_race_tests.rs",
+            "pg_v3_operator_cli_tests.rs",
+            "pg_v5_ordered_children_tests.rs",
+            "pg_v6_tenant_ingress_tests.rs",
+            "pg_v3_temporal_cross_queue_tests.rs",
+        )
+        physical_test_names: list[str] = []
+        for filename in names:
+            with self.subTest(filename=filename):
+                self.assertEqual(new_lib.count(f'include!("tests/{filename}")'), 1)
+                self.assertNotIn(filename, monolith)
+                source = (owner_root / "src/tests" / filename).read_text(encoding="utf-8")
+                expected = {
+                    "pg_v3_truth_review_effect_tests.rs": 2,
+                    "pg_v3_admission_race_tests.rs": 3,
+                    "pg_v3_operator_cli_tests.rs": 3,
+                    "pg_v5_ordered_children_tests.rs": 1,
+                    "pg_v6_tenant_ingress_tests.rs": 1,
+                    "pg_v3_temporal_cross_queue_tests.rs": 1,
+                }[filename]
+                self.assertEqual(source.count("#[tokio::test]"), expected)
+                declared = re.findall(r"#\[tokio::test\]\s+(?:#\[[^\]]+\]\s+)*async fn ([a-z0-9_]+)\s*\(", source)
+                self.assertEqual(len(declared), source.count("#[tokio::test]"))
+                physical_test_names.extend(declared)
+                self.assertFalse((root / "app/rust/crates/integration_harness/src/tests" / filename).exists())
+        self.assertIn("pg_v3_raw_source_concurrent_update_is_fenced", physical_test_names)
+        self.assertIn("pg_v3_native_operator_cli_least_privilege_issue_revoke", physical_test_names)
+        self.assertIn("pg_v3_v4_live_parent_child_operator_attestation_effect_receipt", physical_test_names)
+        self.assertIn("pg_v3_v5_live_ordered_two_child_operator_attestations", physical_test_names)
+        self.assertIn("pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect", physical_test_names)
+        self.assertIn("pg_v3_hitl_concurrent_mutation_fenced", physical_test_names)
+        self.assertIn("pg_v3_tenant_ingress_native_login_and_rls_provenance", physical_test_names)
+        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 10)
+        self.assertEqual(len([name for name in physical_test_names if name.startswith("temporal_effect_v3_")]), 1)
+        self.assertEqual(len(physical_test_names), 11, "a new PG E2E must be assigned to a mandatory filter")
+        self.assertEqual(set(SUITE_OWNERS["pg_effect_v3"]["paths"]) & {
+            "app/rust/crates/integration_harness/src/lib.rs",
+        }, set())
+        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 10))
+        self.assertIn("app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql",
+                      SUITE_OWNERS["pg_effect_v3"]["paths"])
+        quarantine = self.impact("app/db/migrations/20261125_0013_tenant_quarantine_preflight_v1.sql")
+        self.assertEqual(quarantine["scope"], "full")
+        self.assertIn("pg_effect_v3", quarantine["selected_suites"])
+        self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
+        self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
+        self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
+
+    def test_pg_runner_does_not_require_legacy_harness_or_drop_live_shards(self) -> None:
+        self.assertEqual(E2E_PG_SHARDS, ("pg_temporal", "verify_d"))
+        self.assertEqual(E2E_OUTBOX_SHARDS, ("outbox",))
+        self.assertEqual(
+            set().union(*(set(names) for names in E2E_RUNNER_PARTITIONS.values())),
+            set(E2E_SHARD_RUNS),
+        )
+        self.assertEqual(sum(len(names) for names in E2E_RUNNER_PARTITIONS.values()), len(E2E_SHARD_RUNS))
+        self.assertEqual({suite for shard in E2E_PG_SHARDS
+                          for suite, *_ in E2E_SHARD_RUNS[shard]}, {"pg_temporal_v3", "pg_effect_v3"})
+        self.assertEqual(SUITE_OWNERS["outbox_a14"]["runtime_binaries"], {
+            "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
+        })
+        self.assertEqual(E2E_SHARD_RUNS["outbox"], (("outbox_a14", "outbox_a14_", 9),))
+        self.assertEqual(E2E_SHARD_RUNS["qdrant_knowledge"], (("knowledge_a13", "knowledge_a13_", 3),))
+        self.assertEqual(E2E_SHARD_RUNS["vector"], (
+            ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+            ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
+            ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v6"], (
+            ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v7"], (
+            ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v2"], (
+            ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_dataforseo"], (
+            ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_acquisition"], (
+            ("acquisition_native_v2", "acquisition_native_v2_", 2),
+            ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
+            ("mixed_pure_composition_native_v1", "mixed_pure_native_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_seo_steps"], (
+            ("seo_steps_native_v2", "seo_steps_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_truth"], (
+            ("truth_native_v2", "truth_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_semantic"], (
+            ("semantic_pure_native_v2", "semantic_pure_native_v2_", 1),
+        ))
+        self.assertEqual(
+            SUITE_OWNERS["semantic_pure_native_v2"]["runtime_binaries"]["INTEGRATION_SEMANTIC_PURE_OWNER_BIN"],
+            "temporal_semantic_pure",
+        )
+        self.assertEqual(
+            SUITE_OWNERS["semantic_pure_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_PURE_OWNER_BIN"],
+            "temporal_acquisition_pure",
+        )
+        for name, owner_bin in (
+            ("seo_steps_native_v2", "temporal_seo_steps_pure"),
+            ("truth_native_v2", "temporal_truth_pure"),
+        ):
+            self.assertIn(owner_bin, SUITE_OWNERS[name]["prepare"])
+            self.assertIn(owner_bin, SUITE_OWNERS[name]["runtime_binaries"].values())
+            self.assertEqual(SUITE_OWNERS[name]["command"][7], f"{name}_")
+            self.assertIn(owner_bin, SUITE_OWNERS["one_step_grant_native_v1"]["prepare"])
+            self.assertIn(owner_bin, SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"].values())
+        self.assertEqual(
+            SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"]["INTEGRATION_SEO_STEPS_PURE_OWNER_BIN"],
+            "temporal_seo_steps_pure",
+        )
+        self.assertEqual(
+            SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"]["INTEGRATION_TRUTH_PURE_OWNER_BIN"],
+            "temporal_truth_pure",
+        )
+        self.assertEqual(
+            SUITE_OWNERS["acquisition_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN"],
+            "acquisition_source_issuer",
+        )
+        self.assertIn(
+            "acquisition_source_issuer", SUITE_OWNERS["acquisition_native_v2"]["prepare"]
+        )
+        self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["runtime_binaries"], {
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+            "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+        })
+        self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["stage_binaries"], {
+            "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
+        })
+        self.assertIn("temporal_orchestrator/legacy-qdrant-v1",
+                      SUITE_OWNERS["temporal_qdrant_v8"]["prepare"][-1])
+        self.assertIn("temporal_orchestrator/legacy-workflows",
+                      SUITE_OWNERS["temporal_qdrant_v8"]["prepare"][-1])
+        self.assertEqual(SUITE_OWNERS["temporal_mixed_v6_contract"]["runtime_binaries"], {
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+            "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+        })
+        self.assertEqual(SUITE_OWNERS["temporal_mixed_v6_contract"]["command"][7], "mixed_v6_")
+        self.assertEqual(SUITE_OWNERS["temporal_mixed_v7_produced"]["command"][7], "mixed_v7_")
+        self.assertEqual(SUITE_OWNERS["temporal_mixed_v2_native"]["command"][7], "mixed_v2_native_")
+        self.assertEqual(
+            SUITE_OWNERS["temporal_mixed_v7_produced"]["runtime_binaries"],
+            SUITE_OWNERS["temporal_mixed_v6_contract"]["runtime_binaries"],
+        )
+        self.assertEqual(
+            SUITE_OWNERS["temporal_mixed_v2_native"]["runtime_binaries"],
+            SUITE_OWNERS["temporal_mixed_v6_contract"]["runtime_binaries"],
+        )
+        self.assertIn("20261125_0023_qdrant_owner_v2_admission.sql",
+                      " ".join(SUITE_OWNERS["temporal_mixed_v2_native"]["paths"]))
+        self.assertIn("20261125_0021_pg_vector_projection_v1.sql",
+                      " ".join(SUITE_OWNERS["temporal_mixed_v7_produced"]["paths"]))
+        self.assertIn("temporal_pg_effects", SUITE_OWNERS["temporal_mixed_v6_contract"]["prepare"])
+        self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["command"][3],
+                         "integration_qdrant_temporal_e2e")
+        self.assertIn("app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+                      SUITE_OWNERS["temporal_qdrant_v8"]["paths"])
+        self.assertIn("app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        self.assertIn("app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        self.assertIn("app/db/migrations/20261125_0014_qdrant_projection_run_status_start_fence.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        for migration in (
+            "20261125_0010_qdrant_projection_operator_ledger.sql",
+            "20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+            "20261125_0014_qdrant_projection_run_status_start_fence.sql",
+        ):
+            with self.subTest(migration=migration):
+                report = self.impact("app/db/migrations/" + migration)
+                self.assertEqual(report["scope"], "full")
+                self.assertIn("vector_admitted_projection", report["selected_suites"])
+                self.assertIn(
+                    ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+                    [(suite, filter_, count) for suite, _, filter_, count in
+                     e2e_shard_commands_for_report(report)["vector"]],
+                )
+        self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
+                      E2E_SHARD_RUNS["pg_app_delivery"])
+
+    def test_real_qdrant_owner_discovers_each_native_projection_test_exactly_once(self) -> None:
+        # All five tests use a real Qdrant container. The new PG-admitted
+        # external effect must never disappear behind the older qdrant_rest_
+        # filter or become a mock-only Python surface test.
+        root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_qdrant_e2e/src"
+        library = (root / "lib.rs").read_text(encoding="utf-8")
+        names: list[str] = []
+        for filename, expected in (
+            ("knowledge_read_tests.rs", 3),
+            ("qdrant_rest_projection_tests.rs", 1),
+            ("admitted_qdrant_projection_tests.rs", 1),
+        ):
+            self.assertEqual(library.count(f'include!("tests/{filename}")'), 1)
+            source = (root / "tests" / filename).read_text(encoding="utf-8")
+            self.assertEqual(source.count("#[tokio::test]"), expected)
+            declared = re.findall(
+                r"#\[tokio::test\]\s+(?:#\[[^\]]+\]\s+)*async fn ([a-z0-9_]+)\s*\(",
+                source,
+            )
+            self.assertEqual(len(declared), expected)
+            names.extend(declared)
+        selected = {
+            "knowledge_a13": ("knowledge_a13_", 3),
+            "vector_projection": ("qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+            "vector_admitted_projection": (
+                "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1,
+            ),
+        }
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(names), 5)
+        for suite, (prefix, count) in selected.items():
+            self.assertEqual(SUITE_OWNERS[suite]["command"][3], "integration_qdrant_e2e")
+            self.assertEqual(SUITE_OWNERS[suite]["command"][7], prefix)
+            self.assertEqual(sum(name.startswith(prefix) for name in names), count)
+        self.assertEqual({name for name in names if name.startswith("admitted_qdrant_")},
+                         {"admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc"})
+        self.assertEqual({suite for rows in E2E_SHARD_RUNS.values()
+                          for suite, *_ in rows if suite in selected}, set(selected))
+
+    def test_native_temporal_qdrant_child_is_new_physical_exact_filter_not_vector_alias(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_qdrant_temporal_e2e"
+        manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["package"]["name"], "integration_qdrant_temporal_e2e")
+        self.assertEqual(manifest["features"]["default"], [])
+        self.assertNotIn("integration_qdrant_e2e", manifest["dependencies"])
+        library = (root / "src/lib.rs").read_text(encoding="utf-8")
+        name = "qdrant_v8_native_temporal_history_operator_real_effect"
+        self.assertEqual(library.count('include!("tests/native_temporal_qdrant_tests.rs")'), 1)
+        test_source = (root / "src/tests/native_temporal_qdrant_tests.rs").read_text(encoding="utf-8")
+        self.assertEqual(test_source.count(f"async fn {name}()"), 1)
+        self.assertEqual(test_source.count("#[tokio::test]"), 1)
+        for proof in ("PostgresHarness::start()", "QdrantHarness::start()",
+                      "TemporalHarness::start()", "INTEGRATION_QDRANT_EFFECT_WORKER_BIN",
+                      "INTEGRATION_EFFECT_DAG_WORKER_BIN"):
+            self.assertIn(proof, test_source)
+        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
+            ("temporal_qdrant_v8", name, 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v6"], (
+            ("temporal_mixed_v6_contract", "mixed_v6_", 3),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v7"], (
+            ("temporal_mixed_v7_produced", "mixed_v7_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_mixed_v2"], (
+            ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_dataforseo"], (
+            ("dataforseo_native_v2", "dataforseo_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_acquisition"], (
+            ("acquisition_native_v2", "acquisition_native_v2_", 2),
+            ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
+            ("mixed_pure_composition_native_v1", "mixed_pure_native_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_seo_steps"], (
+            ("seo_steps_native_v2", "seo_steps_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_truth"], (
+            ("truth_native_v2", "truth_native_v2_", 1),
+        ))
+        self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
+        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], (
+            "temporal_mixed_v6", "temporal_mixed_v7",
+            "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+            "temporal_seo_steps", "temporal_truth", "temporal_semantic",
+        ))
+        self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"],
+                         ("temporal_qdrant",))
+
+    def test_full_real_e2e_shards_cover_all_68_including_optional_certification(self) -> None:
+        # Select all known live sources, including the optional canonical
+        # certification fixture. Source suite selection and runner shard
+        # execution must agree even when exact full-impact cargo scope varies.
+        report = self.impact(
+            ".github/workflows/ci.yml",
+            "app/rust/crates/graph_neo4j/src/lib.rs",
+            "app/rust/crates/vector_qdrant/src/lib.rs",
+            "app/rust/services/temporal/src/main.rs",
+            TRUTH_FIXTURE_PREFIX + "candidate.html",
+        )
+        self.assertEqual(report["scope"], "full")
+        shards = e2e_shard_commands_for_report(report)
+        self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
+        self.assertTrue(all(shards[shard] for shard in shards))
+        self.assertEqual(
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 43
+        )
+        self.assertEqual(
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 25
+        )  # Architecture regressions incl. live mixed E2E, catalog and Truth cert.
+        self.assertEqual(
+            [(name, test_filter) for rows in shards.values()
+             for name, _, test_filter, _ in rows if name == "temporal_restart"],
+            [("temporal_restart", "canonical_temporal_manual_editorial_resumes_after_worker_restart"),
+             ("temporal_restart", "canonical_temporal_activity_history_wire_shape"),
+             ("temporal_restart", "canonical_temporal_blocked_review_ends_for_rework_without_publication")],
+        )
+        expected_sources = set(SUITE_OWNERS)
+        self.assertEqual({name for rows in shards.values() for name, *_ in rows}, expected_sources)
+
+    def test_full_real_e2e_shards_fail_closed_when_unknown_or_duplicate(self) -> None:
+        report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
+        self.assertEqual(report["scope"], "full")
+        malformed = dict(E2E_SHARD_RUNS)
+        malformed["verify_d"] = tuple(spec for spec in malformed["verify_d"]
+                                      if spec[0] != "pg_effect_v3")
+        with patch.dict("ci_impact.E2E_SHARD_RUNS", malformed, clear=True):
+            with self.assertRaisesRegex(ValueError, "does not cover|lost a mandatory"):
+                e2e_shard_commands_for_report(report)
+        duplicated = dict(E2E_SHARD_RUNS)
+        duplicated["pg_app_delivery"] = (*duplicated["pg_app_delivery"], duplicated["pg_app_delivery"][0])
+        with patch.dict("ci_impact.E2E_SHARD_RUNS", duplicated, clear=True):
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                e2e_shard_commands_for_report(report)
+        scoped = self.impact("app/rust/services/temporal/src/main.rs")
+        with self.assertRaisesRegex(ValueError, "non-full"):
+            e2e_shard_commands_for_report(scoped)
+
+    def test_real_canonical_temporal_test_inventory_is_exactly_sharded(self) -> None:
+        source_root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_temporal_e2e/src/tests"
+        declared = set()
+        for source in source_root.glob("*.rs"):
+            declared.update(re.findall(
+                r"(?:async\s+)?fn\s+(canonical_temporal_[a-z0-9_]+)\s*\(",
+                source.read_text(encoding="utf-8"),
+            ))
+        expected = {filter_name for specs in E2E_SHARD_RUNS.values()
+                    for suite, filter_name, _ in specs if suite == "temporal_restart"}
+        self.assertEqual(declared, expected,
+                         "a newly added canonical Temporal regression needs an exact E2E shard")
 
     def test_scoped_ci_keeps_every_selected_real_suite_in_architecture(self) -> None:
         for path in (
@@ -128,6 +577,200 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(
                     assignments["architecture-and-rust"], suite_commands_for_report(report),
                 )
+
+    def test_new_pure_owner_changes_select_independent_real_temporal_replay_suites(self) -> None:
+        from ci_impact import (
+            SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES, TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+        )
+
+        owners = {
+            **self.owners,
+            "app/rust/services/temporal_seo_steps_pure": "temporal_seo_steps_pure",
+            "app/rust/services/temporal_truth_pure": "temporal_truth_pure",
+            "app/rust/crates/truth_domain": "truth_domain",
+        }
+        reverse = {
+            **self.reverse,
+            "temporal_seo_steps_pure": set(),
+            "temporal_truth_pure": set(),
+            "truth_domain": set(),
+        }
+        for changed, suite in (
+            ("app/rust/services/temporal_seo_steps_pure/src/main.rs", "seo_steps_native_v2"),
+            ("app/rust/crates/seo_steps/src/operation_owner_schema_json.rs", "seo_steps_native_v2"),
+            ("app/rust/services/temporal_truth_pure/src/main.rs", "truth_native_v2"),
+            ("app/rust/crates/truth_domain/src/operations.rs", "truth_native_v2"),
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertIn(suite, report["selected_suites"])
+                command = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])[suite]
+                self.assertIn(f"{suite}_", command)
+                self.assertEqual(
+                    SUITE_OWNERS[suite]["runtime_binaries"],
+                    SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES
+                    if suite == "seo_steps_native_v2" else TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+                )
+                self.assertEqual(E2E_SHARD_RUNS[
+                    "temporal_seo_steps" if suite == "seo_steps_native_v2" else "temporal_truth"
+                ][0][-1], 1)
+
+    def test_real_orchestrator_edit_selects_pure_and_v4_parent_child_replay_without_old_workers(self) -> None:
+        from ci_impact import PURE_V3_E2E_PREPARE, PURE_V3_E2E_RUNTIME_BINARIES, WORKER_E2E_PREPARE
+
+        impact = analyze(
+            ["app/rust/services/temporal_orchestrator/src/main.rs"],
+            {**self.owners, "app/rust/services/temporal_orchestrator": "temporal_orchestrator"},
+            {**self.reverse, "temporal_orchestrator": set()},
+            head="HEAD", base="BASE",
+        )
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(impact["selected_suites"], [
+            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pg_effect_v3", "pure_dag_v3", "semantic_pure_native_v2", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
+        ])
+        architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
+        self.assertEqual(set(architecture), {
+            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pure_dag_v3", "pg_effect_v3", "semantic_pure_native_v2", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
+        })
+        self.assertIn("pure_v3_", architecture["pure_dag_v3"])
+        self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)
+        self.assertEqual(PURE_V3_E2E_RUNTIME_BINARIES, {
+            "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+        })
+        self.assertEqual(SUITE_OWNERS["pure_dag_v3"]["stage_binaries"], {
+            "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
+        })
+        self.assertIn("legacy-workflows", PURE_V3_E2E_PREPARE[-1])
+
+    def test_pure_v3_runtime_replay_is_selected_by_actual_executor_and_contract_edits(self) -> None:
+        # A V3 Workflow-only source selector is insufficient: the Workflow
+        # executes seo_application's pure DAG and pins operation_protocol's
+        # contracts. Every direct behavioral edit must select server replay.
+        owners = {**self.owners, "app/rust/crates/operation_protocol": "operation_protocol"}
+        reverse = {**self.reverse, "operation_protocol": set()}
+        for changed in (
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/tests.rs",
+            "app/rust/crates/seo_application/src/execution/durable_plan.rs",
+            "app/rust/crates/operation_protocol/src/lib.rs",
+            "app/rust/crates/operation_protocol/src/tests.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertEqual(report["scope"], "scoped")
+                self.assertIn("pure_dag_v3", report["selected_suites"])
+                architecture = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])
+                self.assertEqual(architecture["pure_dag_v3"], list(SUITE_OWNERS["pure_dag_v3"]["command"]))
+                self.assertEqual(suite_commands_by_ci_job(report)["verify"], [])
+        unrelated = analyze(
+            ["app/rust/crates/seo_application/src/drafting.rs"],
+            owners, reverse, head="HEAD", base="BASE",
+        )
+        self.assertNotIn("pure_dag_v3", unrelated["selected_suites"])
+
+    def test_pg_v3_and_v4_parent_child_suite_requires_both_isolated_v3_binaries(self) -> None:
+        changed = "app/rust/services/temporal_pg_effects/src/main.rs"
+        impact = analyze(
+            [changed],
+            {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+            {**self.reverse, "temporal_pg_effects": set()},
+            head="HEAD", base="BASE",
+        )
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(set(impact["selected_suites"]), {
+            "acquisition_native_v2", "dataforseo_native_v2", "one_step_grant_native_v1",
+            "one_step_grant_pg_v1", "external_source_attestation_pg_v1", "pg_effect_v3",
+            "pg_temporal_v3", "temporal_mixed_v2_native",
+            "temporal_mixed_v7_produced",
+        })
+        architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
+        self.assertEqual(architecture["pg_effect_v3"], list(SUITE_OWNERS["pg_effect_v3"]["command"]))
+        self.assertEqual(architecture["pg_temporal_v3"], list(SUITE_OWNERS["pg_temporal_v3"]["command"]))
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator_legacy_qdrant_v1",
+        })
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["stage_binaries"], {
+            "temporal_orchestrator_legacy_qdrant_v1": "temporal_orchestrator",
+        })
+        self.assertIn("temporal_orchestrator/legacy-workflows", SUITE_OWNERS["pg_effect_v3"]["prepare"][-1])
+        self.assertIn("temporal_orchestrator", SUITE_OWNERS["pg_effect_v3"]["prepare"])
+        self.assertIn("temporal_pg_effects", SUITE_OWNERS["pg_effect_v3"]["prepare"])
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+        })
+        self.assertIn("prepare", SUITE_OWNERS["pg_temporal_v3"])
+        self.assertIn("runtime_binaries", SUITE_OWNERS["pg_temporal_v3"])
+        helper_impact = analyze(
+            ["app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs"],
+            {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+            {**self.reverse, "temporal_pg_effects": set()}, head="HEAD", base="BASE",
+        )
+        self.assertIn("pg_temporal_v3", helper_impact["selected_suites"])
+
+    def test_full_only_compiler_handoff_jobs_not_selected_for_scoped_changes(self) -> None:
+        full_only = {
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-pg-app-harness",
+            "rust-e2e-temporal-harness", "rust-e2e-truth-harness", "rust-e2e-pg-harness",
+            "rust-e2e-outbox-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            *E2E_RUNNER_PARTITIONS,
+        }
+        for changed in (
+            "app/rust/services/temporal/src/main.rs",
+            "app/rust/crates/seo_domain/src/publishing.rs",
+            "app/rust/services/temporal_pg_effects/src/main.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze(
+                    [changed],
+                    {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+                    {**self.reverse, "temporal_pg_effects": set()},
+                    head="HEAD", base="BASE",
+                )
+                self.assertEqual(report["scope"], "scoped")
+                self.assertFalse(full_only & set(report["selected_ci_jobs"]))
+        full = self.impact(".github/workflows/ci.yml")
+        self.assertEqual(full["scope"], "full")
+        self.assertEqual(full_only - {"rust-e2e-truth-harness", "rust-truth-e2e"},
+                         full_only & set(full["selected_ci_jobs"]))
+        self.assertNotIn("rust-e2e-truth-harness", full["selected_ci_jobs"])
+        fixture_full = self.impact(".github/workflows/ci.yml", TRUTH_FIXTURE_PREFIX + "candidate.html")
+        self.assertIn("rust-e2e-truth-harness", fixture_full["selected_ci_jobs"])
+        self.assertIn("rust-truth-e2e", fixture_full["selected_ci_jobs"])
+
+    def test_pg_v3_e2e_is_selected_by_real_hitl_mutation_and_shared_protocol(self) -> None:
+        # The V3 effect calls the existing HITL SQL owner directly. A change
+        # there must exercise admitted real-PostgreSQL effects even if neither
+        # the V3 wrapper nor its Temporal service changed.
+        owners = {
+            **self.owners,
+            "app/rust/crates/postgres_store": "postgres_store",
+            "app/rust/crates/operation_protocol": "operation_protocol",
+        }
+        reverse = {**self.reverse, "postgres_store": set(), "operation_protocol": set()}
+        for changed in (
+            "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
+            "app/rust/crates/postgres_store/src/lib.rs",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/operation_protocol/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertEqual(report["scope"], "scoped")
+                self.assertIn("pg_effect_v3", report["selected_suites"])
+                architecture = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])
+                self.assertEqual(architecture["pg_effect_v3"], list(SUITE_OWNERS["pg_effect_v3"]["command"]))
+                self.assertEqual(suite_commands_by_ci_job(report)["verify"], [])
+        unrelated = analyze(
+            ["app/rust/crates/postgres_store/src/sqlx_outbox_adapter.rs"],
+            owners, reverse, head="HEAD", base="BASE",
+        )
+        self.assertNotIn("pg_effect_v3", unrelated["selected_suites"])
 
     def test_full_ci_suite_rebalance_rejects_ungated_or_mismatched_impact(self) -> None:
         report = self.impact(".github/workflows/ci.yml")
@@ -156,7 +799,7 @@ class ImpactFixtures(unittest.TestCase):
             with self.subTest(path=path):
                 report = self.impact(path)
                 self.assertEqual(report["scope"], "full")
-                self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+                self.assertEqual(set(report["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
                 self.assertFalse(worker_release_decision(report, [path], manual=False)["worker_required"])
 
         diagnostic = "automation/report_sccache_failures.py"
@@ -379,25 +1022,23 @@ class ImpactFixtures(unittest.TestCase):
                 }:
                     self.assertIn("draft_qa_scenario", report["selected_suites"])
 
-        # Unit-level QA passes are not enough: ensure the bound E2E command
-        # exercises the actual persistence path with its existing full harness.
+        # Domain policy changes select BOTH the genuine full-infrastructure
+        # Temporal scenario and independent PostgreSQL fault-injection owner.
         self.assertEqual(SUITE_OWNERS["draft_qa_scenario"]["command"][:7], (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_temporal_e2e", "--features", "e2e",
             "--lib",
         ))
-        # One Cargo test filter executes both the successful full scenario
-        # and the SQL fault-injection rollback test, without a second job.
-        self.assertIn("draft_qa_", SUITE_OWNERS["draft_qa_scenario"]["command"])
+        self.assertEqual(SUITE_OWNERS["draft_qa_pg_persistence"]["command"][3], "integration_pg_app_e2e")
         repo = Path(__file__).resolve().parents[1]
-        scenario_test = repo / "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs"
-        fault_test = repo / "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs"
+        scenario_test = repo / "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs"
+        fault_test = repo / "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs"
         self.assertIn("fn draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness()", scenario_test.read_text())
         self.assertIn("fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft()", fault_test.read_text())
-        self.assertIn("draft_qa_scenario", self.impact("app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs")["selected_suites"])
+        self.assertIn("draft_qa_pg_persistence", self.impact("app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs")["selected_suites"])
         self.assertIn("cms_revision_", SUITE_OWNERS["cms_review_revision"]["command"])
-        cms_test = repo / "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs"
+        cms_test = repo / "app/rust/crates/integration_pg_app_e2e/src/tests/cms_publish_pg_tests.rs"
         self.assertIn("fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_body_sections()", cms_test.read_text())
-        self.assertIn("cms_atomic_artifact_fault", cms_test.read_text())
+        self.assertIn("cms_revision_", cms_test.read_text())
 
     def test_main_prime_no_compilation_for_runtime_fixture_only(self) -> None:
         report = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path.html")
@@ -560,7 +1201,7 @@ class ImpactFixtures(unittest.TestCase):
         )
         self.assertEqual(result["scope"], "full")
         self.assertEqual(set(result["affected_crates"]), set(reverse))
-        self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(result["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
 
     def test_isolated_gsc_does_not_trigger_other_services(self) -> None:
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
@@ -568,6 +1209,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertTrue(result["mandatory_full_ci_gate"])
         self.assertEqual(result["selected_suites"], [])
         self.assertEqual(result["selected_images"], [])
+
+    def test_acquisition_source_issuer_change_selects_exact_native_temporal_e2e(self) -> None:
+        report = self.impact("app/rust/services/acquisition_source_issuer/src/main.rs")
+        self.assertIn("acquisition_native_v2", report["selected_suites"])
+        self.assertIn(
+            ("acquisition_native_v2", "acquisition_native_v2_", 2),
+            E2E_SHARD_RUNS["temporal_acquisition"],
+        )
 
     def test_temporal_source_selects_real_restart_e2e_and_worker_image(self) -> None:
         result = self.impact("app/rust/services/temporal/src/main.rs")
@@ -580,6 +1229,55 @@ class ImpactFixtures(unittest.TestCase):
             "INTEGRATION_TEMPORAL_WORKER_BIN", "INTEGRATION_OUTBOX_WORKER_BIN",
         })
         self.assertNotIn("--target-dir", selected["prepare"])
+
+    def test_dataforseo_owner_changes_cannot_skip_real_pg_denial(self) -> None:
+        for path in (
+            "app/rust/services/temporal_dataforseo/src/main.rs",
+            "app/rust/crates/dataforseo_contracts/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_owner_pg_tests.rs",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertIn("dataforseo_owner_pg_v1", report["selected_suites"])
+                self.assertIn("architecture-and-rust", report["selected_ci_jobs"])
+                command = SUITE_OWNERS["dataforseo_owner_pg_v1"]["command"]
+                self.assertEqual(command[3], "integration_pg_app_e2e")
+                self.assertEqual(command[7], "dataforseo_owner_pg_")
+                self.assertNotIn("INTEGRATION_TEMPORAL_WORKER_BIN",
+                                 SUITE_OWNERS["dataforseo_owner_pg_v1"].get("runtime_binaries", {}))
+
+    def test_dataforseo_new_migration_cannot_skip_real_pg_shard(self) -> None:
+        report = self.impact("app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql")
+        self.assertEqual(report["scope"], "full")
+        self.assertIn("dataforseo_owner_pg_v1", report["selected_suites"])
+        self.assertIn(
+            ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
+            E2E_SHARD_RUNS["pg_app_truth"],
+        )
+
+    def test_paid_dataforseo_v2_owner_is_required_in_existing_pg_app_truth_shard(self) -> None:
+        suite = "dataforseo_paid_owner_pg_v2"
+        owner = SUITE_OWNERS[suite]
+        self.assertEqual(
+            owner["command"],
+            ("cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+             "--lib", "dataforseo_paid_owner_v2_", "--locked", "--", "--nocapture"),
+        )
+        self.assertIn(suite, FULL_VERIFY_E2E_SUITES)
+        self.assertIn(
+            (suite, "dataforseo_paid_owner_v2_", 1), E2E_SHARD_RUNS["pg_app_truth"],
+        )
+        for path in (
+            "app/db/migrations/20261128_0001_dataforseo_paid_owner_v2.sql",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_paid_owner_v2_tests.rs",
+            "app/rust/services/temporal_dataforseo/src/paid_provider.rs",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertIn(suite, report["selected_suites"])
+                self.assertIn("architecture-and-rust", report["selected_ci_jobs"])
+                self.assertIn("verify", report["selected_ci_jobs"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
@@ -654,7 +1352,8 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/infrastructure/src/adapters/sqlx_hitl_adapter.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_step_ledger_adapter.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_runtime_store.rs",
-            "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/integration_outbox_e2e/src/tests/pg_migration_upgrade_tests.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
@@ -694,14 +1393,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_real_neighbor_adapter_change_selects_existing_qdrant_a13(self) -> None:
-        result = self.impact("app/rust/crates/infrastructure/src/adapters/semantic_neighbor_search_adapter.rs")
+        result = self.impact("app/rust/crates/runtime_composition/src/adapters/semantic_neighbor_search_adapter.rs")
         self.assertEqual(result["analysis"], "scoped")
         self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_editorial_source_context_port_changes_select_real_qdrant_a13(self) -> None:
         for path in (
             "app/rust/crates/seo_application/src/drafting.rs",
-            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
+            "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
@@ -720,8 +1419,27 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_graph_change_includes_reverse_consumers(self) -> None:
         got = self.impact("app/rust/crates/graph_neo4j/src/lib.rs")
-        self.assertEqual(set(got["affected_crates"]), {"graph_neo4j", "analytics_svc", "temporal_worker"})
+        self.assertEqual(
+            set(got["affected_crates"]),
+            {"graph_neo4j", "runtime_composition", "analytics_svc", "temporal_worker",
+             "outbox_worker", "integration_harness"},
+        )
         self.assertEqual(got["selected_suites"], ["graph_query"])
+        self.assertEqual(
+            dict(suite_commands_for_report(got))["graph_query"],
+            ["cargo", "test", "-p", "integration_graph_e2e", "--features", "e2e",
+             "--lib", "graph_capability_", "--locked", "--", "--nocapture"],
+        )
+
+    def test_new_graph_link_e2e_source_selects_existing_graph_owner(self) -> None:
+        for path in (
+            "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+            "app/rust/crates/integration_harness/src/containers.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertIn("graph_query", result["selected_suites"])
+                self.assertEqual(dict(suite_commands_for_report(result))["graph_query"][7], "graph_capability_")
 
     def test_http_change_includes_gsc_only(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/http_client/src/lib.rs")["affected_crates"]), {"http_client", "gsc_sync"})
@@ -730,9 +1448,10 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/crates/vector_qdrant/src/lib.rs")
         self.assertEqual(
             set(result["affected_crates"]),
-            {"vector_qdrant", "temporal_worker"},
+            {"vector_qdrant", "runtime_composition", "temporal_worker", "outbox_worker",
+             "integration_harness"},
         )
-        self.assertEqual(result["selected_suites"], ["vector_projection"])
+        self.assertEqual(result["selected_suites"], ["temporal_qdrant_v8", "vector_admitted_projection", "vector_projection"])
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})
@@ -790,6 +1509,8 @@ class ImpactFixtures(unittest.TestCase):
             "automation/check_ci_workflow_contract.py",
             "automation/check_expert_core_activation_contract.py",
             "automation/report_sccache_failures.py",
+            "automation/measure_owner_rebuild.py",
+            "automation/check_owner_rebuild.py",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
@@ -799,6 +1520,34 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(result["selected_images"], [])
                 self.assertEqual(result["selected_ci_jobs"], ["verify"])
                 self.assertIn("known CI-only", result["classified_inputs"][path])
+
+    def test_physical_study_only_pair_skips_worker_release_but_never_runtime_checks(self) -> None:
+        study_files = [
+            "automation/measure_owner_rebuild.py",
+            "automation/check_owner_rebuild.py",
+        ]
+        study = self.impact(*study_files)
+        self.assertEqual(study["scope"], "none")
+        self.assertEqual(study["selected_ci_jobs"], ["verify"])
+        self.assertFalse(worker_release_decision(study, study_files, manual=False)["worker_required"])
+
+        runtime_path = "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
+        runtime = self.impact(*study_files, runtime_path)
+        self.assertEqual(runtime["scope"], "scoped")
+        self.assertIn("temporal_restart", runtime["selected_suites"])
+        self.assertIn("architecture-and-rust", runtime["selected_ci_jobs"])
+        self.assertIn("verify", runtime["selected_ci_jobs"])
+        self.assertTrue(worker_release_decision(
+            runtime, [*study_files, runtime_path], manual=False,
+        )["worker_required"])
+
+        unknown_path = "automation/unreviewed_physical_override.py"
+        unknown = self.impact(*study_files, unknown_path)
+        self.assertEqual(unknown["scope"], "full")
+        self.assertEqual(set(unknown["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
+        self.assertTrue(worker_release_decision(
+            unknown, [*study_files, unknown_path], manual=False,
+        )["worker_required"])
 
     def test_unknown_ci_and_impact_control_files_still_fail_closed(self) -> None:
         for path in (
@@ -816,7 +1565,7 @@ class ImpactFixtures(unittest.TestCase):
             with self.subTest(path=path):
                 result = self.impact(path)
                 self.assertEqual(result["scope"], "full")
-                self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
+                self.assertEqual(set(result["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
 
     def test_ci_only_file_does_not_hide_a_real_runtime_change(self) -> None:
         result = self.impact(
@@ -884,14 +1633,16 @@ class ImpactFixtures(unittest.TestCase):
         outcome = self.impact(path)
         self.assertEqual(outcome["scope"], "scoped")
         self.assertIn("draft_qa_scenario", outcome["selected_suites"])
+        self.assertIn("draft_qa_pg_persistence", outcome["selected_suites"])
         self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
-        self.assertIn("draft_qa_", dict(suite_commands_for_report(outcome))["draft_qa_scenario"])
+        self.assertIn("draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft",
+                      dict(suite_commands_for_report(outcome))["draft_qa_pg_persistence"])
 
     def test_planning_and_projection_atomicity_select_actual_postgres_suite(self) -> None:
         for path in (
             "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
             "app/rust/crates/seo_domain/src/link_recommendation.rs",
-            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
+            "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
@@ -964,9 +1715,9 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
 
     def test_real_temporal_editorial_gate_e2e_selects_both_runtime_and_cms(self) -> None:
-        outcome = self.impact("app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs")
+        outcome = self.impact("app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs")
         self.assertIn("temporal_restart", outcome["selected_suites"])
-        self.assertIn("cms_review_revision", outcome["selected_suites"])
+        self.assertNotIn("cms_review_revision", outcome["selected_suites"])
         command = dict(suite_commands_for_report(outcome))["temporal_restart"]
         self.assertIn("canonical_temporal_", command)
 
@@ -1090,7 +1841,7 @@ class ImpactFixtures(unittest.TestCase):
             {name for name, owner in SUITE_OWNERS.items() if owner["on_unknown_global_input"]},
         )
         self.assertEqual(outcome["selected_images"], ["temporal-worker"])
-        self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertEqual(set(outcome["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
         self.assertTrue(outcome["full_scope_reasons"])
 
     def test_unknown_or_missing_suite_in_report_is_rejected(self) -> None:
@@ -1105,7 +1856,8 @@ class ImpactFixtures(unittest.TestCase):
     def test_multiple_changes_include_all_consumers(self) -> None:
         self.assertEqual(
             set(self.impact("app/rust/services/gsc_sync/src/main.rs", "app/rust/crates/graph_neo4j/src/lib.rs")["affected_crates"]),
-            {"gsc_sync", "graph_neo4j", "analytics_svc", "temporal_worker"},
+            {"gsc_sync", "graph_neo4j", "runtime_composition", "analytics_svc",
+             "temporal_worker", "outbox_worker", "integration_harness"},
         )
 
     def test_optional_dev_and_build_path_dependencies_in_graph(self) -> None:

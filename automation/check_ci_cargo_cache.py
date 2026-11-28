@@ -16,12 +16,29 @@ import report_sccache_failures as sccache_reporter
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust", "verify")
+OWNERS = (
+    "architecture-and-rust", "verify",
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
+    "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
+    "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
+    "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries", "rust-e2e-qdrant-effects-binaries",
+)
+# V6.1's single PR compiler writer demonstrably regressed the mandatory
+# Temporal cold build by 100 seconds despite zero cache write errors. Restore
+# the prior invariant: every PR runner reads trusted-main objects only.
+READERS = OWNERS[1:]
+SOURCE_BOUND_COMPILERS = frozenset({
+    "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-qdrant-temporal-harness",
+    "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
+    "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-truth-harness",
+})
 
 
 def validate_cache_policy(workflow: str) -> None:
     # Split job blocks by YAML's two-space job indentation, not by nested steps.
-    blocks = []
+    blocks: dict[str, str] = {}
     for owner in OWNERS:
         marker = f"  {owner}:\n"
         if workflow.count(marker) != 1:
@@ -32,13 +49,13 @@ def validate_cache_policy(workflow: str) -> None:
             if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
                 break
             body.append(line)
-        blocks.append("\n".join(body))
-    saver, verify = blocks
+        blocks[owner] = "\n".join(body)
+    saver, verify = blocks["architecture-and-rust"], blocks["verify"]
     # The trusted-main compiler cache is useful only when its rustc profile
     # matches the PR reader. A one-sided DEBUG=0 change silently invalidates
     # every sccache entry, turning a warm regression into a cold build.
     prime = workflow.split("  rust-cache-prime:\n", 1)[1].split("  select-image:\n", 1)[0]
-    for name, block in (("PR architecture", saver), ("PR verify", verify), ("accepted-main", prime)):
+    for name, block in (*blocks.items(), ("accepted-main", prime)):
         for profile in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{profile}_DEBUG: "0"'
             if block.count(key) != 1:
@@ -52,10 +69,40 @@ def validate_cache_policy(workflow: str) -> None:
         raise ValueError("sccache must receive authenticated GitHub cache service environment")
     if saver.count("uses: actions/cache@v4") != 1:
         raise ValueError("architecture must be the sole registry cache writer")
-    if "uses: actions/cache@v4" in verify or "uses: actions/cache/save" in verify:
-        raise ValueError("verify must not initialize a second Cargo registry writer")
-    if verify.count("uses: actions/cache/restore@v4") != 1:
-        raise ValueError("verify must restore Cargo sources without writing cache")
+    for owner, block in blocks.items():
+        if owner == "architecture-and-rust":
+            continue
+        if "uses: actions/cache@v4" in block or "uses: actions/cache/save" in block:
+            raise ValueError(f"{owner} must not initialize a second Cargo registry writer")
+        if block.count("uses: actions/cache/restore@v4") != 1:
+            raise ValueError(f"{owner} must restore Cargo sources without writing cache")
+        if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in block:
+            raise ValueError(f"{owner} must use READ_ONLY compiler object cache")
+        if owner == "rust-e2e-temporal-harness" and (
+            "CARGO_BUILD_JOBS:" in block
+            or "SCCACHE_ERROR_LOG:" in block
+            or "SCCACHE_LOG:" in block
+            or "Report native exact-source PR Temporal cache hits" in block
+        ):
+            raise ValueError("Temporal PR compiler must not repeat V6.1 cache write-pressure experiment")
+        if ("SCCACHE_GHA_ENABLED: \"on\"" not in block
+                or "uses: actions/github-script@v8" not in block
+                or "core.exportVariable('ACTIONS_RESULTS_URL'," not in block
+                or "core.exportVariable('ACTIONS_RUNTIME_TOKEN'," not in block):
+            raise ValueError(f"{owner} must authenticate the read-only sccache backend")
+        if owner in SOURCE_BOUND_COMPILERS and (
+            "ref: ${{ github.sha }}" not in block
+            or "--report automation/reports/ci_impact.json" not in block
+            or "uses: actions/upload-artifact@v7" not in block
+            or "name: ci-owner-impact" not in block
+            or f"contains(fromJSON(needs.impact.outputs.selected_ci_jobs), '{owner}')" not in block
+        ):
+            raise ValueError(f"{owner} must compile and publish only exact-source evidence")
+    if ("--compile-harness-only" not in blocks["rust-e2e-truth-harness"]
+            or any("--compile-harness-only" in block for name, block in blocks.items()
+                   if name != "rust-e2e-truth-harness")
+            or "rust-e2e-truth-harness" not in blocks["rust-e2e-truth-harness"]):
+        raise ValueError("optional Truth certification is the only allowed broad test compiler")
     if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in verify:
         raise ValueError("verify Cargo compilation must use read-only compiler cache")
     for step_name in (
@@ -63,12 +110,12 @@ def validate_cache_policy(workflow: str) -> None:
         "Reuse trusted main Rust compiler objects for full workspace tests",
         "Authorize full-scope Rust cache reads",
         "Restore shared Cargo dependency sources without a second writer",
-        "Full workspace Rust unit tests (parallel with real E2E)",
+        "Full workspace Rust tests and both mandatory policy phases",
     ):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         if "        if: needs.impact.outputs.cargo_scope == 'full'" not in step:
             raise ValueError(f"verify Cargo step {step_name} must be full-only")
-    for block in blocks:
+    for block in blocks.values():
         # Reject target *cache payloads*, not valid references to a job-local
         # build directory in an unrelated environment variable or test step.
         for step in re.split(r"(?m)^      - ", block):
@@ -94,18 +141,46 @@ class CargoCachePolicy(unittest.TestCase):
     def test_actual_ci_has_one_registry_writer_and_no_target_archive(self) -> None:
         validate_cache_policy((ROOT / ".github/workflows/ci.yml").read_text())
 
-    def test_a_second_saver_in_python_verify_is_rejected(self) -> None:
+    def test_a_second_saver_in_any_parallel_rust_reader_is_rejected(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
-        changed = original.replace("uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1)
-        with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
+        for owner in OWNERS[1:]:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed = original[:start] + original[start:].replace(
+                    "uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1,
+                )
+                with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
+                    validate_cache_policy(changed)
+
+    def test_no_pr_compiler_can_repeat_the_measured_write_pressure_regression(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertEqual(len(READERS), len(OWNERS) - 1)
+        self.assertEqual(original.count("SCCACHE_GHA_RW_MODE: READ_WRITE"), 1)
+        reader_start = original.index("  rust-e2e-graph-harness:\n")
+        changed = original[:reader_start] + original[reader_start:].replace(
+            "SCCACHE_GHA_RW_MODE: READ_ONLY", "SCCACHE_GHA_RW_MODE: READ_WRITE", 1,
+        )
+        with self.assertRaisesRegex(ValueError, "READ_ONLY compiler object cache"):
+            validate_cache_policy(changed)
+        temporal_start = original.index("  rust-e2e-temporal-harness:\n")
+        changed = original[:temporal_start] + original[temporal_start:].replace(
+            "SCCACHE_GHA_RW_MODE: READ_ONLY", "SCCACHE_GHA_RW_MODE: READ_WRITE", 1,
+        )
+        with self.assertRaisesRegex(ValueError, "READ_ONLY compiler object cache"):
+            validate_cache_policy(changed)
+        changed = original[:temporal_start] + original[temporal_start:].replace(
+            '      SCCACHE_GHA_RW_MODE: READ_ONLY',
+            '      CARGO_BUILD_JOBS: "3"\n      SCCACHE_GHA_RW_MODE: READ_ONLY', 1,
+        )
+        with self.assertRaisesRegex(ValueError, "write-pressure experiment"):
             validate_cache_policy(changed)
 
     def test_verify_cargo_setup_cannot_run_for_scoped_or_non_rust_changes(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
         changed = original.replace(
-            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "      - name: Full workspace Rust tests and both mandatory policy phases\n"
             "        if: needs.impact.outputs.cargo_scope == 'full'",
-            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "      - name: Full workspace Rust tests and both mandatory policy phases\n"
             "        if: needs.impact.outputs.cargo_scope != 'none'",
             1,
         )
@@ -131,13 +206,15 @@ class CargoCachePolicy(unittest.TestCase):
         original = (ROOT / ".github/workflows/ci.yml").read_text()
         for name in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{name}_DEBUG: "0"'
-            for occurrence in (1, 2, 3):
-                position = original.find(key)
-                if occurrence == 2:
-                    position = original.find(key, position + len(key))
-                self.assertGreaterEqual(position, 0)
+            for owner in (*OWNERS, "rust-cache-prime"):
+                job_start = original.index(f"  {owner}:\n")
+                position = original.find(key, job_start)
+                next_job = re.search(r"(?m)^  [a-z][a-z0-9-]*:\n", original[job_start+len(f"  {owner}:\n"):])
+                end = (job_start + len(f"  {owner}:\n") + next_job.start()) if next_job else len(original)
+                self.assertGreaterEqual(position, job_start)
+                self.assertLess(position, end)
                 changed = original[:position] + f'CARGO_PROFILE_{name}_DEBUG: "2"' + original[position + len(key):]
-                with self.subTest(name=name, occurrence=occurrence):
+                with self.subTest(name=name, owner=owner):
                     with self.assertRaisesRegex(ValueError, "same symbol-free Rust"):
                         validate_cache_policy(changed)
 
@@ -146,6 +223,30 @@ class CargoCachePolicy(unittest.TestCase):
         changed = original.replace("core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);", "// missing token export")
         with self.assertRaisesRegex(ValueError, "authenticated"):
             validate_cache_policy(changed)
+
+    def test_every_cargo_reader_must_authenticate_independent_sccache(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        for owner in READERS:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed_section, count = re.subn(
+                    r"core\.exportVariable\('ACTIONS_RUNTIME_TOKEN', [^\n]*\);",
+                    "// removed signed cache token", original[start:], count=1,
+                )
+                self.assertEqual(count, 1)
+                with self.assertRaisesRegex(ValueError, "authenticate|authenticated"):
+                    validate_cache_policy(original[:start] + changed_section)
+
+    def test_independent_compilers_must_checkout_selected_exact_source(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        for owner in SOURCE_BOUND_COMPILERS:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed = original[:start] + original[start:].replace(
+                    "ref: ${{ github.sha }}", "ref: main", 1,
+                )
+                with self.assertRaisesRegex(ValueError, "exact-source evidence"):
+                    validate_cache_policy(changed)
 
     def test_metrics_distinguish_uncached_target_and_missing_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

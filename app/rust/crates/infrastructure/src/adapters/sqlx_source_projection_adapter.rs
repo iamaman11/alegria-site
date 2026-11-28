@@ -4,7 +4,7 @@ use sqlx::PgPool;
 
 use super::proto_runtime_payload_store::{classify_sqlx, neo4j_rule_upserted, validation_failure};
 use super::sqlx_outbox_adapter::OutboxEnvelope;
-use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
+use super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx;
 use primitives::concept_key::normalize_concept_key;
 use primitives::errors::DomainError;
 use primitives::stable_id::stable_rule_instance_id;
@@ -57,10 +57,10 @@ mod queries {
 
 mod commands {
     use sqlx::types::Json;
-    use sqlx::PgPool;
+    use sqlx::{Postgres, Transaction};
 
     pub(super) async fn upsert_rule_instance(
-        pool: &PgPool,
+        tx: &mut Transaction<'_, Postgres>,
         rule_instance_id: &str,
         context_key: &str,
         rule_type_key: &str,
@@ -93,7 +93,7 @@ mod commands {
             status,
             source_key
         )
-        .execute(pool)
+        .execute(&mut **tx)
         .await?;
         Ok(())
     }
@@ -115,16 +115,14 @@ pub async fn load_source_registry_entries(
         let trust_level = row.trust_level;
         let freshness_ttl_days = row.freshness_ttl_days;
         let override_eligible = row.override_eligible;
-        let effective_trust = if source_type.eq_ignore_ascii_case("government") {
-            10
-        } else {
-            trust_level
-        };
+        // `trust_level` is the curator-owned authoritative tier (1..=5),
+        // not a crawler-inferred lower bound. A prior government=>10 uplift
+        // silently defeated a curator's manual downgrade to tier 1.
         registry.insert(
             key,
             SourceRegistryRecord {
                 source_type,
-                trust_level: effective_trust as i64,
+                trust_level: trust_level as i64,
                 authority_class,
                 independence_group_key,
                 freshness_ttl_days,
@@ -143,30 +141,55 @@ pub async fn persist_from_pipeline_state(
     let context_key = state.context_key.clone();
     let rule_instances = &state.extracted_payload.rule_instances;
 
+    // Validate and lock *all* point identities before the first Truth write.
+    // A previous Qdrant request with unknown outcome must block this entire
+    // legacy batch, including its Neo4j Outbox intents, not merely delivery.
+    let prepared_keys = rule_instances
+        .iter()
+        .map(|rule| {
+            let concept_key = normalize_concept_key(rule.concept_key.as_str()).map_err(|e| {
+                validation_failure(format!("invalid concept_key in rule {:?}: {e}", rule))
+            })?;
+            if rule.status == "verified" && rule.source_key.is_none() {
+                return Err(validation_failure(format!(
+                    "verified rule `{}` in context `{context_key}` is missing source provenance",
+                    rule.rule_type_key
+                )));
+            }
+            let rule_instance_id = stable_rule_instance_id(&[
+                &context_key,
+                &rule.rule_type_key,
+                &concept_key,
+                rule.role_type.as_str(),
+            ]);
+            Ok((rule_instance_id, concept_key))
+        })
+        .collect::<Result<Vec<_>, DomainError>>()?;
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    super::sqlx_seo_adapter::lock_truth_context_in_tx(&mut tx, &context_key).await?;
+    let all_rule_ids = prepared_keys
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &all_rule_ids,
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("legacy Truth write has no atomic Qdrant projection intent: {err}"),
+    })?;
+
     let mut written = 0usize;
     let mut outbox_events: Vec<OutboxEnvelope> = Vec::with_capacity(rule_instances.len());
-
-    for rule in rule_instances {
+    for (rule, (rule_instance_id, concept_key)) in rule_instances.iter().zip(prepared_keys) {
         let rule_type_key = rule.rule_type_key.clone();
-        let concept_key_raw = rule.concept_key.as_str();
-        let concept_key = normalize_concept_key(concept_key_raw).map_err(|e| {
-            validation_failure(format!("invalid concept_key in rule {:?}: {e}", rule))
-        })?;
         let role_type = rule.role_type.as_str().to_string();
         let params = rule.params.as_json_value();
         let status = rule.status.clone();
         let source_key = rule.source_key.clone();
-        if status == "verified" && source_key.is_none() {
-            return Err(validation_failure(format!(
-                "verified rule `{rule_type_key}` in context `{context_key}` is missing source provenance"
-            )));
-        }
-
-        let rule_instance_id =
-            stable_rule_instance_id(&[&context_key, &rule_type_key, &concept_key, &role_type]);
-
         commands::upsert_rule_instance(
-            pool,
+            &mut tx,
             &rule_instance_id,
             &context_key,
             &rule_type_key,
@@ -185,6 +208,7 @@ pub async fn persist_from_pipeline_state(
         outbox_events.push(event);
     }
 
-    let outbox_count = outbox_emit_many(pool, &outbox_events).await? as usize;
+    let outbox_count = outbox_emit_many_in_tx(&mut tx, &outbox_events).await? as usize;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok((written, outbox_count))
 }

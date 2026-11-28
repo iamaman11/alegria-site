@@ -15,7 +15,25 @@ on:
         options:
           - comprehensive
           - worker-image
+          - site-architect-images
           - dependency-refresh
+          - physical-study
+      expected_source_sha:
+        description: Exact previously green Draft PR head SHA for a physical study
+        required: false
+        type: string
+      physical_study:
+        description: One optional compiler experiment; never required by the CI gate
+        required: false
+        default: compiler-owners
+        type: choice
+        options:
+          - compiler-owners
+          - coldwarm
+          - pg-harness
+          - owner-rebuild
+          - dag-parent-ab
+          - legacy-worker-split
 
 permissions:
   contents: read
@@ -23,8 +41,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # Dispatch modes cannot cancel each other or an accepted-main push.
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'automatic' }}
+  # Independent physical modes must not destroy each other's measurements.
+  # PR synchronization still cancels an obsolete run for that one PR.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'automatic' }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study' && inputs.physical_study || 'shared' }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +55,16 @@ jobs:
       selected_ci_jobs: ${{ steps.decide.outputs.selected_ci_jobs }}
       source_sha: ${{ steps.decide.outputs.source_sha }}
       cargo_scope: ${{ steps.decide.outputs.cargo_scope }}
+      graph_e2e_shards: ${{ steps.decide.outputs.graph_e2e_shards }}
+      qdrant_e2e_shards: ${{ steps.decide.outputs.qdrant_e2e_shards }}
+      qdrant_temporal_e2e_shards: ${{ steps.decide.outputs.qdrant_temporal_e2e_shards }}
+      qdrant_temporal_legacy_e2e_shards: ${{ steps.decide.outputs.qdrant_temporal_legacy_e2e_shards }}
+      pg_app_e2e_shards: ${{ steps.decide.outputs.pg_app_e2e_shards }}
+      temporal_legacy_e2e_shards: ${{ steps.decide.outputs.temporal_legacy_e2e_shards }}
+      temporal_v3_e2e_shards: ${{ steps.decide.outputs.temporal_v3_e2e_shards }}
+      pg_e2e_shards: ${{ steps.decide.outputs.pg_e2e_shards }}
+      outbox_e2e_shards: ${{ steps.decide.outputs.outbox_e2e_shards }}
+      truth_e2e_shards: ${{ steps.decide.outputs.truth_e2e_shards }}
     steps:
       - name: Checkout exact CI source
         uses: actions/checkout@v7
@@ -43,10 +72,29 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Pin Rust for workspace metadata only
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+          components: rustfmt
+
+      - name: Verify Cargo.lock before parallel Rust jobs
+        run: |
+          if ! (cd app/rust && cargo metadata --locked --no-deps --format-version 1 > /dev/null); then
+            (cd app/rust && cargo metadata --no-deps --format-version 1 > /dev/null) || true
+            git diff -- app/rust/Cargo.lock
+            exit 1
+          fi
 
       - name: Enforce source-document layout even when every owner is not applicable
         run: python3 automation/check_docs_layout.py
+
+      - name: Validate all 52 siteArchitect action decisions and legacy phase coverage
+        run: |
+          python3 automation/check_site_architect_action_matrix.py
+          python3 automation/test_site_architect_action_matrix.py
+
+      - name: Refuse unsafe DataForSEO owner SQL privileges and mutable receipts
+        run: python3 automation/check_dataforseo_sql_policy.py
 
       - name: Compute one exact-source Cargo, suite and job impact report
         env:
@@ -69,7 +117,25 @@ jobs:
           import sys
 
           sys.path.insert(0, 'automation')
-          from ci_impact import CI_PR_OWNERS, SCHEMA_VERSION
+          from ci_impact import (
+              CI_PR_OWNERS, E2E_RUNNER_PARTITIONS,
+              SCHEMA_VERSION, e2e_shard_commands_for_report,
+          )
+
+          output_keys = {
+              'rust-graph-e2e': 'graph_e2e_shards',
+              'rust-qdrant-e2e': 'qdrant_e2e_shards',
+              'rust-qdrant-temporal-e2e': 'qdrant_temporal_e2e_shards',
+              'rust-qdrant-temporal-legacy-e2e': 'qdrant_temporal_legacy_e2e_shards',
+              'rust-pg-app-e2e': 'pg_app_e2e_shards',
+              'rust-temporal-legacy-e2e': 'temporal_legacy_e2e_shards',
+              'rust-temporal-v3-e2e': 'temporal_v3_e2e_shards',
+              'rust-pg-e2e': 'pg_e2e_shards',
+              'rust-outbox-e2e': 'outbox_e2e_shards',
+              'rust-truth-e2e': 'truth_e2e_shards',
+          }
+          if set(output_keys) != set(E2E_RUNNER_PARTITIONS):
+              raise SystemExit('CI_IMPACT=FAIL physical runner partition mismatch')
 
           with open('automation/reports/ci_impact.json', encoding='utf-8') as f:
               report = json.load(f)
@@ -88,12 +154,42 @@ jobs:
                   or any(report['ci_job_status'][name] != ('required' if name in selected else 'not_applicable')
                          for name in CI_PR_OWNERS)):
               raise SystemExit('CI_IMPACT=FAIL source/owner selection mismatch')
+          if report['scope'] == 'full':
+              shards = e2e_shard_commands_for_report(report)
+              routes = {owner: [name for name in names if shards[name]]
+                        for owner, names in E2E_RUNNER_PARTITIONS.items()}
+              if any(not routes[owner] for owner in routes if owner != 'rust-truth-e2e'):
+                  raise SystemExit('CI_IMPACT=FAIL full CI has no mandatory live E2E shards')
+              truth_required = 'rust-truth-e2e' in selected
+              if truth_required != bool(routes['rust-truth-e2e']):
+                  raise SystemExit('CI_IMPACT=FAIL conditional Truth certification owner mismatch')
+          else:
+              # A valid singleton keeps GitHub's matrix expression well-typed
+              # even when the job-level full-only condition skips the job.
+              routes = {owner: ['not_applicable'] for owner in E2E_RUNNER_PARTITIONS}
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write('selected_ci_jobs=' + json.dumps(selected, separators=(',', ':')) + '\n')
               f.write('source_sha=' + os.environ['CI_HEAD_SHA'] + '\n')
               f.write('cargo_scope=' + report['scope'] + '\n')
+              for owner, key in output_keys.items():
+                  # Truth may be genuinely unselected in otherwise full CI;
+                  # the job's skip condition must not hide missing mandatory
+                  # test rows on any of the seven unconditional runners.
+                  values = routes[owner] or ['not_applicable']
+                  f.write(key + '=' + json.dumps(values, separators=(',', ':')) + '\n')
           print('CI_IMPACT=PASS selected=' + ','.join(selected))
+          print('CI_E2E_SHARDS=PASS ' + ' '.join(owner + '=' + ','.join(names)
+                                                   for owner, names in routes.items()))
           PY
+
+      # Fast deterministic failures must precede all expensive Cargo runners.
+      # The existing architecture/verify suites retain the same checks; this
+      # gate only moves first detection to the already-required impact owner.
+      - name: Reject Rust format and SDK boundary violations before compilation
+        if: steps.decide.outputs.cargo_scope != 'none'
+        run: |
+          (cd app/rust && cargo fmt --all -- --check)
+          python3 automation/check_rust_adapter_boundaries.py
 
       - name: Preserve selected and not-applicable evidence
         if: always()
@@ -129,6 +225,7 @@ jobs:
       SCCACHE_LOG: sccache::server=debug
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      CI_PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
@@ -138,12 +235,19 @@ jobs:
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
           git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
+          # Physical A/B reads the canonical PR head tree independently from
+          # the synthetic merge checkout. Never replace the checked-out tree.
+          git fetch --depth=1 origin "refs/pull/${CI_PR_NUMBER}/head"
+          test "$(git rev-parse FETCH_HEAD)" = "${CI_SOURCE_SHA}"
 
       - name: Install native audit/build tools
         run: bash automation/install_ci_native_tools.sh ripgrep protoc
 
-      - name: Pin the same stable Rust toolchain as the verify job
-        uses: dtolnay/rust-toolchain@stable
+      - name: Pin the same Rust toolchain as the verify job
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+          components: rustfmt
 
       - name: Cache Rust compiler outputs across independent target directories
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -172,7 +276,19 @@ jobs:
       - name: Regression-test fail-closed Rust impact and local developer feedback
         run: |
           python3 automation/check_ci_impact.py
+          python3 automation/check_rust_ci_artifacts.py
           python3 automation/check_dev_rust_feedback.py
+          python3 automation/check_owner_rebuild.py
+          python3 automation/test_native_dag_owner_isolation.py
+          python3 automation/check_physical_build_options.py
+          python3 automation/test_measure_generic_temporal_rebuild.py
+          python3 automation/check_temporal_activity_owner_inventory.py
+          python3 automation/test_temporal_activity_owner_inventory.py
+          python3 automation/check_reliability_contracts.py
+          python3 automation/test_causal_revision_contract.py
+          python3 automation/test_neo4j_schema_contract.py
+          python3 automation/test_operation_freshness_contract.py
+          python3 automation/test_v3_effect_owner_boundary.py
 
       - name: Regression-test fast CI timing and failure propagation
         run: |
@@ -230,20 +346,115 @@ jobs:
             "$RUNNER_TEMP/alegria-worker-context/app/rust/Cargo.toml" \
             "$RUNNER_TEMP/alegria-worker-context/dependency-skeleton/app/rust/Cargo.toml"
 
-      # Same impact report drives local and CI Cargo feedback. Broad or
-      # unclassifiable inputs fail closed to the workspace, not a fake PASS.
+      # Same impact report drives local and CI Cargo feedback. Full scope is
+      # delegated to the independent mandatory verify/E2E jobs above.
       - name: Changed Rust crates and dependent consumers
+        if: needs.impact.outputs.cargo_scope != 'full'
         env:
           SQLX_OFFLINE: "true"
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
+
+      # Compile the independently deployed paid-provider owner, pure Temporal
+      # Acquisition/SEO Steps/Truth Children, raw-HTML source issuer and
+      # independently credentialed one-step request issuer
+      # as real executables in this already-required compiler job. Transfer
+      # their exact SHA-bound bytes into the native Temporal E2E runner; no
+      # second owner compilation in the E2E job.
+      - name: Compile independent DataForSEO and pure owner groups with source issuers
+        if: needs.impact.outputs.cargo_scope == 'full'
+        env:
+          SQLX_OFFLINE: "true"
+        working-directory: app/rust
+        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p temporal_semantic_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
+
+      # Reuse the independently compiled owner as an exact-source artifact.
+      # The pure Temporal/PG binary job must never recompile or transitively
+      # link this provider SDK just to supply the physical E2E runner.
+      - name: Pack isolated DataForSEO owner from its existing compile
+        if: needs.impact.outputs.cargo_scope == 'full'
         run: |
-          args=()
-          if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then
-            # The same exact-source full scope makes the existing verify job
-            # mandatory; it executes the workspace unit tests in parallel.
-            args+=(--delegate-workspace-unit-tests-to-verify)
-          fi
-          python3 automation/run_scoped_cargo_feedback.py \
-            --report automation/reports/ci_impact.json "${args[@]}"
+          python3 automation/rust_ci_artifacts.py pack --kind dataforseo_effects --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/dataforseo_effects
+
+      - name: Publish independently compiled DataForSEO E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-dataforseo-effects-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/dataforseo_effects/
+          if-no-files-found: error
+
+      - name: Pack independent Acquisition owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind acquisition_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/acquisition_pure
+
+      - name: Publish independently compiled Acquisition E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-acquisition-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/acquisition_pure/
+          if-no-files-found: error
+
+      - name: Pack independent pure SEO Steps owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind seo_steps_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/seo_steps_pure
+
+      - name: Publish independently compiled pure SEO Steps E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-seo-steps-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/seo_steps_pure/
+          if-no-files-found: error
+
+      - name: Pack independent pure Truth owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind truth_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/truth_pure
+
+      - name: Publish independently compiled pure Truth E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-truth-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/truth_pure/
+          if-no-files-found: error
+
+      - name: Pack independent semantic owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind semantic_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/semantic_pure
+
+      - name: Publish independently compiled semantic E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/semantic_pure/
+          if-no-files-found: error
+
+      # One extra typed issuer, built in the existing compiler job, never
+      # linked into Temporal or the generic PostgreSQL effect owner.
+      - name: Pack independently authenticated request-grant issuer
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind one_step_request_issuer --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/one_step_request_issuer
+
+      - name: Publish exact-source grant issuer for physical E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-one-step-request-issuer-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/one_step_request_issuer/
+          if-no-files-found: error
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -262,9 +473,1414 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cargo-cache-architecture
-          path: automation/reports/cargo_cache_architecture-and-rust.json
+          path: |
+            automation/reports/cargo_cache_architecture-and-rust.json
+            automation/reports/owner_rebuild_probe.json
+            automation/reports/physical_owner_ab.json
+            automation/reports/physical_coldwarm_ab.json
+            app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: error
 
+  # Independent exact-source Graph/Neo4j E2E compiler, no dependency on unrelated owners.
+  rust-e2e-graph-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-graph-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source mandatory E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile real Graph/Neo4j owner E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness graph_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/graph_harness
+      - name: Publish source-verified Graph/Neo4j E2E executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-graph-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/graph_harness/
+          if-no-files-found: error
+
+
+  # Independent exact-source Qdrant/PG E2E compiler, no dependency on unrelated owners.
+  rust-e2e-qdrant-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-qdrant-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source mandatory E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile real Qdrant/PG owner E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness qdrant_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/qdrant_harness
+      - name: Publish source-verified Qdrant/PG E2E executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-qdrant-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/qdrant_harness/
+          if-no-files-found: error
+
+  # Native Temporal + PG + Qdrant is a NEW physical test owner. Never force
+  # existing REST Qdrant shards to await provider Worker compiler artifacts.
+  rust-e2e-qdrant-temporal-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-qdrant-temporal-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile distinct live Temporal/PG/Qdrant E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness qdrant_temporal_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/qdrant_temporal_harness
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/qdrant_temporal_harness/
+          if-no-files-found: error
+
+
+  # Independent exact-source PostgreSQL application E2E compiler, no dependency on unrelated owners.
+  rust-e2e-pg-app-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-pg-app-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source mandatory E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile real PostgreSQL application owner E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness pg_app_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/pg_app_harness
+      - name: Publish source-verified PostgreSQL application E2E executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-pg-app-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/pg_app_harness/
+          if-no-files-found: error
+
+
+  # Independent exact-source Temporal/full-infra E2E compiler. The optional
+  # PR-local write-through cache trial made this cold compiler 100 seconds
+  # slower on V6.1 (270.596s vs prior 170.381s) despite 0 HTTP429 errors.
+  # Keep every PR compiler READ_ONLY; only accepted main primes shared objects.
+  rust-e2e-temporal-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-temporal-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source mandatory E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile real Temporal/full-infra owner E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-owner-harness temporal_harness \
+            --owner-harness-bundle-dir automation/reports/rust-ci-artifacts/temporal_harness
+      - name: Publish source-verified Temporal/full-infra E2E executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-temporal-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/temporal_harness/
+          if-no-files-found: error
+
+
+  # Only live Truth fixture diffs require the remaining real broad test binary.
+  # This is conditional and never blocks the 38 ordinary physical E2E tests.
+  rust-e2e-truth-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-truth-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Install Rust test compiler dependencies
+        run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Authorize read-only Rust object cache
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source mandatory E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile optional full-Truth certification executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-harness-only \
+            --harness-bundle-dir automation/reports/rust-ci-artifacts/harness
+      - name: Publish content-verified shared E2E test executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-truth-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/harness/
+          if-no-files-found: error
+  # The PostgreSQL V3 owner has a smaller independent test-only dependency
+  # closure. Compile its real PostgreSQL + Temporal tests concurrently with
+  # the remaining monolithic harness, never through the monolithic owner.
+  rust-e2e-pg-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-pg-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source PostgreSQL V3 E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile independent PostgreSQL V3 exact-source E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-pg-harness-only \
+            --pg-harness-bundle-dir automation/reports/rust-ci-artifacts/pg_harness
+      - name: Publish content-verified PostgreSQL V3 E2E test executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/pg_harness/
+          if-no-files-found: error
+
+  # A14's nine real worker/PG tests now live in their own Cargo test package,
+  # not in the broad integration_harness target. Compile it concurrently;
+  # never gate this compiler on the unrelated broad Rust E2E job.
+  rust-e2e-outbox-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-outbox-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile independent exact-source A14 Outbox E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-outbox-harness-only \
+            --outbox-harness-bundle-dir automation/reports/rust-ci-artifacts/outbox_harness
+      - name: Publish content-verified A14 Outbox test executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-outbox-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/outbox_harness/
+          if-no-files-found: error
+
+  # One optional physical study on a previously green, exact canonical PR SHA.
+  # It never participates in the required PR gate, and cannot replace any of
+  # mandatory real E2E checks. Reuse this existing job for expensive probes;
+  # no diagnostic Cargo work executes inside a mandatory job.
+  rust-pg-physical-ab:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.expected_source_sha }}
+          fetch-depth: 0
+      - name: Fail closed unless exact selected source already passed full PR CI
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const expected = process.env.EXPECTED_SOURCE_SHA;
+            if (!/^[0-9a-f]{40}$/.test(expected)) {
+              throw new Error('Physical study requires an exact 40-character source SHA');
+            }
+            const { execFileSync } = require('node:child_process');
+            const actual = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (actual !== expected) {
+              throw new Error('Physical study checked-out source differs from selected exact SHA');
+            }
+            const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              head_sha: expected, event: 'pull_request', per_page: 100,
+            });
+            const accepted = data.workflow_runs.filter(run =>
+              run.name === 'ci' && run.head_sha === expected &&
+              run.status === 'completed' && run.conclusion === 'success');
+            if (!accepted.length) {
+              throw new Error('No previously successful PR CI run for exact source SHA');
+            }
+            const fullRunMarkers = [
+              'CI', 'impact', 'verify', 'rust-e2e-temporal-harness',
+              'rust-temporal-legacy-e2e (temporal_manual)', 'rust-pg-e2e (verify_d)',
+              'rust-qdrant-temporal-legacy-e2e (temporal_qdrant)',
+            ];
+            let green = null;
+            for (const run of accepted.slice(0, 5)) {
+              const { data: result } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: run.id, per_page: 100,
+              });
+              if (result.total_count !== result.jobs.length) {
+                throw new Error('Physical source attestation requires every PR CI job, not page one');
+              }
+              const completedJobs = new Set(result.jobs.filter(job =>
+                job.conclusion === 'success').map(job => job.name));
+              if (fullRunMarkers.every(name => completedJobs.has(name))) {
+                green = run;
+                break;
+              }
+            }
+            if (!green) {
+              throw new Error('Exact SHA has no previously green full-scope PR CI gate and real E2E jobs');
+            }
+            // Actions job.head_sha is the trigger's PR head, NOT a trusted
+            // record of the synthetic merge checkout. This proves a prior
+            // green PR run exists, not the equality of its tested Git tree.
+            // Exact current checkout provenance is checked independently by
+            // compare_physical_build_options.verify_pr_source_provenance().
+            core.info(`PHYSICAL_STUDY_GREEN_PR_RUN=FOUND sha=${expected} run=${green.id} historical_checkout_tree=UNVERIFIED`);
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Install and identify GNU time for physical CPU and RSS evidence
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y time
+          /usr/bin/time --version
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Execute one selected optional physical study
+        env:
+          PHYSICAL_STUDY: ${{ inputs.physical_study }}
+        run: |
+          set -euo pipefail
+          mkdir -p automation/reports
+          case "$PHYSICAL_STUDY" in
+            compiler-owners)
+              python3 automation/compare_physical_build_options.py \
+                --compiler-owners > automation/reports/physical_owner_ab.json
+              ;;
+            coldwarm)
+              python3 automation/compare_physical_build_options.py \
+                --compiler > automation/reports/physical_coldwarm_ab.json
+              ;;
+            pg-harness)
+              python3 automation/compare_pg_v3_harness_build.py \
+                --output automation/reports/pg_v3_harness_physical_ab.json --measure-resources
+              python3 automation/check_pg_v3_harness_build.py \
+                --report automation/reports/pg_v3_harness_physical_ab.json
+              ;;
+            owner-rebuild)
+              RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py
+              ;;
+            dag-parent-ab)
+              python3 automation/measure_generic_temporal_rebuild.py \
+                --output automation/reports/generic_parent_rebuild_ab.json
+              ;;
+            legacy-worker-split)
+              python3 automation/measure_legacy_worker_split.py \
+                --output automation/reports/legacy_worker_split_physical.json
+              ;;
+            *) echo "Unknown physical study kind" >&2; exit 2 ;;
+          esac
+      - name: Publish exact four-owner metrics as auditable text
+        if: success() && (inputs.physical_study == 'compiler-owners' || inputs.physical_study == 'owner-rebuild')
+        env:
+          STUDY: ${{ inputs.physical_study }}
+          STUDY_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$STUDY" == compiler-owners ]]; then
+            report=automation/reports/physical_owner_ab.json
+          else
+            report=automation/reports/owner_rebuild_probe.json
+          fi
+          python3 automation/summarize_owner_build_evidence.py \
+            --study "$STUDY" --source-sha "$STUDY_SOURCE_SHA" --report "$report"
+      - name: Publish optional isolated build measurement
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-pg-physical-ab-${{ inputs.physical_study }}-${{ inputs.expected_source_sha }}
+          path: |
+            automation/reports/pg_v3_harness_physical_ab.json
+            automation/reports/physical_owner_ab.json
+            automation/reports/physical_coldwarm_ab.json
+            automation/reports/owner_rebuild_probe.json
+            automation/reports/generic_parent_rebuild_ab.json
+            automation/reports/legacy_worker_split_physical.json
+          if-no-files-found: warn
+
+  # Actual legacy and V3 Workers compile in parallel with the shared harness
+  # and full workspace tests, not serially before their own E2E suites.
+  rust-e2e-legacy-binaries:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-legacy-binaries') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      # One Cargo feature resolution and dependency build, three independent
+      # binaries. No second historical Cargo invocation or new CI owner.
+      - name: Compile canonical Worker, Outbox and historical Temporal in one Cargo pass
+        working-directory: app/rust
+        run: |
+          cargo build --locked -p temporal_worker -p outbox_worker -p temporal_orchestrator \
+            --bin temporal_worker --bin outbox_worker --bin temporal_orchestrator \
+            --features temporal_orchestrator/legacy-qdrant-v1,temporal_orchestrator/legacy-workflows
+      - name: Bind legacy executable artifacts to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind legacy --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/legacy
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-legacy-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/legacy/
+          if-no-files-found: error
+      - name: Bind historical replay executable to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/legacy_qdrant_parent
+      - name: Prove historical Temporal replay modes reach actual History reading
+        run: |
+          set -euo pipefail
+          missing_history="$RUNNER_TEMP/absent-temporal-history.json"
+          legacy="automation/reports/rust-ci-artifacts/legacy_qdrant_parent/temporal_orchestrator_legacy_qdrant_v1"
+          for mode in --replay-history --replay-effect-history --replay-v5-effect-history --replay-qdrant-effect-history; do
+            if "$legacy" "$mode" "$missing_history" >"$RUNNER_TEMP/dag-legacy-mode.log" 2>&1; then
+              echo "historical replay unexpectedly accepted absent server History $mode" >&2
+              exit 1
+            fi
+            grep -F 'read actual Temporal history' "$RUNNER_TEMP/dag-legacy-mode.log"
+          done
+          echo 'CI_TEMPORAL_LEGACY_REPLAY=PASS modes=pure-v3,v4,v5,qdrant-v1'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/legacy_qdrant_parent/
+          if-no-files-found: error
+
+  rust-e2e-v3-binaries:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-v3-binaries') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Compile default provider-free Temporal DAG and independent PostgreSQL Worker
+        working-directory: app/rust
+        run: cargo build --locked --no-default-features -p temporal_orchestrator -p temporal_pg_effects --bin temporal_orchestrator --bin temporal_pg_effects
+      - name: Bind provider-free generic parent and PostgreSQL Worker to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind v3 --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/v3
+      - name: Prove exact-source generic Temporal rejects every historical replay mode
+        run: |
+          set -euo pipefail
+          missing_history="$RUNNER_TEMP/absent-temporal-qdrant-v1-history.json"
+          generic="automation/reports/rust-ci-artifacts/v3/temporal_orchestrator"
+          for mode in --replay-history --replay-effect-history --replay-v5-effect-history --replay-qdrant-effect-history; do
+            if "$generic" "$mode" "$missing_history" >"$RUNNER_TEMP/dag-generic-mode.log" 2>&1; then
+              echo "provider-free Temporal unexpectedly enabled historical replay $mode" >&2
+              exit 1
+            fi
+            grep -F 'requires legacy-' "$RUNNER_TEMP/dag-generic-mode.log"
+          done
+          echo 'CI_TEMPORAL_GENERIC_REPLAY=PASS historical=refused'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-v3-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/v3/
+          if-no-files-found: error
+
+  # The Qdrant SDK/PG effects runtime is compiled and attested independently
+  # of the provider-free parent (`v3`) and the PG-only effect owner.
+  rust-e2e-qdrant-effects-binaries:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-qdrant-effects-binaries') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Compile real Qdrant/PG Activity worker without contaminating pure parent
+        working-directory: app/rust
+        run: cargo build --locked -p temporal_qdrant_effects --bin temporal_qdrant_effects
+      - name: Attest independent Qdrant effect worker to exact source
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind qdrant_effects --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/qdrant_effects
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/qdrant_effects/
+          if-no-files-found: error
+
+  # Real graph providers run in isolated hosts using only their own
+  # source-bound test compiler and, if needed, independently compiled Workers.
+  rust-graph-e2e:
+    name: rust-graph-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-graph-harness]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-graph-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-graph-harness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.graph_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start real artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-graph-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/graph_harness
+      - name: Verify exact-source real test executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=graph shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind graph_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/graph_harness"
+      - name: Execute exact selected graph real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Real qdrant providers run in isolated hosts using only their own
+  # source-bound test compiler and, if needed, independently compiled Workers.
+  rust-qdrant-e2e:
+    name: rust-qdrant-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-qdrant-harness]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-qdrant-harness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.qdrant_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start real artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_harness
+      - name: Verify exact-source real test executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=qdrant shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind qdrant_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_harness"
+      - name: Execute exact selected qdrant real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Provider-free and modern Temporal proofs start after their actual binary
+  # compilers. Only the historical Qdrant shard needs the slower legacy DAG.
+  # All source-owned E2E shards still run and remain required by the gate.
+  rust-qdrant-temporal-e2e:
+    name: rust-qdrant-temporal-e2e (${{ matrix.shard }})
+    needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.architecture-and-rust.result == 'success' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.qdrant_temporal_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/setup-node@v7
+        if: matrix.shard == 'temporal_acquisition'
+        with:
+          node-version: "26"
+      - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-v3-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/v3
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_dataforseo'
+        with:
+          name: rust-e2e-dataforseo-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/dataforseo_effects
+      - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_acquisition","temporal_semantic"]'), matrix.shard)
+        with:
+          name: rust-e2e-acquisition-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/acquisition_pure
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_acquisition'
+        with:
+          name: rust-e2e-one-step-request-issuer-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/one_step_request_issuer
+      - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_seo_steps","temporal_acquisition"]'), matrix.shard)
+        with:
+          name: rust-e2e-seo-steps-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/seo_steps_pure
+      - uses: actions/download-artifact@v7
+        if: contains(fromJSON('["temporal_truth","temporal_acquisition"]'), matrix.shard)
+        with:
+          name: rust-e2e-truth-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/truth_pure
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_semantic'
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/semantic_pure
+      - name: Verify actual parent, child and native three-provider E2E binary from one SHA
+        run: |
+          set -euo pipefail
+          python3 automation/rust_ci_artifacts.py install \
+            --kind qdrant_temporal_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/qdrant_temporal_harness"
+          # A shard installs only the provider binaries it actually runs. The
+          # base harness remains mandatory and every selected bundle is still
+          # checked against its exact source SHA before any native test starts.
+          case '${{ matrix.shard }}' in
+            temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3) ;;
+            temporal_dataforseo) kinds=(v3 dataforseo_effects) ;;
+            temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure) ;;
+            temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
+            temporal_truth) kinds=(v3 truth_pure) ;;
+            temporal_semantic) kinds=(v3 acquisition_pure semantic_pure) ;;
+            *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
+          esac
+          for kind in "${kinds[@]}"; do
+            python3 automation/rust_ci_artifacts.py install \
+              --kind "$kind" --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
+          done
+      # Generic Temporal DAG routing is executable deployment authority.
+      # Preserve the exact production /etc/alegria root-ownership fence even
+      # on this disposable runner; the native test installs its typed catalog
+      # with sudo rather than enabling any worker-side trust bypass.
+      - name: Provision root-owned native DAG route directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -o root -g root -m 0755 /etc/alegria
+          test "$(stat -c '%u:%g:%a' /etc/alegria)" = '0:0:755'
+          echo ALEGRIA_CI_ROOT_CATALOG_INSTALL_OK=true >> "$GITHUB_ENV"
+      - name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Historical Qdrant replay alone needs the legacy parent. Its separate
+  # runner cannot delay the independent modern Temporal matrix shards.
+  rust-qdrant-temporal-legacy-e2e:
+    name: rust-qdrant-temporal-legacy-e2e (${{ matrix.shard }})
+    needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-qdrant-temporal-legacy-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.architecture-and-rust.result == 'success' && needs.rust-e2e-qdrant-temporal-harness.result == 'success' && needs.rust-e2e-qdrant-effects-binaries.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.qdrant_temporal_legacy_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-qdrant-effects-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/qdrant_effects
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
+      - name: Verify actual parent, child and native three-provider E2E binary from one SHA
+        run: |
+          set -euo pipefail
+          for kind in qdrant_temporal_harness qdrant_effects legacy_qdrant_parent; do
+            python3 automation/rust_ci_artifacts.py install \
+              --kind "$kind" --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
+          done
+      - name: Provision root-owned native DAG route directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -o root -g root -m 0755 /etc/alegria
+          test "$(stat -c '%u:%g:%a' /etc/alegria)" = '0:0:755'
+          echo ALEGRIA_CI_ROOT_CATALOG_INSTALL_OK=true >> "$GITHUB_ENV"
+      - name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Real pg app providers run in isolated hosts using only their own
+  # source-bound test compiler and, if needed, independently compiled Workers.
+  rust-pg-app-e2e:
+    name: rust-pg-app-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-pg-app-harness]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-pg-app-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-pg-app-harness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.pg_app_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start real artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-pg-app-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/pg_app_harness
+      - name: Verify exact-source real test executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=pg-app shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind pg_app_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/pg_app_harness"
+      - name: Execute exact selected pg app real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # Real temporal legacy providers run in isolated hosts using only their own
+  # source-bound test compiler and, if needed, independently compiled Workers.
+  rust-temporal-legacy-e2e:
+    name: rust-temporal-legacy-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-temporal-harness, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-temporal-legacy-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-temporal-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.temporal_legacy_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start real artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/temporal_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy
+      - name: Verify exact-source real test executable and Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=temporal-legacy shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind temporal_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/temporal_harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy"
+      - name: Execute exact selected temporal legacy real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # The historical Pure V3 Workflow uses the already-built explicit legacy
+  # parent, without recompiling a third parent or enabling legacy on generic.
+  rust-temporal-v3-e2e:
+    name: rust-temporal-v3-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-temporal-harness, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-temporal-v3-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-temporal-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.temporal_v3_e2e_shards) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start real artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-temporal-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/temporal_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
+      - name: Verify exact-source real test executable and Worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=temporal-v3 shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind temporal_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/temporal_harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
+      - name: Execute exact selected temporal v3 real E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # PG V3 compilation is physically isolated from the legacy monolith.
+  # Execute both PG-owned live shards when their actual PG and V3 binaries
+  # become ready; no dependency on rust-e2e-harness or legacy Worker builds.
+  # This is a runner partition of the SAME typed suite registry, not a new
+  # business step or a way to skip any selected full-scope test.
+  rust-pg-e2e:
+    name: rust-pg-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-pg-harness, rust-e2e-v3-binaries, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-pg-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.pg_e2e_shards) }}
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start exact-source PG artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-v3-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/v3
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-qdrant-parent-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy_qdrant_parent
+      - name: Authenticate PG and generic and historical parent executables from exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=pg shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind pg_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/pg_harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind v3 --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy_qdrant_parent --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy_qdrant_parent"
+      - name: Execute exact selected PG V3 architecture shard
+        if: matrix.shard == 'pg_temporal'
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job architecture-and-rust \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+      - name: Execute exact selected PG V3 effect and pure-DAG shard
+        if: matrix.shard == 'verify_d'
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job verify \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # The nine A14 checks execute on their own runtime runner as soon as their
+  # independent test compiler and real legacy worker binaries are ready.
+  # They no longer wait for the broad harness or verify_b's unrelated checks.
+  rust-outbox-e2e:
+    name: rust-outbox-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-outbox-harness, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-outbox-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-outbox-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.outbox_e2e_shards) }}
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start exact-source Outbox transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-outbox-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/outbox_harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy
+      - name: Authenticate exact-source A14 test and real worker binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=outbox shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind outbox_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/outbox_harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy"
+      - name: Execute nine exact A14 PostgreSQL/Worker E2E checks
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job verify \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  rust-truth-e2e:
+    name: rust-truth-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-truth-harness, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-truth-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-truth-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.truth_e2e_shards) }}
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start exact-source Truth transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-truth-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/harness
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-legacy-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy
+      - name: Authenticate exact-source Truth test and real worker binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=truth shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/harness"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind legacy --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/legacy"
+      - name: Execute one exact Truth PostgreSQL/Worker E2E checks
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job auto \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
   # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
   # remains callable through manual dispatch, not on every experimental PR.
   product-truth:
@@ -355,6 +1971,16 @@ jobs:
           node-version: "26"
       - name: Install native cf static build dependencies
         run: npm install --prefix infra/cloudflare/seo-static --no-audit --no-fund
+      - name: Install isolated siteArchitect MCP resource dependencies
+        run: npm ci --prefix infra/cloudflare/site-architect-mcp --no-audit --no-fund
+      - name: Check OAuth MCP resource types and negative admission contracts
+        run: |
+          npm run check --prefix infra/cloudflare/site-architect-mcp
+          npm test --prefix infra/cloudflare/site-architect-mcp
+      - name: Build remote MCP resource Worker without deployment
+        run: npm run build --prefix infra/cloudflare/site-architect-mcp
+      - name: Verify both MCP transports in the bundled Worker
+        run: npm run test:worker --prefix infra/cloudflare/site-architect-mcp
       - name: Offline Cloudflare publication boundary tests
         run: python3 automation/smoke_seo_cloudflare_deploy.py
       - name: Actual cf CLI build and asset preservation (no deployment)
@@ -457,9 +2083,11 @@ jobs:
         run: bash automation/install_ci_native_tools.sh ripgrep
 
       - name: Fast source contracts and policy
+        if: needs.impact.outputs.cargo_scope != 'full'
         run: bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
 
       - name: Fast integration and consistency checks
+        if: needs.impact.outputs.cargo_scope != 'full'
         run: bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
 
       # Only broad/unclassifiable changes require the whole Rust workspace.
@@ -471,7 +2099,9 @@ jobs:
 
       - name: Pin Rust for full workspace tests
         if: needs.impact.outputs.cargo_scope == 'full'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Reuse trusted main Rust compiler objects for full workspace tests
         if: needs.impact.outputs.cargo_scope == 'full'
@@ -505,31 +2135,42 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Full workspace Rust unit tests (parallel with real E2E)
-        if: needs.impact.outputs.cargo_scope == 'full'
-        working-directory: app/rust
-        env:
-          SQLX_OFFLINE: "true"
-          RUSTC_WRAPPER: sccache
-        run: cargo test --workspace --locked
-
-      # A full PR already has a separate verified Rust runner. Keep its spare
-      # capacity useful without spawning jobs or sharing a Cargo target: the
-      # single impact report assigns each real E2E suite to exactly one job.
-      - name: Reuse exact-source selected integration suites from impact
-        if: needs.impact.outputs.cargo_scope == 'full'
-        uses: actions/download-artifact@v7
-        with:
-          name: ci-owner-impact
-          path: automation/reports
-
-      - name: Run assigned real PostgreSQL E2E after workspace unit tests
+      # The full-scope Rust tests used to wait for both Python policy phases.
+      # They are independent read-only source checks, so run both owners on
+      # this *same* runner concurrently, still wait and fail for either result.
+      # No extra runner, cache writer or skipped test is introduced.
+      - name: Full workspace Rust tests and both mandatory policy phases
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
           RUSTC_WRAPPER: sccache
-          PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json --suite-job verify
+        shell: bash
+        run: |
+          set -uo pipefail
+          (
+            set -euo pipefail
+            bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
+            bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
+          ) &
+          policy_pid=$!
+          (
+            set -euo pipefail
+            cd app/rust
+            cargo test --workspace --locked
+          ) &
+          rust_pid=$!
+          wait "$policy_pid"
+          policy_result=$?
+          wait "$rust_pid"
+          rust_result=$?
+          printf 'CI_VERIFY_PARALLEL policy_exit=%s rust_exit=%s\n' "$policy_result" "$rust_result"
+          if [[ "$policy_result" -ne 0 || "$rust_result" -ne 0 ]]; then
+            exit 1
+          fi
+
+      # The independent rust-verify-e2e job consumes the ONE shared, hashed
+      # integration harness instead of recompiling it after workspace tests.
+      # The original `verify` owner keeps all unit and source-policy gates.
 
       - name: Full-scope compiler cache statistics
         if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
@@ -582,13 +2223,35 @@ jobs:
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1
 
   gate:
     name: CI
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation) && github.ref == 'refs/heads/main'))
     needs:
       - impact
       - architecture-and-rust
+      - rust-e2e-graph-harness
+      - rust-e2e-qdrant-harness
+      - rust-e2e-qdrant-temporal-harness
+      - rust-e2e-pg-app-harness
+      - rust-e2e-temporal-harness
+      - rust-e2e-pg-harness
+      - rust-e2e-outbox-harness
+      - rust-e2e-truth-harness
+      - rust-e2e-legacy-binaries
+      - rust-e2e-v3-binaries
+      - rust-e2e-qdrant-effects-binaries
+      - rust-graph-e2e
+      - rust-qdrant-e2e
+      - rust-qdrant-temporal-e2e
+      - rust-qdrant-temporal-legacy-e2e
+      - rust-pg-app-e2e
+      - rust-temporal-legacy-e2e
+      - rust-temporal-v3-e2e
+      - rust-pg-e2e
+      - rust-outbox-e2e
+      - rust-truth-e2e
       - product-truth
       - rust-security
       - cloudflare-static-build
@@ -599,7 +2262,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact CI plan owner registry
-        if: github.event_name == 'pull_request'
+        # The protected main provenance script imports the SAME checked-out
+        # registry for matrix shard names. No compilation or release rebuild.
         uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
@@ -640,8 +2304,21 @@ jobs:
           print("CI_GATE=PASS")
           PY
 
+      # No extra matrix, cache writer, or hidden after-gate suite: this is a
+      # read-only REST snapshot of the very jobs the existing gate waited for.
+      # It never substitutes elapsed estimates for the three real <=180s runs.
+      - name: Report measured PR compiler-to-E2E critical paths
+        if: github.event_name == 'pull_request' && success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_CHECKOUT_SHA: ${{ github.sha }}
+        run: python3 automation/report_ci_critical_path.py
+
       - name: Verify main merge comes from a fully successful PR CI
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation))
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO_NAME: ${{ github.repository }}
@@ -659,11 +2336,24 @@ jobs:
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
               "impact",
-              "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
+              "architecture-and-rust", "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+              "rust-e2e-qdrant-temporal-harness", "rust-e2e-qdrant-effects-binaries",
+              "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
+              "rust-e2e-pg-harness", "rust-e2e-outbox-harness", "rust-e2e-truth-harness",
+              "rust-e2e-legacy-binaries",
+              "rust-e2e-v3-binaries",
+              "product-truth", "rust-security", "cloudflare-static-build",
               "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
           }
+          # Matrix job display names, not only their parent job IDs, are
+          # reported by the GitHub REST API. An accepted source CI must have
+          # every generated shard green. The exact selected subset is computed
+          # and checked by the immutable same-source PR impact/gate scripts.
+          sys.path.insert(0, 'automation')
+          from ci_impact import E2E_RUNNER_PARTITIONS
+          matrix_owners = {owner: set(shards) for owner, shards in E2E_RUNNER_PARTITIONS.items()}
 
           def fetch(path):
               request = urllib.request.Request(
@@ -726,6 +2416,31 @@ jobs:
               all(results.get(job) in {'success', 'skipped'} for job in expected_jobs),
               "source PR full CI did not pass every mandatory owner",
           )
+          for owner, known_shards in matrix_owners.items():
+              prefix = owner + ' ('
+              expanded = {
+                  name: conclusion for name, conclusion in results.items()
+                  if name.startswith(prefix)
+              }
+              if expanded:
+                  require(owner not in results, f"{owner} mixes skipped base and expanded shards")
+                  # GitHub can materialize a job-level skipped matrix as its
+                  # unevaluated display name instead of the base job ID. Such
+                  # a skipped owner is valid only because the accepted exact-
+                  # source PR gate already required selected owners to pass.
+                  if set(expanded) in ({owner + ' ()'}, {owner + ' (not_applicable)'}):
+                      require(set(expanded.values()) == {'skipped'},
+                              f"{owner} declared a non-applicable shard as executed")
+                  else:
+                      require(all(name.endswith(')') and name[len(prefix):-1] in known_shards
+                                  for name in expanded), f"{owner} has an unrecognized E2E shard")
+                      require(len(expanded) == len({name[len(prefix):-1] for name in expanded}),
+                              f"{owner} has duplicate E2E shards")
+                      require(all(conclusion == 'success' for conclusion in expanded.values()),
+                              f"{owner} did not pass all selected E2E shards")
+              else:
+                  require(results.get(owner) == 'skipped',
+                          f"{owner} has neither selected shards nor an explicit scoped skip")
           print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
 
@@ -771,7 +2486,9 @@ jobs:
         with:
           python-version: "3.15"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
@@ -878,7 +2595,9 @@ jobs:
 
       - name: Pin stable Rust toolchain
         if: steps.cache_scope.outputs.needed == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Install shared Rust compiler-object cache
         if: steps.cache_scope.outputs.needed == 'true'
@@ -973,7 +2692,9 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Pin Cargo metadata toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Select Worker image through the shared impact owner registry
         id: select
@@ -1059,7 +2780,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - name: Pin Rust for exact Cargo dependency metadata
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc
+        with:
+          toolchain: "1.100.1"
 
       - name: Prepare exact-source dependency-scoped Worker Docker context
         env:
@@ -1142,6 +2865,133 @@ jobs:
         with:
           name: temporal-worker-image-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # Explicit, accepted-main-only release for the five independent native
+  # siteArchitect owners. PRs validate sources but never publish installable
+  # Docker images; Windows only verifies and loads this attested archive.
+  package-site-architect:
+    needs: gate
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'site-architect-images' &&
+      github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Refuse an unaccepted or ambiguous image source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build separate siteArchitect owner images in GitHub only
+        shell: bash
+        run: |
+          set -euo pipefail
+          owners=(pg orchestrator acquisition request-issuer source-issuer)
+          for owner in "${owners[@]}"; do
+            tag="alegria-site-architect-${owner}:${SOURCE_SHA}"
+            # All targets share one Rust builder in this runner. Export its
+            # cache only once, after the final target, not five times.
+            export_cache=()
+            if [[ "$owner" == source-issuer ]]; then
+              export_cache=(--cache-to 'type=gha,scope=site-architect-native,mode=max,compression=zstd,compression-level=1')
+            fi
+            docker buildx build --load --platform linux/amd64 \
+              --file infra/site_architect/Dockerfile.images \
+              --target "$owner" --tag "$tag" \
+              --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+              --label "by.alegria.source-head-sha=$SOURCE_SHA" \
+              --cache-from 'type=gha,scope=site-architect-native' \
+              "${export_cache[@]}" .
+            test "$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' "$tag")" = "$SOURCE_SHA"
+          done
+
+      - name: Smoke-test all five immutable runtime entrypoints without network access
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in \
+            pg:temporal_pg_effects \
+            orchestrator:temporal_orchestrator \
+            acquisition:temporal_acquisition_pure \
+            request-issuer:one_step_request_issuer \
+            source-issuer:acquisition_source_issuer; do
+            owner="${pair%%:*}"
+            binary="${pair#*:}"
+            entrypoint="$(docker image inspect --format '{{json .Config.Entrypoint}}' "alegria-site-architect-${owner}:${SOURCE_SHA}")"
+            test "$entrypoint" = "[\"/usr/local/bin/${binary}\"]"
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --entrypoint /bin/sh "alegria-site-architect-${owner}:${SOURCE_SHA}" \
+              -ec "test -x /usr/local/bin/$binary"
+          done
+
+      - name: Create exact-SHA multi-image receipt and archive
+        shell: bash
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/site-architect-image-artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          source = os.environ['SOURCE_SHA']
+          root = Path(os.environ['ARTIFACT_DIR'])
+          owners = ('pg', 'orchestrator', 'acquisition', 'request-issuer', 'source-issuer')
+          images = []
+          for owner in owners:
+              tag = f'alegria-site-architect-{owner}:{source}'
+              image_id = subprocess.check_output(
+                  ['docker', 'image', 'inspect', '--format', '{{.Id}}', tag], text=True,
+              ).strip()
+              if not image_id.startswith('sha256:') or len(image_id) != 71:
+                  raise SystemExit(f'Invalid image ID for {owner}')
+              images.append({'owner': owner, 'tag': tag, 'image_id': image_id})
+          (root / 'manifest.json').write_text(json.dumps({
+              'schema_revision': 1, 'source_sha': source, 'images': images,
+          }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+          tags=()
+          for owner in pg orchestrator acquisition request-issuer source-issuer; do
+            tags+=("alegria-site-architect-${owner}:${SOURCE_SHA}")
+          done
+          docker save "${tags[@]}" | gzip -1 > "$ARTIFACT_DIR/site-architect-images.tar.gz"
+          (cd "$ARTIFACT_DIR" && sha256sum site-architect-images.tar.gz > site-architect-images.tar.gz.sha256)
+
+      - name: Attest exact image archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/site-architect-image-artifact/site-architect-images.tar.gz
+
+      - name: Upload attested siteArchitect runtime images
+        uses: actions/upload-artifact@v7
+        with:
+          name: site-architect-images-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/site-architect-image-artifact/
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

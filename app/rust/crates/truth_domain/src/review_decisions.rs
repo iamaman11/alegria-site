@@ -51,7 +51,7 @@ pub struct CandidateValidationSectionState {
     pub status: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TruthAdjudicationCandidateDecision {
     pub section_id: i64,
     pub page_id: i64,

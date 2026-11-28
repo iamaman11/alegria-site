@@ -1,0 +1,53 @@
+[package]
+name = "integration_outbox_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# Every A14 test stays a real disposable PG/Qdrant + Worker integration test.
+# Costs are isolated to the opt-in owner package; the normal workspace test
+# target does not link production adapters, worker or provider transports.
+[features]
+default = []
+e2e = [
+  "dep:anyhow",
+  "dep:contracts",
+  "dep:infrastructure",
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/e2e",
+  "dep:integration_harness",
+  "dep:outbox_worker",
+  "dep:postgres_store",
+  "dep:primitives",
+  "dep:projection_delivery",
+  "dep:prost",
+  "dep:seo_application",
+  "dep:seo_ports",
+  "dep:serde_json",
+  "dep:serial_test",
+  "dep:sqlx",
+  "dep:tokio",
+  "dep:uuid",
+  "dep:vector_qdrant",
+]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+contracts = { path = "../contracts", optional = true }
+infrastructure = { path = "../infrastructure", optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+# Keep the regular HTTP Voyage stub/env API without enabling the broad e2e
+# feature. Its unrelated [dev-dependencies] are never transitive here.
+integration_harness = { path = "../integration_harness", default-features = false, optional = true }
+outbox_worker = { path = "../../services/outbox_worker", optional = true }
+postgres_store = { path = "../postgres_store", optional = true }
+primitives = { path = "../primitives", optional = true }
+projection_delivery = { path = "../projection_delivery", optional = true }
+prost = { workspace = true, optional = true }
+seo_application = { path = "../seo_application", optional = true }
+seo_ports = { path = "../seo_ports", optional = true }
+serde_json = { workspace = true, optional = true }
+serial_test = { version = "3.2.0", optional = true }
+sqlx = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }

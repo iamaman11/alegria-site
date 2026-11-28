@@ -270,13 +270,13 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
     let previous_groups = sqlx::query(
         "DELETE FROM site.navigation_items WHERE navigation_tree_key = $1 RETURNING silo_group_key",
     )
-        .bind(&navigation_tree_key)
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(classify_sqlx)?
-        .into_iter()
-        .filter_map(|row| row.get::<Option<String>, _>("silo_group_key"))
-        .collect::<Vec<_>>();
+    .bind(&navigation_tree_key)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?
+    .into_iter()
+    .filter_map(|row| row.get::<Option<String>, _>("silo_group_key"))
+    .collect::<Vec<_>>();
 
     let mut silo_group_by_menu = BTreeMap::<String, String>::new();
     for page in &pages {
@@ -288,7 +288,8 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         if silo_group_by_menu.contains_key(&menu_group) {
             continue;
         }
-        let silo_group_key = seo_domain::artifact_identity::seo_artifact_key("silo_group", &[&menu_group]);
+        let silo_group_key =
+            seo_domain::artifact_identity::seo_artifact_key("silo_group", &[&menu_group]);
         sqlx::query(
             r#"
             INSERT INTO site.silo_groups
@@ -306,7 +307,7 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         // per-market navigation tree/item, not the first arbitrary scope
         // that happened to insert the same group in this global table.
         .bind(Option::<&str>::None)
-        .bind(label_from_slug(&menu_group.replace(':', "-")))
+        .bind(seo_domain::navigation::label_from_slug(&menu_group.replace(':', "-")))
         .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
@@ -328,7 +329,11 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
     let mut page_item_count = 0u64;
     let mut seen_tree_url_labels = std::collections::BTreeSet::<(String, String)>::new();
     for (idx, page) in pages.iter().enumerate() {
-        let label = label_from_page(page);
+        let label = seo_domain::navigation::label_for_page(
+            &page.page_type_key,
+            &page.canonical_slug,
+            &page.canonical_url_path,
+        );
         let tree_url_label = (page.canonical_url_path.clone(), label.clone());
         if !seen_tree_url_labels.insert(tree_url_label) {
             continue;
@@ -427,49 +432,4 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         page_item_count,
         silo_group_count: silo_group_by_menu.len() as u64,
     })
-}
-
-fn label_from_page(page: &ActivePageForNavigation) -> String {
-    let source = if page.canonical_slug.trim().is_empty() {
-        page.canonical_url_path
-            .trim_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("page")
-    } else {
-        page.canonical_slug.as_str()
-    };
-    let mut label = label_from_slug(source);
-    match page.page_type_key.as_str() {
-        "country_hub_page" if !label.to_ascii_lowercase().contains("visa") => {
-            label.push_str(" Visa");
-        }
-        "fee_page" if !label.to_ascii_lowercase().contains("fee") => label.push_str(" Fees"),
-        "timeline_page" if !label.to_ascii_lowercase().contains("time") => {
-            label.push_str(" Timeline");
-        }
-        _ => {}
-    }
-    label
-}
-
-fn label_from_slug(value: &str) -> String {
-    let label = value
-        .trim_matches('/')
-        .split(['-', '_', '/', ':'])
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    if label.is_empty() {
-        "Page".to_string()
-    } else {
-        label
-    }
 }

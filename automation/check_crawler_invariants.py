@@ -6,7 +6,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
-PORTS = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+PORTS = ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs"
 CRAWL_POLICY = ROOT / "app/rust/crates/acquisition/src/crawl_policy.rs"
 
 

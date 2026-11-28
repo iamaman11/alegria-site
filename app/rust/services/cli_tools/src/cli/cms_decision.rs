@@ -1,3 +1,23 @@
+/// The CMS HITL operator only needs PostgreSQL, not graph/vector composition.
+/// Keep the same typed application port and transactional SQL implementation
+/// used by the full Worker, while excluding provider SDKs from this binary.
+struct PgCmsReviewRepository<'a> {
+    pool: &'a sqlx::PgPool,
+}
+
+#[async_trait::async_trait]
+impl CmsReviewDecisionPort for PgCmsReviewRepository<'_> {
+    async fn apply_human_review_decision(
+        &self,
+        request: &CmsReviewDecisionRequest,
+    ) -> std::result::Result<CmsReviewDecisionOutcome, primitives::errors::DomainError> {
+        infrastructure::adapters::sqlx_seo_cms_adapter::apply_human_review_decision(
+            self.pool, request,
+        )
+        .await
+    }
+}
+
 async fn cms_review_decision(
     database_url: Option<String>,
     temporal_url: Option<&str>,
@@ -12,7 +32,7 @@ async fn cms_review_decision(
         .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
-    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    let repo = PgCmsReviewRepository { pool: &pool };
     let workflow = TemporalSeoWorkflowControlAdapter::new(
         temporal_url.map(str::to_string).unwrap_or_else(default_temporal_url),
         format!("alegria-cli-tools@{}", std::process::id()),

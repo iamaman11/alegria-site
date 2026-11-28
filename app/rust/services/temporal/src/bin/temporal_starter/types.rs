@@ -1,14 +1,15 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    connect_client, Client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowClientStatus,
-    WorkflowDescribeOptions, WorkflowGetResultOptions,
+use temporal_gateway::connect_client;
+use temporalio_client::{
+    Client, UntypedSignal, UntypedWorkflow, WorkflowDescribeOptions,
+    WorkflowExecutionStatus as WorkflowClientStatus, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
 };
+use temporalio_common::data_converters::{PayloadConverter, RawValue};
 use infrastructure::adapters::{
-    dataforseo_serp_adapter, neo4rs_adapter, qdrant_client_adapter,
+    dataforseo_serp_adapter,
     sqlx_execution_runs_adapter, sqlx_serp_adapter,
-    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
     sqlx_seo_adapter,
     voyage_api_adapter::{
@@ -16,8 +17,11 @@ use infrastructure::adapters::{
         VoyageRerankOptions,
     },
 };
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+use graph_neo4j as neo4rs_adapter;
+use vector_qdrant as qdrant_client_adapter;
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
-use seo_application::execution::normalize_run_mode;
+use seo_application::execution::{normalize_run_mode, SeoDurablePlan, SeoDurableStep};
 use seo_domain::identity;
 use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 use serde_json::{json, Value};
@@ -50,6 +54,9 @@ struct Cli {
 enum Command {
     /// Connectivity check: open client and print namespace/task queue
     Ping,
+    /// One-shot Neo4j projection uniqueness migration; requires stopped/drained graph writers.
+    /// Uses NEO4J_URI, NEO4J_USER and NEO4J_PASSWORD; does not connect to Temporal.
+    Neo4jSchemaInstall,
     /// Start workflow execution
     Start {
         #[arg(long, value_enum)]
@@ -93,6 +100,9 @@ enum Command {
         reuse_corpus_from: Option<String>,
         #[arg(long, default_value = "publish_with_hitl")]
         run_mode: String,
+        /// Explicit V2 source-acquisition-only step order (not full crawl ingest).
+        #[arg(long, value_enum)]
+        v2_order: Option<V2Order>,
         /// Await workflow completion, including genuine external HITL decision.
         #[arg(long, default_value_t = false)]
         wait: bool,
@@ -247,7 +257,25 @@ enum WorkflowKind {
     FreshnessCheck,
     ProjectionReconcile,
     SeoSiteBuildCanonicalCutover,
+    SeoSiteBuildComposableV2,
     TestHitl,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum V2Order {
+    SupportFirst,
+    AcquisitionFirst,
+}
+
+impl V2Order {
+    fn durable_plan(self) -> anyhow::Result<SeoDurablePlan> {
+        use SeoDurableStep::{LoadVerifiedSupport, SourceAcquisition};
+        let ordered = match self {
+            Self::SupportFirst => vec![LoadVerifiedSupport, SourceAcquisition],
+            Self::AcquisitionFirst => vec![SourceAcquisition, LoadVerifiedSupport],
+        };
+        SeoDurablePlan::source_acquisition_only(ordered).map_err(Into::into)
+    }
 }
 
 impl WorkflowKind {
@@ -260,6 +288,7 @@ impl WorkflowKind {
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
             WorkflowKind::SeoSiteBuildCanonicalCutover => "SeoSiteBuildCanonicalCutoverWorkflow",
+            WorkflowKind::SeoSiteBuildComposableV2 => "SeoSiteBuildComposableV2Workflow",
             WorkflowKind::TestHitl => "TestHitlWorkflow",
         }
     }
@@ -273,6 +302,7 @@ impl WorkflowKind {
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::ProjectionReconcile => "projection-reconcile",
             WorkflowKind::SeoSiteBuildCanonicalCutover => "seo-site-build-canonical-cutover",
+            WorkflowKind::SeoSiteBuildComposableV2 => "seo-site-build-composable-v2",
             WorkflowKind::TestHitl => "test-hitl",
         }
     }
@@ -285,6 +315,7 @@ impl WorkflowKind {
                 | WorkflowKind::ExpertProjection
                 | WorkflowKind::ExpertSemanticSlice
                 | WorkflowKind::SeoSiteBuildCanonicalCutover
+                | WorkflowKind::SeoSiteBuildComposableV2
         )
     }
 }
@@ -337,5 +368,33 @@ mod canonical_workflow_cli_tests {
             .is_err(),
             "rebuild dispatch must not select a retired workflow"
         );
+    }
+
+    #[test]
+    fn v2_is_explicitly_selectable_with_two_distinct_immutable_recipes() {
+        let cli = Cli::try_parse_from([
+            "temporal_starter",
+            "start",
+            "--workflow",
+            "seo-site-build-composable-v2",
+            "--run-mode",
+            "crawl_only",
+            "--v2-order",
+            "acquisition-first",
+        ])
+        .expect("V2 has an explicit opt-in entrypoint");
+        assert!(matches!(
+            cli.command,
+            Command::Start {
+                workflow: WorkflowKind::SeoSiteBuildComposableV2,
+                v2_order: Some(V2Order::AcquisitionFirst),
+                ..
+            }
+        ));
+        let a = V2Order::SupportFirst.durable_plan().unwrap();
+        let b = V2Order::AcquisitionFirst.durable_plan().unwrap();
+        assert_ne!(a.ordered_steps(), b.ordered_steps());
+        assert_eq!(a.ordered_steps()[0], SeoDurableStep::LoadVerifiedSupport);
+        assert_eq!(b.ordered_steps()[0], SeoDurableStep::SourceAcquisition);
     }
 }

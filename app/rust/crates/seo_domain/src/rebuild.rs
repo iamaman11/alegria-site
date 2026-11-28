@@ -160,6 +160,167 @@ pub fn detect_rebuild(input: &RebuildDetectRequest) -> RebuildDetectResult {
     }
 }
 
+/// Independent pure rebuild impact decision. Execution and scheduling remain
+/// Temporal/PG effects, explicitly outside this operation contract.
+pub mod operations {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::convert::Infallible;
+
+    use operation_protocol::{
+        ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId,
+        OperationOwnerId, OperationRef, PortId,
+    };
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    use super::{detect_rebuild, RebuildDetectRequest, RebuildVerdict};
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct RebuildImpactInput {
+        pub run_id: String,
+        pub changed_truth_keys: Vec<String>,
+        pub page_node_keys: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RebuildDecision {
+        NoRebuildRequired,
+        RebuildRequired,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct RebuildReason {
+        pub trigger_type: String,
+        pub matched_dependencies: Vec<String>,
+        pub changed_truth_keys: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct RebuildPageImpact {
+        pub page_node_key: String,
+        pub trigger_type: String,
+        pub reason: RebuildReason,
+        pub priority: i32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+    #[serde(deny_unknown_fields)]
+    pub struct RebuildImpactOutput {
+        pub impacted_page_node_keys: Vec<String>,
+        pub verdict: RebuildDecision,
+        pub impacts: Vec<RebuildPageImpact>,
+    }
+
+    pub struct DetectRebuildImpact;
+
+    impl Operation for DetectRebuildImpact {
+        type Input = RebuildImpactInput;
+        type Output = RebuildImpactOutput;
+        type Failure = Infallible;
+
+        fn contract() -> OperationContract {
+            OperationContract {
+                reference: OperationRef {
+                    id: OperationId::from("publishing.detect_rebuild_impact"),
+                    revision: 1,
+                },
+                owner: OperationOwnerId::from("publishing_policy"),
+                inputs: BTreeMap::from([(
+                    PortId::from("input"),
+                    ArtifactSchema {
+                        id: "publishing.rebuild_impact_input".into(),
+                        revision: 1,
+                    },
+                )]),
+                outputs: BTreeMap::from([(
+                    PortId::from("output"),
+                    ArtifactSchema {
+                        id: "publishing.rebuild_impact_output".into(),
+                        revision: 1,
+                    },
+                )]),
+                invalidates: BTreeSet::new(),
+                effects: BTreeSet::new(),
+                idempotency: IdempotencyPolicy::Pure,
+            }
+        }
+    }
+
+    impl DetectRebuildImpact {
+        pub fn evaluate(input: &RebuildImpactInput) -> RebuildImpactOutput {
+            let decision = detect_rebuild(&RebuildDetectRequest {
+                run_id: input.run_id.clone(),
+                changed_truth_keys: input.changed_truth_keys.clone(),
+                page_node_keys: input.page_node_keys.clone(),
+            });
+            let normalized_changes = input
+                .changed_truth_keys
+                .iter()
+                .map(|key| key.trim().to_owned())
+                .filter(|key| !key.is_empty())
+                .collect::<Vec<_>>();
+            RebuildImpactOutput {
+                impacted_page_node_keys: decision.impacted_page_node_keys,
+                verdict: match decision.verdict {
+                    RebuildVerdict::NoRebuildRequired => RebuildDecision::NoRebuildRequired,
+                    RebuildVerdict::RebuildRequired => RebuildDecision::RebuildRequired,
+                },
+                impacts: decision
+                    .impacts
+                    .into_iter()
+                    .map(|impact| RebuildPageImpact {
+                        page_node_key: impact.page_node_key,
+                        trigger_type: impact.trigger_type.clone(),
+                        reason: RebuildReason {
+                            trigger_type: impact.trigger_type,
+                            matched_dependencies: Vec::new(),
+                            changed_truth_keys: normalized_changes.clone(),
+                        },
+                        priority: impact.priority,
+                    })
+                    .collect(),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn independent_pure_rebuild_decision_uses_existing_owner_and_no_side_effect() {
+            let contract = DetectRebuildImpact::contract();
+            assert!(contract.effects.is_empty());
+            assert_eq!(contract.idempotency, IdempotencyPolicy::Pure);
+            let decision = DetectRebuildImpact::evaluate(&RebuildImpactInput {
+                run_id: "test-run".to_owned(),
+                changed_truth_keys: vec![" scope_change:ru ".to_owned()],
+                page_node_keys: vec![" page:1 ".to_owned()],
+            });
+            assert_eq!(decision.verdict, RebuildDecision::RebuildRequired);
+            assert_eq!(decision.impacted_page_node_keys, vec!["page:1"]);
+            assert_eq!(
+                decision.impacts[0].reason.changed_truth_keys,
+                vec!["scope_change:ru"]
+            );
+            assert_eq!(decision.impacts[0].priority, 2);
+            assert_eq!(
+                DetectRebuildImpact::evaluate(&RebuildImpactInput {
+                    run_id: "test-run".to_owned(),
+                    changed_truth_keys: vec![],
+                    page_node_keys: vec!["page:1".to_owned()],
+                })
+                .verdict,
+                RebuildDecision::NoRebuildRequired
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

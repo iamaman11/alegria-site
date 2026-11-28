@@ -5,9 +5,10 @@ use futures::Future;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
     self as pipeline_storage, RuntimeProtoPayload,
 };
-use infrastructure::adapters::temporalio_sdk_adapter::{ActivityError, ApplicationFailure};
 use primitives::errors::{DomainError, ErrorClass};
 use primitives::hash::blake3_hex;
+use temporalio_sdk::activities::ActivityError;
+use temporalio_sdk::ApplicationFailure;
 
 use super::AlegriaActivities;
 use crate::metrics::ActivityTimer;

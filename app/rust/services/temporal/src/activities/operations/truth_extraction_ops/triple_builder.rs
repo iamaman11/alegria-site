@@ -17,15 +17,25 @@ pub(crate) async fn triple_builder_sweep_impl(
         .procedural
         .sections
         .iter()
-        .map(|section| {
+        .map(|section| -> Result<TripleBuilderSectionState, DomainError> {
             let operational = operational_by_section
                 .get(&section.section_id)
                 .copied()
-                .unwrap();
+                .ok_or_else(|| DomainError::ContractViolation {
+                    message: format!(
+                        "triple_builder stage=section_join run_id={} section_id={} missing operational extraction",
+                        input.run_id, section.section_id
+                    ),
+                })?;
             let editorial = editorial_by_section
                 .get(&section.section_id)
                 .copied()
-                .unwrap();
+                .ok_or_else(|| DomainError::ContractViolation {
+                    message: format!(
+                        "triple_builder stage=section_join run_id={} section_id={} missing editorial extraction",
+                        input.run_id, section.section_id
+                    ),
+                })?;
             let output = seo_steps::triple_builder_step::execute(
                 &seo_steps::triple_builder_step::TripleBuilderInput {
                     section_id: section.section_id.to_string(),
@@ -61,7 +71,7 @@ pub(crate) async fn triple_builder_sweep_impl(
                         .collect(),
                 },
             );
-            TripleBuilderSectionState {
+            Ok(TripleBuilderSectionState {
                 section_id: section.section_id,
                 page_id: section.page_id,
                 triples: output.triples,
@@ -72,9 +82,9 @@ pub(crate) async fn triple_builder_sweep_impl(
                     "pass"
                 }
                 .to_string(),
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, DomainError>>()?;
     Ok(TripleBuilderSweepOutput {
         section_count: sections.len(),
         blocked_section_count: sections
@@ -93,7 +103,7 @@ async fn retrieve_semantic_neighbors(
     limit: usize,
 ) -> Result<SemanticNeighborLookup, DomainError> {
     seo_application::knowledge::retrieve_semantic_neighbors(
-        &infrastructure::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter,
+        &runtime_composition::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter,
         &SemanticNeighborQuery {
             text: query.to_string(),
             primary,
@@ -106,3 +116,83 @@ async fn retrieve_semantic_neighbors(
     .await
 }
 
+#[cfg(test)]
+mod triple_builder_join_tests {
+    use super::*;
+
+    fn matched_layers() -> TripleBuilderSweepInput {
+        TripleBuilderSweepInput {
+            run_id: "typed-join-run".into(),
+            procedural: ProceduralExtractionSweepOutput {
+                section_count: 1,
+                blocked_section_count: 0,
+                skipped_section_count: 0,
+                rule_count: 0,
+                sections: vec![ProceduralExtractionSectionState {
+                    section_id: 17,
+                    page_id: 4,
+                    rules: vec![],
+                    blocked_by_gate: false,
+                    skipped: false,
+                    decision: "pass".into(),
+                }],
+            },
+            operational: OperationalExtractionSweepOutput {
+                section_count: 1,
+                blocked_section_count: 0,
+                entity_count: 0,
+                sections: vec![OperationalExtractionSectionState {
+                    section_id: 17,
+                    page_id: 4,
+                    entities: vec![],
+                    blocked_by_gate: false,
+                    decision: "pass".into(),
+                }],
+            },
+            editorial: EditorialExtractionSweepOutput {
+                section_count: 1,
+                blocked_section_count: 0,
+                skipped_section_count: 0,
+                topic_count: 0,
+                sections: vec![EditorialExtractionSectionState {
+                    section_id: 17,
+                    page_id: 4,
+                    topics: vec![],
+                    blocked_by_gate: false,
+                    skipped: false,
+                    decision: "pass".into(),
+                }],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_typed_join_can_run_with_one_independent_section() {
+        let result = triple_builder_sweep_impl(&matched_layers()).await.unwrap();
+        assert_eq!(result.section_count, 1);
+        assert_eq!(result.triple_count, 0);
+        assert_eq!(result.blocked_section_count, 0);
+        assert_eq!(result.sections[0].section_id, 17);
+        assert_eq!(result.sections[0].decision, "pass");
+    }
+
+    #[tokio::test]
+    async fn missing_operational_section_returns_typed_error_not_panic() {
+        let mut input = matched_layers();
+        input.operational.sections.clear();
+        let error = triple_builder_sweep_impl(&input).await.unwrap_err();
+        assert!(matches!(error, DomainError::ContractViolation { .. }));
+        assert!(error.to_string().contains("missing operational extraction"));
+        assert!(error.to_string().contains("section_id=17"));
+    }
+
+    #[tokio::test]
+    async fn missing_editorial_section_returns_typed_error_not_panic() {
+        let mut input = matched_layers();
+        input.editorial.sections.clear();
+        let error = triple_builder_sweep_impl(&input).await.unwrap_err();
+        assert!(matches!(error, DomainError::ContractViolation { .. }));
+        assert!(error.to_string().contains("missing editorial extraction"));
+        assert!(error.to_string().contains("run_id=typed-join-run"));
+    }
+}

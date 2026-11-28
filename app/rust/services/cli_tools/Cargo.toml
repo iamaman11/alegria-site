@@ -7,16 +7,26 @@ edition = "2021"
 tokio = { workspace = true }
 seo_steps = { path = "../../crates/seo_steps" }
 infrastructure = { path = "../../crates/infrastructure" }
+postgres_store = { path = "../../crates/postgres_store" }
+temporal_gateway = { path = "../../crates/temporal_gateway" }
 seo_application = { path = "../../crates/seo_application" }
+trusted_owner_catalog = { path = "../../crates/trusted_owner_catalog" }
 seo_ports = { path = "../../crates/seo_ports" }
 primitives = { path = "../../crates/primitives" }
 truth_domain = { path = "../../crates/truth_domain" }
 contracts = { path = "../../crates/contracts" }
 anyhow = { workspace = true }
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = "0.14"
 prost = { workspace = true }
 uuid = { workspace = true }
 
 hex = "0.4"
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

@@ -1,7 +1,8 @@
 //! Classify source sections into editorial and factual extraction lanes.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LayerRouterInput {
     pub section_id: String,
     pub heading_text: String,
@@ -10,7 +11,7 @@ pub struct LayerRouterInput {
     pub block_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LayerScores {
     pub procedural: f32,
     pub operational: f32,
@@ -19,13 +20,13 @@ pub struct LayerScores {
     pub commercial: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SecondaryLayer {
     pub layer: String,
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct LayerRouterOutput {
     pub layer_scores: LayerScores,
     pub primary_layer: String,

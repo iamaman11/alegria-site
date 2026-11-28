@@ -14,9 +14,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from prepare_worker_build_context import (
-    context_files, dependency_skeleton_targets, release_closure, write_dependency_skeleton,
+    IMAGE_CONTEXT_ROOTS, V3_DOCKERFILE, V7_PURE_DOCKERFILE, context_files,
+    dependency_skeleton_targets, release_closure, write_dependency_skeleton,
 )
 from check_worker_dependency_skeleton import graph_signature
+from compare_physical_build_options import workspace_graph as manifest_workspace_graph
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -342,6 +344,154 @@ class TemporalDockerContextTests(unittest.TestCase):
         self.assertNotIn("app/rust/services/outbox_worker/src/main.rs", copied)
         self.assertIn("automation/deploy_seo_static_cloudflare.py", copied)
         self.assertIn("infra/cloudflare/seo-static/package.json", copied)
+
+    def test_v3_exact_owner_contexts_sever_providers_and_unrelated_image_sources(self) -> None:
+        owners = {
+            "app/rust/services/temporal_orchestrator": "temporal_orchestrator",
+            "app/rust/services/temporal_pg_effects": "temporal_pg_effects",
+            "app/rust/services/temporal_acquisition_pure": "temporal_acquisition_pure",
+            "app/rust/services/acquisition_source_issuer": "acquisition_source_issuer",
+            "app/rust/services/one_step_request_issuer": "one_step_request_issuer",
+            "app/rust/services/temporal": "temporal_worker",
+            "app/rust/crates/acquisition": "acquisition",
+            "app/rust/crates/operation_protocol": "operation_protocol",
+            "app/rust/crates/truth_domain": "truth_domain",
+            "app/rust/crates/postgres_store": "postgres_store",
+            "app/rust/crates/graph_neo4j": "graph_neo4j",
+            "app/rust/crates/vector_qdrant": "vector_qdrant",
+        }
+        reverse = {
+            "temporal_orchestrator": set(), "temporal_pg_effects": set(),
+            "temporal_acquisition_pure": set(),
+            "acquisition_source_issuer": set(),
+            "one_step_request_issuer": set(),
+            "temporal_worker": set(), "truth_domain": {"temporal_orchestrator", "temporal_pg_effects"},
+            "postgres_store": {"temporal_pg_effects"},
+            "acquisition": {"temporal_acquisition_pure", "acquisition_source_issuer"},
+            "operation_protocol": {
+                "temporal_acquisition_pure", "acquisition_source_issuer",
+                "one_step_request_issuer", "acquisition",
+            },
+            "graph_neo4j": {"temporal_worker"},
+            "vector_qdrant": {"temporal_worker"},
+        }
+        tracked = {
+            "app/rust/Cargo.toml", "app/rust/Cargo.lock", V3_DOCKERFILE,
+            *(f"{directory}/Cargo.toml" for directory in owners),
+            *(f"{directory}/src/main.rs" for directory in owners if "/services/" in directory),
+            *(f"{directory}/src/lib.rs" for directory in owners if "/crates/" in directory),
+            "app/contracts/proto/read_api.proto", "app/contracts/proto/rules.proto",
+            "app/contracts/proto/condition.proto", "app/contracts/proto/sync.proto",
+            "app/contracts/proto/temporal_payloads.proto", "app/analytics_lab/proto/analytics.proto",
+            "infra/cloudflare/seo-static/vite.config.ts",
+            "automation/deploy_seo_static_cloudflare.py",
+        }
+        expected = {
+            "temporal-orchestrator-v3": {"temporal_orchestrator", "truth_domain"},
+            "temporal-pg-effects-v3": {"temporal_pg_effects", "truth_domain", "postgres_store"},
+            "temporal-acquisition-pure-v1": {
+                "temporal_acquisition_pure", "acquisition", "operation_protocol",
+            },
+            "acquisition-source-issuer-v1": {
+                "acquisition_source_issuer", "acquisition", "operation_protocol",
+            },
+            "one-step-request-issuer-v1": {"one_step_request_issuer", "operation_protocol"},
+        }
+        for image_owner, allowed in expected.items():
+            with self.subTest(image_owner=image_owner):
+                packages = release_closure(owners, reverse, image_owner=image_owner)
+                self.assertEqual(packages, allowed)
+                paths = context_files(tracked, owners, packages, image_owner=image_owner)
+                self.assertIn(V3_DOCKERFILE, paths)
+                self.assertIn("app/rust/services/temporal_orchestrator/Cargo.toml", paths)
+                self.assertIn("app/rust/services/temporal_pg_effects/Cargo.toml", paths)
+                self.assertNotIn("app/rust/services/temporal/src/main.rs", paths)
+                self.assertNotIn("app/rust/crates/graph_neo4j/src/lib.rs", paths)
+                self.assertNotIn("app/rust/crates/vector_qdrant/src/lib.rs", paths)
+                self.assertNotIn("infra/cloudflare/seo-static/vite.config.ts", paths)
+                self.assertNotIn("automation/deploy_seo_static_cloudflare.py", paths)
+                for package in allowed:
+                    directory = next(directory for directory, name in owners.items() if name == package)
+                    self.assertIn(f"{directory}/src/{'main.rs' if '/services/' in directory else 'lib.rs'}", paths)
+
+        self.assertEqual(set(IMAGE_CONTEXT_ROOTS), {
+            "temporal-worker", "temporal-orchestrator-v3", "temporal-pg-effects-v3",
+            "temporal-acquisition-pure-v1",
+            "acquisition-source-issuer-v1",
+            "one-step-request-issuer-v1",
+        })
+        with self.assertRaisesRegex(ValueError, "unknown Cargo image context owner"):
+            release_closure(owners, reverse, image_owner="temporal-worker-v4")
+        with self.assertRaisesRegex(ValueError, "missing tracked V3 Dockerfile"):
+            context_files(tracked - {V3_DOCKERFILE}, owners, expected["temporal-orchestrator-v3"],
+                          image_owner="temporal-orchestrator-v3")
+        v7_context = context_files(
+            tracked | {V7_PURE_DOCKERFILE}, owners, expected["temporal-orchestrator-v3"],
+            image_owner="temporal-orchestrator-v3",
+        )
+        self.assertIn(V7_PURE_DOCKERFILE, v7_context)
+        self.assertNotIn("app/rust/crates/graph_neo4j/src/lib.rs", v7_context)
+        self.assertNotIn("app/rust/crates/vector_qdrant/src/lib.rs", v7_context)
+        self.assertNotIn("app/rust/crates/postgres_store/src/lib.rs", v7_context)
+
+    def test_checked_in_v3_owner_closures_use_real_manifest_graph_without_legacy_providers(self) -> None:
+        # Actual local Cargo manifests are enough to prove source exclusion;
+        # this is not evidence that rustc/linker or Docker compiled/reused it.
+        graph, manifests = manifest_workspace_graph()
+        owners = {manifest.parent.relative_to(ROOT).as_posix(): name
+                  for name, manifest in manifests.items()}
+        reverse = {name: set() for name in graph}
+        for consumer, dependencies in graph.items():
+            for dependency in dependencies:
+                reverse[dependency].add(consumer)
+        closures = {
+            image_owner: release_closure(owners, reverse, image_owner=image_owner)
+            for image_owner in (
+                "temporal-orchestrator-v3", "temporal-pg-effects-v3",
+                "temporal-acquisition-pure-v1", "acquisition-source-issuer-v1",
+                "one-step-request-issuer-v1",
+            )
+        }
+        for image_owner, packages in closures.items():
+            with self.subTest(image_owner=image_owner):
+                self.assertNotIn("temporal_worker", packages)
+                self.assertTrue(packages.isdisjoint({
+                    "graph_neo4j", "vector_qdrant", "runtime_composition",
+                    "infrastructure", "projection_delivery", "outbox_worker",
+                }))
+                if image_owner in ("temporal-acquisition-pure-v1", "acquisition-source-issuer-v1"):
+                    self.assertIn("acquisition", packages)
+                    self.assertIn("operation_protocol", packages)
+                    self.assertNotIn("postgres_store", packages)
+                    self.assertNotIn("temporal_orchestrator", packages)
+                    self.assertNotIn("temporal_pg_effects", packages)
+                elif image_owner == "one-step-request-issuer-v1":
+                    self.assertIn("operation_protocol", packages)
+                    self.assertNotIn("acquisition", packages)
+                    self.assertNotIn("postgres_store", packages)
+                    self.assertNotIn("temporal_orchestrator", packages)
+                    self.assertNotIn("temporal_pg_effects", packages)
+                else:
+                    self.assertIn("truth_domain", packages)
+        self.assertNotIn("postgres_store", closures["temporal-orchestrator-v3"])
+        self.assertIn("postgres_store", closures["temporal-pg-effects-v3"])
+
+    def test_opt_in_acquisition_images_have_separate_native_runtime_targets(self) -> None:
+        dockerfile = (ROOT / V3_DOCKERFILE).read_text(encoding="utf-8")
+        for owner, stage, image_stage in (
+            ("temporal_acquisition_pure", "acquisition-builder", "acquisition"),
+            ("acquisition_source_issuer", "source-issuer-builder", "source-issuer"),
+            ("one_step_request_issuer", "request-issuer-builder", "request-issuer"),
+        ):
+            with self.subTest(owner=owner):
+                self.assertEqual(dockerfile.count(f"{owner}) set -- ;;"), 2)
+                self.assertIn(f"FROM build-base AS {stage}", dockerfile)
+                self.assertIn(f"FROM runtime AS {image_stage}\n", dockerfile)
+                self.assertIn(
+                    f"COPY --from={stage} /app/app/rust/target/release/{owner} "
+                    f"/usr/local/bin/{owner}", dockerfile,
+                )
+                self.assertIn(f'ENTRYPOINT ["/usr/local/bin/{owner}"]', dockerfile)
 
     def test_missing_manifest_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "workspace manifest"):

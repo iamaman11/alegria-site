@@ -1,18 +1,10 @@
-use infrastructure::adapters::projection_materialize_adapter::DispatchError;
+use postgres_store::sqlx_outbox_adapter::OutboxEvent;
+use projection_delivery::projection_materialize_adapter::{DispatchDisposition, DispatchError};
+use sqlx::PgPool;
 
 pub async fn dispatch_event(
-    target_system: &str,
-    event_type: &str,
-    aggregate_key: &str,
-    payload_type: &str,
-    payload_bytes: &[u8],
-) -> Result<(), DispatchError> {
-    infrastructure::adapters::projection_materialize_adapter::dispatch_event(
-        target_system,
-        event_type,
-        aggregate_key,
-        payload_type,
-        payload_bytes,
-    )
-    .await
+    pool: &PgPool,
+    event: &OutboxEvent,
+) -> Result<DispatchDisposition, DispatchError> {
+    projection_delivery::projection_materialize_adapter::dispatch_leased_event(pool, event).await
 }

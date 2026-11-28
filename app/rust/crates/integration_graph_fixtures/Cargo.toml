@@ -1,0 +1,15 @@
+[package]
+name = "integration_graph_fixtures"
+version = "0.1.0"
+edition = "2021"
+
+# Shared real Neo4j container, independently of PG/Qdrant/Temporal fixtures.
+[features]
+default = []
+e2e = ["dep:anyhow", "dep:graph_neo4j", "dep:testcontainers", "dep:tokio"]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+graph_neo4j = { path = "../graph_neo4j", optional = true }
+testcontainers = { version = "0.28.0", optional = true }
+tokio = { workspace = true, optional = true }

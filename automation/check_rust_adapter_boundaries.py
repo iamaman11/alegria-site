@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -10,15 +11,151 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
+POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
+PG_RUNTIME_MANIFEST = RUST_ROOT / "crates" / "pg_runtime_ports" / "Cargo.toml"
+OUTBOX_MANIFEST = RUST_ROOT / "services" / "outbox_worker" / "Cargo.toml"
+DELIVERY_MANIFEST = RUST_ROOT / "crates" / "projection_delivery" / "Cargo.toml"
+VOYAGE_MANIFEST = RUST_ROOT / "crates" / "voyage_api" / "Cargo.toml"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
+# This is an opt-in, test-only binary owner. It needs the native Temporal
+# client to validate actual History/Signal replay, but it is not a production
+# adapter or a back door for unrelated provider SDKs.
+PG_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_v3_e2e"
+PG_E2E_SRC = PG_E2E_DIR / "src"
+PG_APP_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_app_e2e"
+PG_APP_HTTP_FAULT_FILE = PG_APP_E2E_DIR / "src/tests/publication_delivery_tests.rs"
+PG_E2E_TEMPORAL_SDKS = frozenset({
+    "temporalio-client", "temporalio-common",
+})
+TEMPORAL_FIXTURE_DIR = RUST_ROOT / "crates" / "integration_temporal_fixtures"
+TEMPORAL_FIXTURE_SRC = TEMPORAL_FIXTURE_DIR / "src"
+TEMPORAL_FIXTURE_SDKS = frozenset({"temporalio-client"})
+TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_temporal_e2e"
+TEMPORAL_E2E_SRC = TEMPORAL_E2E_DIR / "src"
+TEMPORAL_E2E_SDKS = frozenset({"temporalio-client", "temporalio-common"})
+QDRANT_TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_qdrant_temporal_e2e"
+QDRANT_TEMPORAL_E2E_SRC = QDRANT_TEMPORAL_E2E_DIR / "src"
+QDRANT_TEMPORAL_E2E_SDKS = frozenset({
+    "temporalio-client", "temporalio-common",
+})
+# The test must exercise the native owner protocol without compiling the SEO
+# application or production Temporal gateway as an accidental dependency.
+MIXED_E2E_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "seo_application", "seo_ports", "temporal_gateway",
+})
+NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME = frozenset({
+    "seo_application", "seo_domain", "seo_ports", "temporal_gateway",
+})
+TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
+TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
+TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
+TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
+TEMPORAL_QDRANT_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_qdrant_effects" / "src"
+TEMPORAL_DATAFORSEO_SRC = RUST_ROOT / "services" / "temporal_dataforseo" / "src"
+TEMPORAL_ACQUISITION_PURE_SRC = RUST_ROOT / "services" / "temporal_acquisition_pure" / "src"
+TEMPORAL_SEO_STEPS_PURE_SRC = RUST_ROOT / "services" / "temporal_seo_steps_pure" / "src"
+TEMPORAL_TRUTH_PURE_SRC = RUST_ROOT / "services" / "temporal_truth_pure" / "src"
+TEMPORAL_SEMANTIC_PURE_SRC = RUST_ROOT / "services" / "temporal_semantic_pure" / "src"
+TEMPORAL_WEB_FETCH_SRC = RUST_ROOT / "services" / "temporal_web_fetch" / "src"
+ACQUISITION_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_acquisition_pure" / "Cargo.toml").resolve()
+ACQUISITION_PURE_OWNER_SOURCE_FILES = frozenset({
+    (TEMPORAL_ACQUISITION_PURE_SRC / "main.rs").resolve(),
+})
+ACQUISITION_PURE_OWNER_TEMPORAL_SDKS = frozenset({
+    "temporalio-sdk", "temporalio-client", "temporalio-common", "temporalio-macros",
+})
+SEO_STEPS_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_seo_steps_pure" / "Cargo.toml").resolve()
+TRUTH_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_truth_pure" / "Cargo.toml").resolve()
+SEMANTIC_PURE_OWNER_MANIFEST = TEMPORAL_SEMANTIC_PURE_SRC.parent / "Cargo.toml"
+SEMANTIC_HISTORY_SOURCE = (TEMPORAL_SEMANTIC_PURE_SRC / "produced_history.rs").resolve()
+WEB_FETCH_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_web_fetch" / "Cargo.toml").resolve()
+PURE_OWNER_RUNTIME_SOURCE_FILES = frozenset({
+    (TEMPORAL_SEO_STEPS_PURE_SRC / "main.rs").resolve(),
+    (TEMPORAL_TRUTH_PURE_SRC / "main.rs").resolve(),
+    (TEMPORAL_SEMANTIC_PURE_SRC / "main.rs").resolve(),
+})
+WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES = frozenset({
+    (TEMPORAL_WEB_FETCH_SRC / "transport.rs").resolve(),
+})
+OPERATION_PROTOCOL_MANIFEST = RUST_ROOT / "crates" / "operation_protocol" / "Cargo.toml"
+PG_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml"
+QDRANT_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
+ORCHESTRATOR_MANIFEST = RUST_ROOT / "services" / "temporal_orchestrator" / "Cargo.toml"
+# This check is deliberately narrower than a global ban on provider names:
+# the old Qdrant V1 parent is shipped in the orchestrator binary and cannot be
+# removed or reinterpreted without separately versioned History migration.
+# The native generic owner route and the two new owner entrypoints, however,
+# must never start importing one another's provider or effect contracts.
+DAG_PROVIDER_CRATES = frozenset({
+    "postgres_store", "graph_neo4j", "vector_qdrant", "qdrant_contracts",
+    "qdrant_effects_core", "pg_runtime_ports", "runtime_composition", "infrastructure",
+})
+DAG_GENERIC_NEUTRAL_SOURCE = (
+    RUST_ROOT / "crates" / "trusted_owner_catalog" / "src" / "lib.rs",
+)
+DAG_PG_OWNED_SOURCE = (
+    TEMPORAL_PG_EFFECTS_SRC / "operator_owner_v1.rs",
+)
+DAG_QDRANT_OWNED_SOURCE = (
+    TEMPORAL_QDRANT_EFFECTS_SRC / "owner_generic_v1.rs",
+)
+QDRANT_EFFECTS_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
+QDRANT_EFFECTS_SRC = QDRANT_EFFECTS_MANIFEST.parent / "src"
+QDRANT_EFFECTS_RUNTIME_SDKS = frozenset({
+    "temporalio-sdk", "temporalio-client", "temporalio-common", "temporalio-macros",
+})
+# This dedicated production Activity owner must not become a generic escape
+# hatch for domain crates or any new file added without architectural review.
+# V2 and the generic native V3 operator/owner bridge are separately reviewed
+# runtime entrypoints. The latter attests real server Histories and registers
+# the same typed child Workflow on its own Qdrant-only Task Queue; neither
+# grants future modules or any unrelated provider/direct domain SDK access.
+QDRANT_EFFECTS_SDK_SOURCE_FILES = frozenset({
+    (QDRANT_EFFECTS_SRC / "main.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "operator.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "operator_v2.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "owner_v2.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "operator_v3.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "owner_generic_v1.rs").resolve(),
+})
+# A new separately deployed *stub-only* paid-provider owner owns exactly one
+# reviewed transport/runtime entrypoint. Other DataForSEO/domain modules never
+# inherit native Temporal SDK or HTTP client authority from this exception.
+DATAFORSEO_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_dataforseo" / "Cargo.toml").resolve()
+DATAFORSEO_OWNER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "main.rs").resolve(),
+})
+DATAFORSEO_PAID_PROVIDER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "paid_provider.rs").resolve(),
+})
+DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS = frozenset({
+    "reqwest", "temporalio-sdk", "temporalio-client",
+    "temporalio-common", "temporalio-macros",
+})
+# The independently credentialed History-attestation issuer may inspect only
+# server Temporal History. It never inherits the owner's reqwest/provider HTTP
+# authority (nor its worker SDK/task execution capabilities).
+DATAFORSEO_ISSUER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "operator.rs").resolve(),
+})
+DATAFORSEO_ISSUER_DIRECT_EXTERNAL_SDKS = frozenset({
+    "temporalio-client", "temporalio-common",
+})
+INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
+COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
 # SDKs may be used by these dedicated adapter crates, never by domain code.
 DEDICATED_ADAPTER_DIRS = {
     (RUST_ROOT / "crates" / "graph_neo4j").resolve(),
     (RUST_ROOT / "crates" / "http_client").resolve(),
     (RUST_ROOT / "crates" / "vector_qdrant").resolve(),
+    (RUST_ROOT / "crates" / "voyage_api").resolve(),
 }
 # A standalone gRPC service owns its transport-facing request/response types.
-GRPC_SERVICE_SRC = (RUST_ROOT / "services" / "analytics_svc" / "src").resolve()
+GRPC_SERVICE_SRCS = {
+    (RUST_ROOT / "services" / name / "src").resolve()
+    for name in ("analytics_svc", "primitives_svc")
+}
+ANALYTICS_CLIENT_SRC = (RUST_ROOT / "services" / "cli_tools" / "src" / "cli" / "analytics_client.rs").resolve()
 
 ALLOWED_DIRECT_SDK_MANIFESTS = {
     (ROOT / "app" / "rust" / "Cargo.toml").resolve(),
@@ -27,6 +164,9 @@ ALLOWED_DIRECT_SDK_MANIFESTS = {
 }
 
 MANIFEST_DEP_EXCEPTIONS = {
+    (RUST_ROOT / "crates" / "temporal_gateway" / "Cargo.toml").resolve(): {
+        "temporalio-client", "temporalio-common",
+    },
     (ROOT / "app" / "rust" / "services" / "temporal" / "Cargo.toml").resolve(): {
         "temporalio-sdk",
         "temporalio-sdk-core",
@@ -34,14 +174,56 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-common",
         "temporalio-macros",
     },
+    # Independent native Temporal runtime owners are legitimate SDK consumers.
+    # These are exact manifest exceptions, not permission for domain crates or
+    # unrelated provider dependencies to import a Temporal SDK.
+    (RUST_ROOT / "services" / "temporal_orchestrator" / "Cargo.toml").resolve(): {
+        "temporalio-sdk",
+        "temporalio-client",
+        "temporalio-common",
+        "temporalio-macros",
+    },
+    (RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml").resolve(): {
+        "temporalio-sdk",
+        "temporalio-sdk-core",
+        "temporalio-client",
+        "temporalio-common",
+        "temporalio-macros",
+    },
+    QDRANT_EFFECTS_MANIFEST.resolve(): QDRANT_EFFECTS_RUNTIME_SDKS,
+    DATAFORSEO_OWNER_MANIFEST: DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
+    ACQUISITION_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    SEO_STEPS_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    TRUTH_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    SEMANTIC_PURE_OWNER_MANIFEST.resolve(): ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    WEB_FETCH_OWNER_MANIFEST: frozenset({"reqwest"}),
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
         "qdrant-client",
         "reqwest",
         "sqlx",
         "temporalio-client",
+        "temporalio-common",
         "temporalio-sdk-core",
     },
+    (PG_E2E_DIR / "Cargo.toml").resolve(): PG_E2E_TEMPORAL_SDKS,
+    # Genuine disposable Temporal server and client probe for real E2E only;
+    # no other provider SDK or production use-case is exempted.
+    (TEMPORAL_FIXTURE_DIR / "Cargo.toml").resolve(): TEMPORAL_FIXTURE_SDKS,
+    # Actual five-scenario Temporal/full-infra test owner: native SDK History
+    # and PostgreSQL are allowed only in this opt-in test package.
+    (TEMPORAL_E2E_DIR / "Cargo.toml").resolve(): TEMPORAL_E2E_SDKS | {"sqlx"},
+    # The four-container V7 integration executable may only use these native
+    # SDK dependencies when its opt-in e2e feature is selected.
+    (QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml").resolve(): QDRANT_TEMPORAL_E2E_SDKS,
+    # Test-only A14 package exercises real PostgreSQL transactions directly.
+    # Grant precisely SQLx, not unrelated provider or Temporal SDK imports.
+    (RUST_ROOT / "crates" / "integration_outbox_e2e" / "Cargo.toml").resolve(): {"sqlx"},
+    # Shared real PG/Qdrant setup used by multiple integration executables.
+    (RUST_ROOT / "crates" / "integration_data_fixtures" / "Cargo.toml").resolve(): {"sqlx"},
+    # The exact isolated A17 test does real HTTP readback and injects 503s.
+    # No unrelated module inherits a provider SDK escape hatch.
+    (PG_APP_E2E_DIR / "Cargo.toml").resolve(): {"reqwest", "sqlx"},
 }
 
 ENFORCED_DEP_KEYS = [
@@ -97,19 +279,24 @@ FORBIDDEN_DIRECT_IN_USE_CASES = [
 
 REQUIRED_ADAPTERS = {
     "mod.rs",
-    "sqlx_adapter.rs",
     "tokio_postgres_adapter.rs",
-    "neo4rs_adapter.rs",
-    "temporalio_sdk_adapter.rs",
     "hyper_adapter.rs",
     "tower_adapter.rs",
     "playwright_rs_adapter.rs",
-    "qdrant_client_adapter.rs",
     "voyage_api_adapter.rs",
-    "tonic_adapter.rs",
     "sqlx_outbox_adapter.rs",
     "tracing_adapter.rs",
     "reqwest_adapter.rs",
+}
+
+REQUIRED_POSTGRES_OWNER_FILES = {
+    "lib.rs",
+    "sqlx_adapter.rs",
+    "sqlx_error.rs",
+    "sqlx_reconcile_adapter.rs",
+    "sqlx_reconcile_runtime_adapter.rs",
+    "sqlx_runtime_health_adapter.rs",
+    "sqlx_projection_rows.rs",
 }
 
 FORBIDDEN_INFRA_ROOT_FILES = {
@@ -121,6 +308,232 @@ FORBIDDEN_INFRA_ROOT_FILES = {
     "outbox_store.rs",
     "telemetry.rs",
 }
+
+DELIVERY_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "runtime_composition", "infrastructure", "acquisition", "seo_steps",
+    "temporal_worker", "temporal_gateway",
+})
+DELIVERY_REQUIRED_DIRECT_OWNERS = frozenset({
+    "postgres_store", "graph_neo4j", "vector_qdrant", "voyage_api",
+})
+PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "runtime_composition", "graph_neo4j", "vector_qdrant",
+    "temporal_gateway", "temporal_worker", "outbox_worker",
+})
+
+
+def pg_runtime_closure_failures(closure: set[str], direct: set[str]) -> list[str]:
+    failures = [
+        f"pg_runtime_ports Cargo closure imports forbidden provider/Temporal owner `{name}`"
+        for name in sorted(closure & PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS)
+    ]
+    for name in sorted({"infrastructure", "seo_ports"} - direct):
+        failures.append(f"pg_runtime_ports requires direct production port owner `{name}`")
+    return failures
+
+
+def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
+    """Walk real local path dependencies, including target/dev/build edges.
+
+    Cargo's compilation graph may enable feature-dependent edges; checking
+    their declared union prevents a future feature from silently reconnecting
+    the PostgreSQL owner to Neo4j or Qdrant. No Rust toolchain is required.
+    """
+    visited: set[Path] = set()
+    packages: set[str] = set()
+    direct: set[str] = set()
+
+    def visit(current: Path, *, root: bool = False) -> None:
+        current = current.resolve()
+        if current in visited:
+            return
+        visited.add(current)
+        package = tomllib.loads(current.read_text(encoding="utf-8"))
+        name = package.get("package", {}).get("name")
+        if not isinstance(name, str):
+            raise ValueError(f"missing package.name in {current}")
+        packages.add(name)
+        tables = [package]
+        tables.extend(
+            target for target in package.get("target", {}).values()
+            if isinstance(target, dict)
+        )
+        for table in tables:
+            for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for dependency in table.get(key, {}).values():
+                    if not isinstance(dependency, dict) or "path" not in dependency:
+                        continue
+                    linked = (current.parent / dependency["path"] / "Cargo.toml").resolve()
+                    if not linked.is_relative_to(RUST_ROOT.resolve()):
+                        raise ValueError(f"workspace dependency escapes root: {linked}")
+                    if root:
+                        linked_package = tomllib.loads(linked.read_text(encoding="utf-8"))
+                        direct.add(linked_package["package"]["name"])
+                    visit(linked)
+
+    visit(manifest, root=True)
+    return packages, direct
+
+
+def provider_delivery_closure_failures(
+    outbox_closure: set[str], outbox_direct: set[str],
+    delivery_closure: set[str], delivery_direct: set[str],
+    voyage_closure: set[str],
+) -> list[str]:
+    """Negative guard for every transitive local package, including dev edges."""
+    failures = []
+    if "projection_delivery" not in outbox_direct:
+        failures.append("outbox_worker must directly depend on projection_delivery")
+    for name, closure in (("projection_delivery", delivery_closure),
+                          ("voyage_api", voyage_closure),
+                          ("outbox_worker", outbox_closure)):
+        for forbidden in sorted(DELIVERY_FORBIDDEN_LOCAL_OWNERS & closure):
+            failures.append(f"{name} Cargo closure imports heavy owner `{forbidden}`")
+    for required in sorted(DELIVERY_REQUIRED_DIRECT_OWNERS - delivery_direct):
+        failures.append(f"projection_delivery must directly depend on `{required}`")
+    return failures
+
+
+def native_dag_owner_closure_failures(
+    protocol: set[str], pg: set[str], qdrant: set[str],
+) -> list[str]:
+    """Enforce manifest-level independence of the new native owner binaries.
+
+    Checks use full local path closure including build/dev/target dependencies;
+    a direct-manifest-only test would silently miss an added transitive SDK.
+    The legacy Qdrant parent in temporal_orchestrator is a known physical
+    isolation blocker and is intentionally NOT claimed solved by this check.
+    """
+    failures = []
+    for dependency in sorted(protocol & DAG_PROVIDER_CRATES):
+        failures.append(f"operation_protocol links provider `{dependency}`")
+    for dependency in sorted(pg & {
+        "graph_neo4j", "vector_qdrant", "qdrant_contracts", "qdrant_effects_core",
+        "runtime_composition", "infrastructure",
+    }):
+        failures.append(f"native PostgreSQL effect owner links unrelated `{dependency}`")
+    for dependency in sorted(qdrant & {
+        "postgres_store", "pg_runtime_ports", "graph_neo4j",
+        "runtime_composition", "infrastructure",
+    }):
+        failures.append(f"native Qdrant effect owner links unrelated `{dependency}`")
+    for owner, closure in (("PostgreSQL", pg), ("Qdrant", qdrant)):
+        for dependency in sorted(closure & NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME):
+            failures.append(f"native {owner} effect owner links SEO runtime `{dependency}`")
+    return failures
+
+
+def default_generic_parent_feature_failures(manifest: dict) -> list[str]:
+    """Keep both historical Workflow families opt-in and out of generic DAG.
+
+    This is a Cargo feature/manifest guarantee only; a physical rustc A/B
+    compile must still be run on the exact PR SHA before claiming complete
+    native owner-only rebuild independence.
+    """
+    qdrant = manifest.get("dependencies", {}).get("qdrant_contracts")
+    site_application = manifest.get("dependencies", {}).get("seo_application")
+    features = manifest.get("features", {})
+    if (isinstance(qdrant, dict)
+            and qdrant.get("optional") is True
+            and features.get("legacy-qdrant-v1") == ["dep:qdrant_contracts"]
+            and isinstance(site_application, dict)
+            and site_application.get("optional") is True
+            and features.get("legacy-workflows") == ["dep:seo_application"]
+            and features.get("default", []) == []):
+        return []
+    return [
+        "default generic Temporal parent must be provider-neutral (default = []) "
+        "and retain explicit opt-in legacy-qdrant-v1 and legacy-workflows features "
+        "for frozen historical Workflow replay"
+    ]
+
+
+def generic_dag_source_failures(source: Path, forbidden_crates: set[str]) -> list[str]:
+    """Require all provider-specific Rust paths to stay in their owner source.
+
+    A quoted business string (e.g. `owner_id=postgres_store`) is data rather
+    than a Rust dependency and is purposefully not forbidden here.
+    """
+    label = source.relative_to(ROOT) if source.is_relative_to(ROOT) else source
+    if not source.is_file():
+        return [f"missing native DAG boundary module: {label}"]
+    text = source.read_text(encoding="utf-8")
+    return [
+        f"{label} imports unrelated provider `{crate}`"
+        for crate in sorted(forbidden_crates)
+        if re.search(rf"\b{re.escape(crate)}\s*::", text)
+    ]
+
+
+def exact_temporal_sdk_source_allowed(
+    file_path: Path, pattern: re.Pattern[str],
+    *, sdk_set: frozenset[str], source_root: Path | None = None,
+    exact_files: frozenset[Path] | None = None,
+) -> bool:
+    """Allow specific Temporal SDKs only inside a reviewed runtime/test owner."""
+    if source_root is not None and source_root not in file_path.parents:
+        return False
+    if exact_files is not None and file_path.resolve() not in exact_files:
+        return False
+    return any(
+        f"{dependency.replace('-', '_')}::" in pattern.pattern
+        for dependency in sdk_set
+    )
+
+
+def pg_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    """Only PG E2E's exact three opt-in native Temporal SDK dependencies."""
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, source_root=PG_E2E_SRC,
+        sdk_set=PG_E2E_TEMPORAL_SDKS,
+    )
+
+
+def qdrant_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, source_root=QDRANT_TEMPORAL_E2E_SRC,
+        sdk_set=QDRANT_TEMPORAL_E2E_SDKS,
+    )
+
+
+def qdrant_runtime_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=QDRANT_EFFECTS_SDK_SOURCE_FILES,
+        sdk_set=QDRANT_EFFECTS_RUNTIME_SDKS,
+    )
+
+
+def dataforseo_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_OWNER_SOURCE_FILES,
+        sdk_set=DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_ISSUER_SOURCE_FILES,
+        sdk_set=DATAFORSEO_ISSUER_DIRECT_EXTERNAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_PAID_PROVIDER_SOURCE_FILES,
+        sdk_set=frozenset({"reqwest"}),
+    )
+
+
+def acquisition_pure_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=ACQUISITION_PURE_OWNER_SOURCE_FILES,
+        sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    )
+
+
+def new_site_architect_owner_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=PURE_OWNER_RUNTIME_SOURCE_FILES,
+        sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=frozenset({SEMANTIC_HISTORY_SOURCE}),
+        sdk_set=frozenset({"temporalio-client", "temporalio-common"}),
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES,
+        sdk_set=frozenset({"reqwest"}),
+    )
 
 
 def main() -> int:
@@ -145,9 +558,49 @@ def main() -> int:
             continue
         text = file_path.read_text(encoding="utf-8")
         for pat in FORBIDDEN_DIRECT_IN_USE_CASES:
+            if file_path == PG_APP_HTTP_FAULT_FILE and "reqwest" in pat.pattern:
+                continue
+            if pg_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if qdrant_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if qdrant_runtime_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if dataforseo_owner_direct_sdk_allowed(file_path, pat):
+                continue
+            if acquisition_pure_owner_direct_sdk_allowed(file_path, pat):
+                continue
+            if new_site_architect_owner_sdk_allowed(file_path, pat):
+                continue
+            if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
+                f"{sdk.replace('-', '_')}::" in pat.pattern
+                for sdk in TEMPORAL_FIXTURE_SDKS
+            ):
+                continue
+            if TEMPORAL_E2E_SRC in file_path.parents and any(
+                f"{sdk.replace('-', '_')}::" in pat.pattern
+                for sdk in TEMPORAL_E2E_SDKS
+            ):
+                continue
+            # Temporal's Workflow/Activity SDK belongs to its runtime, and
+            # client-only SDKs belong to the independent Temporal gateway.
+            # Other external SDKs remain forbidden in those owner modules.
+            if ("temporalio_" in pat.pattern and any(
+                directory in file_path.parents
+                for directory in (
+                    TEMPORAL_WORKER_SRC,
+                    TEMPORAL_GATEWAY_SRC,
+                    TEMPORAL_ORCHESTRATOR_SRC,
+                    TEMPORAL_PG_EFFECTS_SRC,
+                )
+            )):
+                continue
             # A gRPC server must use tonic request/response types directly,
             # but still must not import unrelated external SDKs.
-            if GRPC_SERVICE_SRC in file_path.parents and "tonic" in pat.pattern:
+            if "tonic" in pat.pattern and (
+                any(directory in file_path.parents for directory in GRPC_SERVICE_SRCS)
+                or file_path.resolve() == ANALYTICS_CLIENT_SRC
+            ):
                 continue
             if pat.search(text):
                 violations.append(f"{rel}: forbidden direct external SDK usage matched `{pat.pattern}`")
@@ -160,10 +613,43 @@ def main() -> int:
             if req not in present:
                 violations.append(f"missing adapter module: {ADAPTERS_DIR / req}")
 
+    present_postgres = {p.name for p in POSTGRES_STORE_SRC.glob("*.rs")}
+    for required in sorted(REQUIRED_POSTGRES_OWNER_FILES):
+        if required not in present_postgres:
+            violations.append(f"missing PostgreSQL owner module: {POSTGRES_STORE_SRC / required}")
+
     dep_patterns = {k: re.compile(rf"^\s*{re.escape(k)}\s*=", re.MULTILINE) for k in ENFORCED_DEP_KEYS}
+
+    # Test-only native Temporal imports remain optional and behind e2e, never
+    # part of a default Cargo build. A production SDK runtime is separate.
+    for e2e_dir, allowed in (
+        (PG_E2E_DIR, PG_E2E_TEMPORAL_SDKS),
+        (QDRANT_TEMPORAL_E2E_DIR, QDRANT_TEMPORAL_E2E_SDKS),
+    ):
+        try:
+            doc = tomllib.loads((e2e_dir / "Cargo.toml").read_text(encoding="utf-8"))
+            deps = doc["dependencies"]
+            e2e_features = set(doc["features"]["e2e"])
+            for sdk in sorted(allowed):
+                declared = deps.get(sdk)
+                if (not isinstance(declared, dict) or declared.get("optional") is not True
+                        or f"dep:{sdk}" not in e2e_features):
+                    violations.append(
+                        f"{e2e_dir.name} must gate test-only SDK `{sdk}` behind `e2e`"
+                    )
+        except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
+            violations.append(f"cannot verify {e2e_dir.name} SDK feature boundary: {error}")
+
     for manifest in sorted(RUST_ROOT.rglob("Cargo.toml")):
         manifest = manifest.resolve()
         if manifest in ALLOWED_DIRECT_SDK_MANIFESTS:
+            # Storage adapters must not accidentally recover independent
+            # provider SDK dependencies removed by the owner split.
+            if manifest == INFRA_MANIFEST.resolve():
+                for dep_key in ("neo4rs", "qdrant-client", "temporalio-sdk", "temporalio-sdk-core",
+                                "temporalio-client", "temporalio-common", "temporalio-macros"):
+                    if dep_patterns[dep_key].search(manifest.read_text(encoding="utf-8")):
+                        violations.append(f"{manifest.relative_to(ROOT)}: provider SDK `{dep_key}` belongs to its dedicated owner")
             continue
         text = manifest.read_text(encoding="utf-8")
         allowed_for_manifest = MANIFEST_DEP_EXCEPTIONS.get(manifest, set())
@@ -181,13 +667,133 @@ def main() -> int:
         if p.exists():
             violations.append(f"legacy infrastructure module must be removed: {p}")
 
+    # Enforce the architectural dependency direction, not just source path or
+    # direct SDK imports: infra/PG must never compile graph/vector providers.
+    try:
+        orchestrator_manifest = tomllib.loads(ORCHESTRATOR_MANIFEST.read_text(encoding="utf-8"))
+        violations.extend(default_generic_parent_feature_failures(orchestrator_manifest))
+        protocol_closure, _ = workspace_dependency_closure(OPERATION_PROTOCOL_MANIFEST)
+        pg_owner_closure, _ = workspace_dependency_closure(PG_OWNER_MANIFEST)
+        qdrant_owner_closure, _ = workspace_dependency_closure(QDRANT_OWNER_MANIFEST)
+        dataforseo_owner_closure, _ = workspace_dependency_closure(DATAFORSEO_OWNER_MANIFEST)
+        violations.extend(native_dag_owner_closure_failures(
+            protocol_closure, pg_owner_closure, qdrant_owner_closure,
+        ))
+        for dependency in sorted(dataforseo_owner_closure & (
+            DAG_PROVIDER_CRATES | NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME
+        )):
+            violations.append(
+                f"native DataForSEO effect owner links unrelated `{dependency}`"
+            )
+        for manifest in (SEO_STEPS_PURE_OWNER_MANIFEST, TRUTH_PURE_OWNER_MANIFEST):
+            pure_closure, _ = workspace_dependency_closure(manifest)
+            for dependency in sorted(pure_closure & (
+                DAG_PROVIDER_CRATES | (NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME - {"seo_domain"})
+                | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+            )):
+                violations.append(
+                    f"{manifest.parent.name} pure owner links effect/parent `{dependency}`"
+                )
+        semantic_closure, _ = workspace_dependency_closure(SEMANTIC_PURE_OWNER_MANIFEST)
+        for dependency in sorted(semantic_closure & (
+            DAG_PROVIDER_CRATES | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+        )):
+            violations.append(f"semantic pure owner links effect/parent `{dependency}`")
+        web_closure, _ = workspace_dependency_closure(WEB_FETCH_OWNER_MANIFEST)
+        for dependency in sorted(web_closure & (
+            DAG_PROVIDER_CRATES | NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME
+            | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+        )):
+            violations.append(f"web fetch transport links effect/parent `{dependency}`")
+        mixed_e2e_closure, _ = workspace_dependency_closure(
+            QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml"
+        )
+        for forbidden in sorted(MIXED_E2E_FORBIDDEN_LOCAL_OWNERS & mixed_e2e_closure):
+            violations.append(f"native mixed-owner E2E Cargo closure imports `{forbidden}`")
+        for source in DAG_GENERIC_NEUTRAL_SOURCE:
+            violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
+        # New provider-neutral DAG types/validation modules are added without
+        # changing a handwritten allowlist: any direct provider-qualified Rust
+        # path anywhere in the core is rejected at the same fast CI boundary.
+        for source in sorted((RUST_ROOT / "crates/operation_protocol/src").rglob("*.rs")):
+            violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
+        for source in DAG_PG_OWNED_SOURCE:
+            violations.extend(generic_dag_source_failures(source, {
+                "graph_neo4j", "vector_qdrant", "qdrant_contracts", "qdrant_effects_core",
+            }))
+        for source in DAG_QDRANT_OWNED_SOURCE:
+            violations.extend(generic_dag_source_failures(source, {
+                "postgres_store", "pg_runtime_ports", "graph_neo4j",
+            }))
+        infra_closure, infra_direct = workspace_dependency_closure(INFRA_MANIFEST)
+        composition_closure, composition_direct = workspace_dependency_closure(COMPOSITION_MANIFEST)
+        pg_runtime_closure, pg_runtime_direct = workspace_dependency_closure(PG_RUNTIME_MANIFEST)
+        violations.extend(pg_runtime_closure_failures(pg_runtime_closure, pg_runtime_direct))
+        if "pg_runtime_ports" not in composition_direct:
+            violations.append("runtime_composition must delegate actual PG ports to pg_runtime_ports")
+        for stale in ("build_and_support_ports.rs", "planning_ports.rs", "draft_publish_context_ports.rs"):
+            if (COMPOSITION_MANIFEST.parent / "src" / "adapters" / "seo_ports_sqlx_adapter" / stale).exists():
+                violations.append(f"duplicated SQL port code still in runtime_composition: {stale}")
+        for forbidden in ("graph_neo4j", "vector_qdrant", "runtime_composition"):
+            if forbidden in infra_closure:
+                violations.append(
+                    f"infrastructure Cargo dependency closure imports provider/composer `{forbidden}`"
+                )
+        required_composition = {"infrastructure", "graph_neo4j", "vector_qdrant"}
+        for required in sorted(required_composition - composition_direct):
+            violations.append(
+                f"runtime_composition must directly depend on owner `{required}`"
+            )
+        if "runtime_composition" in infra_direct:
+            violations.append("infrastructure -> runtime_composition would create an owner cycle")
+        for owner in ("graph_neo4j", "vector_qdrant"):
+            owner_manifest = RUST_ROOT / "crates" / owner / "Cargo.toml"
+            owner_closure, _ = workspace_dependency_closure(owner_manifest)
+            for forbidden in ("infrastructure", "runtime_composition"):
+                if forbidden in owner_closure:
+                    violations.append(f"{owner} depends on higher-level `{forbidden}`")
+        if not required_composition.issubset(composition_closure):
+            violations.append("runtime_composition Cargo closure lacks one or more provider owners")
+        # Compile-time isolation, not a renamed forwarding adapter: the
+        # production Outbox binary may only close over narrow provider owners,
+        # never Temporal, crawling/Playwright, or the broad runtime composer.
+        delivery_closure, delivery_direct = workspace_dependency_closure(DELIVERY_MANIFEST)
+        voyage_closure, _ = workspace_dependency_closure(VOYAGE_MANIFEST)
+        outbox_closure, outbox_direct = workspace_dependency_closure(OUTBOX_MANIFEST)
+        violations.extend(provider_delivery_closure_failures(
+            outbox_closure, outbox_direct, delivery_closure, delivery_direct, voyage_closure,
+        ))
+        # An implementation living under runtime_composition would compile
+        # its broad closure into Outbox regardless of its public import path.
+        for legacy in ("projection_materialize_adapter.rs", "neo4j_materialization_adapter.rs"):
+            if (COMPOSITION_MANIFEST.parent / "src" / "adapters" / legacy).exists():
+                violations.append(f"stale runtime_composition materializer: {legacy}")
+        for forbidden in ("runtime_composition", "infrastructure"):
+            if forbidden in OUTBOX_MANIFEST.read_text(encoding="utf-8"):
+                violations.append(f"outbox_worker manifest still refers to `{forbidden}`")
+    except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError) as error:
+        violations.append(f"cannot verify provider Cargo dependency closure: {error}")
+
     if violations:
         print("RUST_ADAPTER_BOUNDARY: FAILED")
         for v in violations:
             print(f"- {v}")
         return 1
 
+    # Do not mislabel the generic parent binary as physically provider-free:
+    # a frozen Qdrant V1 Workflow still imports its legacy DTO in this process.
+    # Removing that dependency needs a separately versioned Worker/replay
+    # migration and real rustc A/B measurements, not a source-only assertion.
+    orchestrator_closure, _ = workspace_dependency_closure(ORCHESTRATOR_MANIFEST)
+    legacy_provider_crates = sorted(orchestrator_closure & DAG_PROVIDER_CRATES)
     print("RUST_ADAPTER_BOUNDARY: OK")
+    if legacy_provider_crates:
+        orchestrator_manifest = tomllib.loads(ORCHESTRATOR_MANIFEST.read_text(encoding="utf-8"))
+        default_enabled = "legacy-qdrant-v1" in orchestrator_manifest["features"].get("default", [])
+        print("DAG_GENERIC_PARENT_PHYSICAL_ISOLATION=RUSTC_AB_PENDING "
+              f"default_legacy_qdrant_enabled={str(default_enabled).lower()} "
+              "no_default_qdrant_disabled=true "
+              f"all_features_legacy_closure={','.join(legacy_provider_crates)}")
     return 0
 
 

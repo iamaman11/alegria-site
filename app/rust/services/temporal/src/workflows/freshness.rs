@@ -1,6 +1,6 @@
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
+use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::{
+    SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
 };
 
 use crate::activities::AlegriaActivities;

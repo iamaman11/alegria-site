@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter.rs"
-PORTS_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+PORTS_ADAPTER = ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs"
 APPLICATION = ROOT / "app/rust/crates/seo_application/src/rebuild_detect.rs"
 ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
 
@@ -59,7 +59,7 @@ def main() -> int:
             failures.append(f"seo_ports adapter missing `{needle}`")
     for needle in [
         "narrow_rebuild_impacts(&input.changed_truth_keys)",
-        "narrowed_input.page_nodes",
+        "narrowed_input.page_node_keys",
         "persist_rebuild_detect_output(input, &",
     ]:
         if needle not in application:

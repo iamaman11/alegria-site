@@ -21,32 +21,7 @@ pub async fn ensure_source_in_tx(
         "INSERT INTO kb.sources
          (source_key, source_type, authority_class, independence_group_key, source_label, base_url, trust_level, freshness_ttl_days, override_eligible, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
-         ON CONFLICT (source_key) DO UPDATE
-         SET source_type = EXCLUDED.source_type,
-             authority_class = CASE
-                 WHEN kb.sources.authority_class IS NULL
-                      OR kb.sources.authority_class = ''
-                      OR kb.sources.authority_class = 'unknown'
-                 THEN EXCLUDED.authority_class
-                 ELSE kb.sources.authority_class
-             END,
-             independence_group_key = CASE
-                 WHEN kb.sources.independence_group_key IS NULL
-                      OR kb.sources.independence_group_key = ''
-                 THEN EXCLUDED.independence_group_key
-                 ELSE kb.sources.independence_group_key
-             END,
-             source_label = EXCLUDED.source_label,
-             base_url = EXCLUDED.base_url,
-             trust_level = GREATEST(kb.sources.trust_level, EXCLUDED.trust_level),
-             freshness_ttl_days = CASE
-                 WHEN kb.sources.freshness_ttl_days IS NULL OR kb.sources.freshness_ttl_days <= 0
-                 THEN EXCLUDED.freshness_ttl_days
-                 ELSE kb.sources.freshness_ttl_days
-             END,
-             override_eligible = kb.sources.override_eligible OR EXCLUDED.override_eligible,
-             status = 'active',
-             updated_at = now()",
+         ON CONFLICT (source_key) DO NOTHING",
     )
     .bind(&section.source_url)
     .bind(source_type_for_section(section))
@@ -60,6 +35,29 @@ pub async fn ensure_source_in_tx(
     .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
+    // A crawler's source classification is only an initial proposal. Once a
+    // kb.sources row exists its trust/status/rights belong to independent
+    // curatorial authority: later crawls must neither reactivate a deprecated
+    // source nor upgrade its trust_level with GREATEST or overwrite rights.
+    // Hold a real row SHARE lock until the enclosing Truth/Outbox transaction
+    // commits, so a concurrent curator downgrade cannot land between this
+    // gate and a verified rule write. The registry trigger independently
+    // fences existing candidate contexts with truth-context advisory locks.
+    let authority_status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM kb.sources WHERE source_key = $1 FOR SHARE",
+    )
+    .bind(&section.source_url)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    if authority_status.as_deref() != Some("active") {
+        return Err(primitives::errors::DomainError::ConflictViolation {
+            message: format!(
+                "source registry authority for {} is absent or deprecated; curator re-authorization required",
+                section.source_url
+            ),
+        });
+    }
     Ok(())
 }
 

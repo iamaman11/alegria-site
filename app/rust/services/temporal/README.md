@@ -32,3 +32,24 @@ workflow в rebuild-dispatch. Перед обновлением уже рабо�
 ## Task queue
 
 - `alegria-pipeline` (должна совпадать у starter и worker)
+
+## Исполняемая история и изменение порядка шагов
+
+`SeoSiteBuildCanonicalCutoverWorkflow` пока исполняет собственную фиксированную
+цепочку Temporal-команд. Новая типизированная композиция шагов
+`seo_application::execution::SeoPhaseRecipe` **не является** автоматическим
+изменением порядка команд уже работающего Temporal workflow.
+
+Для нового rollout нативного Worker Deployment Versioning необходимо явно
+задать `TEMPORAL_WORKER_VERSIONING=true`, `TEMPORAL_DEPLOYMENT_NAME` и
+`WORKER_BUILD_ID` в виде полного неизменяемого 40-символьного SHA commit.
+Worker отклонит короткие или тестовые Build IDs. Параметр выключен в
+локальном Docker Compose: запуск pinned Worker сам по себе не выполняет
+Temporal deployment promotion, а старые unversioned histories не получают
+пиннинг задним числом. Действующий Worker со старыми histories должен
+оставаться доступным до drain.
+
+Перед изменением последовательности реальных workflow-команд необходимы
+отдельная версионированная ветка/новый workflow type, проверка реального
+исторического replay и выпуск через штатное Temporal Deployment API. Простое
+сохранение номера `SeoPhaseRecipe` в данных не обеспечивает replay safety.

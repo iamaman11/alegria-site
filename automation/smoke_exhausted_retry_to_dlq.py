@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "worker.rs"
 OUTBOX_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_outbox_adapter.rs"
-OUTBOX_E2E = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src" / "tests" / "outbox_delivery_tests.rs"
+OUTBOX_E2E = ROOT / "app" / "rust" / "crates" / "integration_outbox_e2e" / "src" / "tests" / "outbox_delivery_tests.rs"
 
 
 def must_contain(path: Path, needle: str) -> str | None:

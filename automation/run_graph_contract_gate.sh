@@ -6,6 +6,10 @@ REPORT_PATH="${GRAPH_CONTRACT_GATE_REPORT_PATH:-/tmp/graph_contract_gate_current
 DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres_password@localhost:5433/alegria}"
 LOG_PATH="${GRAPH_CONTRACT_GATE_LOG_PATH:-/tmp/graph_contract_gate_current.log}"
 BOOTSTRAP_LOCAL_INFRA="${GRAPH_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA:-1}"
+# The schema installer is safe only for the local Neo4j instance explicitly
+# started by this gate. External/production databases require a separate
+# operator migration with graph writers stopped and identities audited.
+LOCAL_NEO4J_BOOTSTRAPPED=false
 if [[ -n "${GRAPH_CONTRACT_GATE_CLI_TARGET_DIR:-}" ]]; then
   CLI_TARGET_DIR="$GRAPH_CONTRACT_GATE_CLI_TARGET_DIR"
   CLEANUP_TARGET_DIR=false
@@ -42,6 +46,7 @@ if [[ "$BOOTSTRAP_LOCAL_INFRA" == "1" ]]; then
   if command -v docker >/dev/null 2>&1; then
     compose_cmd up -d postgres neo4j >/dev/null
     wait_postgres_ready 45 || true
+    LOCAL_NEO4J_BOOTSTRAPPED=true
   fi
 fi
 
@@ -56,6 +61,21 @@ if [[ "$CLEANUP_TARGET_DIR" == "true" ]]; then
 fi
 
 rm -f "$REPORT_PATH" "$LOG_PATH"
+
+if [[ "$LOCAL_NEO4J_BOOTSTRAPPED" == "true" ]]; then
+  # Run the existing one-shot Rust operator entry point, never DDL during an
+  # Outbox/Temporal graph effect. Use the compose-owned loopback endpoint and
+  # fixed test credentials, not possibly external NEO4J_* environment values.
+  # Installation rejects pre-existing duplicates without altering them.
+  (
+    cd app/rust
+    CARGO_TARGET_DIR="$CLI_TARGET_DIR" \
+    NEO4J_URI="127.0.0.1:7687" \
+    NEO4J_USER="neo4j" \
+    NEO4J_PASSWORD="neo4j_password" \
+      cargo run -q -p temporal_worker --bin temporal_starter -- neo4j-schema-install
+  )
+fi
 
 DATABASE_URL="$DATABASE_URL" \
   python3 automation/bootstrap_graph_contract_projections.py

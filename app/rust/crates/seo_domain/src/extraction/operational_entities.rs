@@ -1,20 +1,21 @@
 //! Extract schedule, closure and appointment signals from source sections.
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OperationalExtractionInput {
     pub section_id: String,
     pub raw_text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OperationalEntity {
     pub entity_kind: String,
     pub value: String,
     pub confidence: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OperationalExtractionOutput {
     pub entities: Vec<OperationalEntity>,
 }

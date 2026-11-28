@@ -63,37 +63,3 @@ async fn raw_reextract_empty(database_url: Option<String>, page_id: i64) -> Resu
     );
     Ok(0)
 }
-
-async fn crawl_pending_sources(
-    database_url: Option<String>,
-    run_id: String,
-    query_batch_key: String,
-    limit: i64,
-    emit_qdrant: bool,
-) -> Result<i32> {
-    let database_url = database_url.unwrap_or_else(default_database_url);
-    let pool = connect_pg(&database_url).await?;
-    let repo = SqlxSeoRuntimeRepository::new(&pool);
-    let output = repo.crawl_sources(
-        &contracts::generated::alegria::temporal::v1::CrawlSourcesInputPayload {
-            run_id,
-            query_batch_key,
-            limit: limit as u32,
-            emit_qdrant,
-            sweep_index: 0,
-        },
-    )
-    .await?;
-    println!(
-        "CRAWL_SUMMARY claimed={} crawled={} failed={} raw_pages={} status={}",
-        output.claimed_count,
-        output.crawled_count,
-        output.failed_count,
-        output.raw_page_count,
-        output.status
-    );
-    for url in &output.failed_urls {
-        eprintln!("CRAWL_FAILED url={url}");
-    }
-    Ok(if output.failed_count == 0 { 0 } else { 1 })
-}

@@ -1,0 +1,9 @@
+[package]
+name = "source_section_contracts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+operation_protocol = { path = "../operation_protocol" }
+serde = { workspace = true }
+schemars = "1.2.3"

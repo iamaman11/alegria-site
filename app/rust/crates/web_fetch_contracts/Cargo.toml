@@ -1,0 +1,10 @@
+[package]
+name = "web_fetch_contracts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+operation_protocol = { path = "../operation_protocol" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }

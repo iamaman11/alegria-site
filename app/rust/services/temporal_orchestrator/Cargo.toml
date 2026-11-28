@@ -1,0 +1,34 @@
+[package]
+name = "temporal_orchestrator"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# Frozen Pure V3/Effect V4/V5 Histories and new strict Pure V4 are served only
+# by the explicit site-owned variant. The default generic DAG binary still
+# never links site application or Truth/SEO domain crates.
+legacy-workflows = ["dep:seo_application"]
+# Frozen Qdrant V1 parent is available only for explicitly deployed legacy
+# history replay. Generic DAG and PostgreSQL parents do not link this owner.
+legacy-qdrant-v1 = ["dep:qdrant_contracts"]
+
+[dependencies]
+# Temporal macros resolve these packages by their canonical crate names.
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-common = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+url = { workspace = true }
+seo_application = { path = "../../crates/seo_application", optional = true }
+operation_protocol = { path = "../../crates/operation_protocol" }
+trusted_owner_catalog = { path = "../../crates/trusted_owner_catalog" }
+qdrant_contracts = { path = "../../crates/qdrant_contracts", optional = true } # frozen V1 only
+serde = { workspace = true }
+futures-util = "0.3"
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

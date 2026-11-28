@@ -4,6 +4,19 @@ async fn persist_extracted_rule_candidates(
     section: &RawSectionRecord,
     extraction: &truth_extraction_llm_adapter::TruthExtractionResponse,
 ) -> std::result::Result<usize, primitives::errors::DomainError> {
+    // LLM extraction runs outside SQL, so its old `RawSectionRecord` is an
+    // untrusted snapshot by the time it returns. Fence the exact source page,
+    // section and Truth context, then re-read durable bytes before *any*
+    // candidate UPDATE/INSERT. All proposals from this section commit or
+    // roll back together; a source rewrite cannot leave stale candidates.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    super::sqlx_seo_adapter::lock_truth_context_in_tx(&mut tx, context_key).await?;
+    super::sqlx_truth_write_adapter::lock_and_validate_prepared_sources_in_tx(
+        &mut tx,
+        &BTreeMap::from([(section.id, section.clone())]),
+    )
+    .await?;
+    ensure_source_in_tx(&mut tx, section).await?;
     for (ordinal, rule) in extraction.candidates.iter().enumerate() {
         let candidate_id = blake3_hex(
             format!(
@@ -152,10 +165,11 @@ async fn persist_extracted_rule_candidates(
         .bind(&extraction.prompt_version)
         .bind(&validation.epistemic_status)
         .bind(Json::<Value>(json!(uncertainty_flags)))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(extraction.candidates.len())
 }
 

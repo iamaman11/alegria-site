@@ -428,7 +428,7 @@ pub(crate) async fn canonical_mapping_sweep_impl(
             },
         );
         output.mappings = seo_application::knowledge::resolve_canonical_vector_mappings(
-            &infrastructure::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
+            &runtime_composition::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
             output.mappings,
         )
         .await?;

@@ -1,0 +1,46 @@
+[package]
+name = "integration_qdrant_temporal_e2e"
+version = "0.1.0"
+edition = "2021"
+
+# Isolated V7 real Temporal + PostgreSQL + Qdrant proof binary. Does not add
+# Temporal SDK compilation to the existing qdrant-only real-vector E2E shard.
+[features]
+default = []
+e2e = [
+  "dep:anyhow", "dep:integration_data_fixtures", "integration_data_fixtures/e2e",
+  "dep:operation_protocol", "dep:serial_test", "dep:sqlx",
+  "dep:serde",
+  "dep:temporalio-client", "dep:temporalio-common",
+  "dep:url", "dep:testcontainers", "dep:tokio",
+  "dep:uuid", "dep:vector_qdrant", "dep:truth_domain",
+  "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
+  "dep:trusted_owner_catalog", "dep:dataforseo_contracts",
+  "dep:acquisition",
+  "dep:seo_steps", "dep:seo_domain",
+]
+
+[dependencies]
+acquisition = { path = "../acquisition", optional = true }
+seo_steps = { path = "../seo_steps", optional = true }
+seo_domain = { path = "../seo_domain", optional = true }
+anyhow = { workspace = true, optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+operation_protocol = { path = "../operation_protocol", optional = true }
+serde = { workspace = true, optional = true }
+serial_test = { version = "3.2.0", optional = true }
+sqlx = { workspace = true, optional = true }
+temporalio-client = { workspace = true, optional = true }
+temporalio-common = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
+testcontainers = { version = "0.28.0", optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }
+truth_domain = { path = "../truth_domain", optional = true }
+qdrant_contracts = { path = "../qdrant_contracts", optional = true }
+postgres_store = { path = "../postgres_store", optional = true }
+projection_contracts = { path = "../projection_contracts", optional = true }
+trusted_owner_catalog = { path = "../trusted_owner_catalog", optional = true }
+dataforseo_contracts = { path = "../dataforseo_contracts", optional = true }
+serde_json = { workspace = true }

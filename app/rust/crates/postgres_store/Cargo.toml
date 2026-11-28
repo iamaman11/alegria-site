@@ -1,0 +1,18 @@
+[package]
+name = "postgres_store"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+blake3 = { workspace = true }
+operation_protocol = { path = "../operation_protocol" }
+projection_contracts = { path = "../projection_contracts" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+primitives = { path = "../primitives" }
+runtime_models = { path = "../runtime_models" }
+truth_domain = { path = "../truth_domain" }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }

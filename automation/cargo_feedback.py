@@ -43,6 +43,7 @@ def run_cargo(
     started = time.monotonic()
     rebuilt: set[str] = set()
     fresh: set[str] = set()
+    test_executables: list[dict[str, str]] = []
     compiler_seconds: float | None = None
     process = subprocess.Popen(
         traced, cwd=cwd, stdout=subprocess.PIPE, stderr=None,
@@ -62,6 +63,13 @@ def run_cargo(
         artifact = workspace_artifact(record, cwd)
         if artifact is not None:
             (fresh if record.get("fresh") is True else rebuilt).add(artifact)
+            executable = record.get("executable")
+            target = record.get("target")
+            if (isinstance(executable, str) and executable
+                    and isinstance(target, dict)
+                    and isinstance(target.get("kind"), list)
+                    and "lib" in target["kind"]):
+                test_executables.append({"target": artifact, "path": executable})
         elif record["reason"] == "compiler-message":
             message = record.get("message")
             rendered = message.get("rendered") if isinstance(message, dict) else None
@@ -84,6 +92,7 @@ def run_cargo(
         ),
         "rebuilt_workspace_targets": sorted(rebuilt),
         "fresh_workspace_targets": sorted(fresh - rebuilt),
+        "test_executables": test_executables,
         "artifact_evidence": "observed" if seen else "unavailable",
     }
     output.write("CARGO_FEEDBACK_JSON=" + json.dumps(result, sort_keys=True) + "\n")

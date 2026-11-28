@@ -1,0 +1,25 @@
+[package]
+name = "temporal_dataforseo"
+version = "0.1.0"
+edition = "2021"
+
+# Separately deployed, stub-only V2 owner. Paid HTTP remains intentionally
+# unavailable until its independently audited price and operator grant exist.
+[dependencies]
+dataforseo_contracts = { path = "../../crates/dataforseo_contracts" }
+operation_protocol = { path = "../../crates/operation_protocol" }
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-common = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+blake3 = { workspace = true }
+reqwest = { workspace = true }

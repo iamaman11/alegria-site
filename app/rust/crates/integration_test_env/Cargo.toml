@@ -1,0 +1,6 @@
+[package]
+name = "integration_test_env"
+version = "0.1.0"
+edition = "2021"
+
+# Tiny test-only process environment restoration, with no provider dependency.

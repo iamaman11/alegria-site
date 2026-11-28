@@ -1,0 +1,9 @@
+[package]
+name = "graph_capability"
+version = "0.1.0"
+edition = "2021"
+
+# Real Neo4j preflight boundary, independent of the cross-provider runtime.
+[dependencies]
+graph_neo4j = { path = "../graph_neo4j" }
+primitives = { path = "../primitives" }

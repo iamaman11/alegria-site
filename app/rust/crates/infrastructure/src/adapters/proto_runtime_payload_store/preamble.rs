@@ -15,7 +15,7 @@ use contracts::generated::alegria::temporal::v1::{
     ProjectionBarrierAuditOutputPayload, PublishArtifact, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    ReconcileSummaryPayload, ReconcileTargetInputPayload, ReconcileTargetReportPayload,
+    ReconcileTargetInputPayload,
     RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
     RuleInstanceCandidateState, RuleParamsState, RuleRoleTypeV1, RuntimeErrorPayload,
     SeoSiteBuildInputPayload, SerpIngestInputPayload, SerpIngestOutputPayload,
@@ -34,6 +34,11 @@ use runtime_models::{
     ReconcileTargetReportRecord, RuleInstanceCandidate, RuleParams as RuntimeRuleParams,
     RuleRoleType, ValidationInputRecord,
 };
+use runtime_models::reconcile_wire;
+
+// PostgreSQL owns SQLSTATE interpretation. Keep one classification contract
+// across outbox, Temporal Activities and the PG-only reconciler.
+pub(crate) use postgres_store::sqlx_error::classify_sqlx;
 
 pub(crate) fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
     value.encode_to_vec()
@@ -83,39 +88,11 @@ pub(crate) fn contract_violation(message: impl Into<String>) -> DomainError {
     }
 }
 
+// A general domain validator, used by source, SEO and CMS adapters. Unlike
+// SQLSTATE classification, it is not PostgreSQL-provider-specific.
 pub(crate) fn validation_failure(message: impl Into<String>) -> DomainError {
     DomainError::ValidationFailure {
         message: message.into(),
-    }
-}
-
-pub(crate) fn infra_unavailable(message: impl Into<String>) -> DomainError {
-    DomainError::InfraUnavailable {
-        message: message.into(),
-    }
-}
-
-pub(crate) fn classify_sqlx(err: sqlx::Error) -> DomainError {
-    match err {
-        sqlx::Error::RowNotFound => validation_failure("expected row was not found"),
-        sqlx::Error::Database(db) => {
-            let code = db.code().map(|code| code.into_owned()).unwrap_or_default();
-            let message = format!(
-                "PostgreSQL SQLSTATE={code} constraint={}: {}",
-                db.constraint().unwrap_or("-"),
-                db.message()
-            );
-            match code.as_str() {
-                "23505" | "23P01" => DomainError::ConflictViolation { message },
-                "23503" => DomainError::ForeignKeyViolation { message },
-                "23502" | "23514" | "22001" | "22P02" => {
-                    DomainError::ValidationFailure { message }
-                }
-                _ if code.starts_with("42") => DomainError::ContractViolation { message },
-                _ => infra_unavailable(message),
-            }
-        }
-        other => infra_unavailable(other.to_string()),
     }
 }
 

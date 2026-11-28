@@ -27,6 +27,9 @@ python3 -m compileall -q automation infra/analytics_lab/src
 echo "[1a/50] Docker Compose host bindings must be loopback-only"
 python3 automation/check_compose_loopback_ports.py
 
+echo "[1b/50] V3 opt-in topology cannot silently become production"
+python3 infra/temporal/check_v3_evaluation_topology.py
+
 echo "[2/50] Python lint check"
 # Preserve Ruff's existing E4/E7/E9/F baseline explicitly across engine upgrades.
 # The newly surfaced optional rule families have not been accepted as policy.
@@ -114,6 +117,8 @@ bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
 
 echo "[20/50] Reliability contracts check"
 python3 automation/check_reliability_contracts.py
+python3 automation/test_neo4j_schema_contract.py
+python3 automation/test_operation_freshness_contract.py
 
 echo "[21/50] Domain error usage policy"
 python3 automation/check_domain_error_usage.py

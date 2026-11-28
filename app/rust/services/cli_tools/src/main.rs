@@ -1,9 +1,13 @@
 #[path = "cli/fact_verifier_json.rs"]
 mod fact_verifier_json;
 
+#[path = "cli/analytics_client.rs"]
+mod analytics_client;
+
 include!("cli/types.rs");
+include!("cli/site_architect.rs");
+include!("cli/mcp_site_architect.rs");
 include!("cli/report_helpers.rs");
-include!("cli/seo_run.rs");
 include!("cli/contract_gates.rs");
 include!("cli/static_site.rs");
 include!("cli/truth_hitl.rs");

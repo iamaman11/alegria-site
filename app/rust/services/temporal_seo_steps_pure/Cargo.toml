@@ -1,0 +1,18 @@
+[package]
+name = "temporal_seo_steps_pure"
+version = "0.1.0"
+edition = "2021"
+
+# Native isolated SEO pure owner. Never links SQL/HTTP/provider SDKs.
+[dependencies]
+seo_steps = { path = "../../crates/seo_steps" }
+operation_protocol = { path = "../../crates/operation_protocol" }
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+temporalio-common = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }

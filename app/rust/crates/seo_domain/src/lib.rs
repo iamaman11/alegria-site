@@ -9,6 +9,7 @@ pub mod extraction;
 pub mod ia_planning;
 pub mod identity;
 pub mod link_recommendation;
+pub mod navigation;
 pub mod page_readiness;
 pub mod publishing;
 pub mod rebuild;

@@ -1,9 +1,9 @@
 use contracts::generated::alegria::temporal::v1::ReconcileTargetInputPayload;
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
-};
 use runtime_models::ReconcileTargetReportRecord;
+use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::{
+    SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
+};
 
 use crate::activities::AlegriaActivities;
 use crate::metrics;

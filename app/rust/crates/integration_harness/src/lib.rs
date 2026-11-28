@@ -6,6 +6,11 @@ use std::collections::BTreeMap;
 pub mod containers;
 pub mod env_overrides;
 pub mod stub_servers;
+#[cfg(any(feature = "e2e", test))]
+mod temporal_multiset;
+pub mod truth_test_payloads;
+#[cfg(any(feature = "e2e", test))]
+pub use temporal_multiset::temporal_step_multiset;
 
 #[derive(Debug)]
 pub struct IntegrationCtx {
@@ -115,15 +120,13 @@ pub use containers::{InfraHarness, Neo4jHarness, PostgresHarness, QdrantHarness,
 #[cfg(test)]
 #[allow(unused, warnings)]
 mod tests {
+    use crate::truth_test_payloads::{
+        local_truth_candidate_payload, local_truth_env, local_truth_response,
+    };
     include!("tests/preamble.rs");
     include!("tests/truth_certification_helpers.rs");
     include!("tests/synthetic_runtime_helpers.rs");
     include!("tests/provider_runtime_surface_tests.rs");
-    include!("tests/qa_persistence_tests.rs");
-    include!("tests/publication_delivery_tests.rs");
-    include!("tests/outbox_delivery_tests.rs");
-    include!("tests/knowledge_read_tests.rs");
     include!("tests/truth_runtime_tests.rs");
-    include!("tests/scenario_parity_tests.rs");
-    include!("tests/manual_llm_temporal_tests.rs");
+    include!("tests/pure_dag_temporal_helpers.rs");
 }

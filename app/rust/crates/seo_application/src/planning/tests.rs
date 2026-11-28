@@ -5,7 +5,7 @@ mod tests {
     use seo_ports::{
         GraphCapabilityPort, GraphReasoningPort,
         OrganicSerpResponse, OrganicSerpResult,
-        PlanningRepository, SemanticLinkCandidate,
+        PlanningRepository, SemanticLinkCandidate, SerpIngestRepository,
         SemanticLinkSearchPort, SerpSearchPort,
     };
     use std::sync::Mutex;
@@ -102,15 +102,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl PlanningRepository for FakePlanningRepo {
-        async fn existing_page_owners_by_cluster(
-            &self,
-            _scope_signature: &str,
-            _cluster_keys: &[String],
-        ) -> Result<Vec<(String, String)>, DomainError> {
-            Ok(Vec::new())
-        }
-
+    impl SerpIngestRepository for FakePlanningRepo {
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -128,6 +120,43 @@ mod tests {
             _response: &OrganicSerpResponse,
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+    }
+
+    // Compile-time proof: an ingest-only repository does not implement any
+    // planning, graph, CMS or publication contract.
+    struct SerpOnlyRepo;
+
+    #[async_trait]
+    impl SerpIngestRepository for SerpOnlyRepo {
+        async fn persist_serp_ingest_output(
+            &self,
+            _input: &SerpIngestInputPayload,
+            _output: &SerpIngestOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_live_serp_query_results(
+            &self,
+            _run_id: &str,
+            _query_batch_key: &str,
+            _ordinal: usize,
+            _query: &str,
+            _response: &OrganicSerpResponse,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PlanningRepository for FakePlanningRepo {
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_normalize_output(
@@ -180,7 +209,6 @@ mod tests {
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(runtime_models::GraphPlanningContext::default())
         }
-
     }
 
     struct FakeSerpSearchPort;
@@ -272,15 +300,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl PlanningRepository for RecordingPlanningRepo {
-        async fn existing_page_owners_by_cluster(
-            &self,
-            _scope_signature: &str,
-            _cluster_keys: &[String],
-        ) -> Result<Vec<(String, String)>, DomainError> {
-            Ok(Vec::new())
-        }
-
+    impl SerpIngestRepository for RecordingPlanningRepo {
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -298,6 +318,17 @@ mod tests {
             _response: &OrganicSerpResponse,
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl PlanningRepository for RecordingPlanningRepo {
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_normalize_output(
@@ -358,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn planning_serp_ingest_runs_without_sql_adapter() {
-        let repo = FakePlanningRepo;
+        let repo = SerpOnlyRepo;
         let search = FakeSerpSearchPort;
         let output = run_serp_ingest(
             &repo,

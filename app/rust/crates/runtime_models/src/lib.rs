@@ -3,6 +3,11 @@ use contracts::wire::condition::ConditionExprV1;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod outbox_reconcile;
+pub mod reconcile_wire;
+
+pub use outbox_reconcile::{ReconcileOutboxCommand, ReconcileOutboxOptions};
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleRoleType {

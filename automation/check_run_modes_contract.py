@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import sys
 
 
@@ -8,6 +9,7 @@ PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
 EXECUTION = ROOT / "app/rust/crates/seo_application/src/execution.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
 CLI = ROOT / "app/rust/services/cli_tools/src/main.rs"
+CLI_MANIFEST = ROOT / "app/rust/services/cli_tools/Cargo.toml"
 STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 
 
@@ -55,12 +57,30 @@ def main() -> int:
         failures.append("canonical workflow does not derive scenario from normalized run_mode")
     if "policy_for_run_mode(normalized_run_mode, SeoExecutionMode::TemporalDurable)" not in workflow:
         failures.append("canonical workflow does not derive policy from normalized run_mode")
-    if "run_mode_for_scenario(" not in cli:
-        failures.append("cli_tools does not persist run_mode contract for seo-run path")
+    # The fixed direct CLI scenario was intentionally retired in #94. It must
+    # never silently run a different plan or mutate SQL/provider state. The
+    # canonical Temporal starter remains responsible for persisted run_mode.
+    for variant in ("SeoRun", "CrawlPendingSources"):
+        fail_closed = (
+            rf"Command::{variant}\s*\{{\s*\.\.\s*\}}\s*=>\s*\{{"
+            rf"\s*return\s+Err\(UnsupportedDirectSiteCommand::{variant}\.into\(\)\);"
+        )
+        if re.search(fail_closed, cli) is None:
+            failures.append(f"cli_tools {variant} does not fail closed before I/O")
+    if "CLI_DIRECT_SITE_COMMAND_DISABLED:" not in cli:
+        failures.append("retired CLI site commands lack typed operator diagnostic")
+    if "SqlxSeoRuntimeRepository" in cli or "execute_site_build_scenario(" in cli:
+        failures.append("cli_tools still links legacy cross-provider direct SEO scenario")
+    if "runtime_composition" in CLI_MANIFEST.read_text(encoding="utf-8"):
+        failures.append("CLI manifest still depends on graph/vector runtime_composition")
+    if 'include!("cli/seo_run.rs");' in cli:
+        failures.append("CLI still compiles retired direct SEO execution")
     if 'default_value = "publish_with_hitl"' not in starter:
         failures.append("temporal_starter missing default run_mode")
     if "normalize_run_mode(&run_mode)" not in starter:
         failures.append("temporal_starter does not normalize run_mode before registration")
+    if "SeoSiteBuildCanonicalCutoverWorkflow" not in starter:
+        failures.append("Temporal canonical workflow starter is not reachable")
 
     if failures:
         print("RUN_MODES_CONTRACT: FAILED")

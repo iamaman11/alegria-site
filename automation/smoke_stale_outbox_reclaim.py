@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RECONCILE_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_reconcile_adapter.rs"
+RECONCILE_ADAPTER = ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_reconcile_adapter.rs"
 RECONCILE_MAIN = ROOT / "app" / "rust" / "services" / "reconcile" / "src" / "main.rs"
 
 

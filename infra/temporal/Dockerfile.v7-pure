@@ -1,0 +1,31 @@
+# Strict opt-in V7 image candidate for a provider-free native Temporal owner.
+# This image cannot accidentally choose the PG, vector, graph or legacy Rust
+# service binary. The build context MUST be prepared from a clean exact Git
+# source SHA for image owner temporal-orchestrator-v3, never a broad checkout.
+FROM rust:1.100.0-slim-bookworm AS pure-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    protobuf-compiler libprotobuf-dev libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ENV SQLX_OFFLINE=true \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=0 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 \
+    CARGO_PROFILE_RELEASE_STRIP=symbols
+
+COPY dependency-skeleton/app ./app
+RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+    -p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows
+COPY app ./app
+RUN find /app/app/rust -type f -name '*.rs' \
+    \( -path '*/src/*' -o -name 'build.rs' \) -exec touch {} + \
+    && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+       -p temporal_orchestrator --bin temporal_orchestrator --features legacy-workflows
+
+FROM debian:bookworm-slim AS pure-runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+USER 65532:65532
+COPY --from=pure-builder /app/app/rust/target/release/temporal_orchestrator \
+    /usr/local/bin/temporal_orchestrator
+ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]

@@ -12,7 +12,7 @@ use runtime_models::GraphPlanningContext;
 use seo_domain::link_recommendation::linkable_state;
 use seo_ports::{
     GraphCapabilityPort, GraphReasoningPort, PlanningRepository, SemanticLinkSearchPort,
-    SerpSearchPort,
+    SerpIngestRepository, SerpSearchPort,
 };
 use std::collections::{HashMap, HashSet};
 

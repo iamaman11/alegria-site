@@ -18,21 +18,22 @@ use contracts::generated::alegria::temporal::v1::{
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    activities, ActivityContext, ActivityError,
-};
-use infrastructure::adapters::{
-    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
-};
+use infrastructure::adapters::{sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter};
 use primitives::errors::DomainError;
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::{
     CrawlIngestRepository, EditorialGenerationPort, ProjectionStatusRepository,
     SeoBuildInputRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
+use temporalio_macros::activities;
+use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 pub(crate) mod operations;
 mod runtime;
+// Exhaustive logical ownership map for the existing, unchanged legacy queue.
+// This is an inventory, NOT an opt-in Activity routing switch.
+mod owner_inventory;
 
 pub struct AlegriaActivities {
     pub pool: Arc<AlegriaPgPool>,

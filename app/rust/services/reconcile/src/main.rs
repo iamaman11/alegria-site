@@ -1,13 +1,13 @@
 use anyhow::Result;
-use futures::StreamExt;
-use infrastructure::adapters::sqlx_adapter::connect_pg;
-use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
+use postgres_store::sqlx_adapter::connect_pg;
+use postgres_store::sqlx_reconcile_adapter;
+use postgres_store::sqlx_reconcile_runtime_adapter::{
     append_reconcile_summary_action, append_reconcile_target_action, begin_reconcile_run,
-    finish_reconcile_run, ReconcileSummary, ReconcileTargetReportRecord,
+    finish_reconcile_run,
 };
-use infrastructure::adapters::sqlx_reconcile_adapter;
-use infrastructure::adapters::sqlx_runtime_health_adapter;
-use infrastructure::adapters::temporalio_sdk_adapter::{connect_client, WorkflowListOptions};
+use postgres_store::sqlx_runtime_health_adapter;
+use runtime_models::{ReconcileOutboxCommand, ReconcileSummary, ReconcileTargetReportRecord};
+use temporal_gateway::{connect_client, running_workflow_ids_older_than};
 use tracing::info;
 
 fn reconcile_options() -> sqlx_reconcile_adapter::ReconcileOptionsRecord {
@@ -26,17 +26,32 @@ async fn main() -> Result<()> {
     let pool = connect_pg(&database_url).await?;
     let reconcile_run_id = begin_reconcile_run(&pool).await?;
 
-    let graph_before = sqlx_reconcile_adapter::read_target_backlog_default("neo4j").await?;
-    let qdrant_before = sqlx_reconcile_adapter::read_target_backlog_default("qdrant").await?;
+    // One PostgreSQL pool owns this entire reconciliation pass. Reusing it
+    // avoids six redundant pool initializations and keeps every query on
+    // the same database as the run journal and Temporal liveness snapshot.
+    let graph_before = sqlx_reconcile_adapter::read_target_backlog(&pool, "neo4j").await?;
+    let qdrant_before = sqlx_reconcile_adapter::read_target_backlog(&pool, "qdrant").await?;
 
     let opts = reconcile_options();
-    let graph_report =
-        sqlx_reconcile_adapter::reconcile_target_system_default("neo4j", &opts).await?;
-    let qdrant_report =
-        sqlx_reconcile_adapter::reconcile_target_system_default("qdrant", &opts).await?;
+    let graph_report = sqlx_reconcile_adapter::execute_reconcile_outbox(
+        &pool,
+        &ReconcileOutboxCommand {
+            target_system: "neo4j".to_owned(),
+            options: opts.clone(),
+        },
+    )
+    .await?;
+    let qdrant_report = sqlx_reconcile_adapter::execute_reconcile_outbox(
+        &pool,
+        &ReconcileOutboxCommand {
+            target_system: "qdrant".to_owned(),
+            options: opts,
+        },
+    )
+    .await?;
 
-    let graph_after = sqlx_reconcile_adapter::read_target_backlog_default("neo4j").await?;
-    let qdrant_after = sqlx_reconcile_adapter::read_target_backlog_default("qdrant").await?;
+    let graph_after = sqlx_reconcile_adapter::read_target_backlog(&pool, "neo4j").await?;
+    let qdrant_after = sqlx_reconcile_adapter::read_target_backlog(&pool, "qdrant").await?;
     let open_dlq = sqlx_runtime_health_adapter::count_open_dead_letters(&pool).await?;
     let stale_runs = sqlx_runtime_health_adapter::count_stale_runs(&pool).await?;
     let pending_hitl_runs = sqlx_runtime_health_adapter::count_pending_hitl_runs(&pool).await?;
@@ -48,22 +63,13 @@ async fn main() -> Result<()> {
     )
     .await?;
     let mut stuck_workflows: i64 = 0;
-    let mut stream = temporal_client.list_workflows(
-        "ExecutionStatus = 'Running' AND TaskQueue = 'alegria-pipeline'",
-        WorkflowListOptions::builder().limit(200).build(),
-    );
-    while let Some(item) = stream.next().await {
-        let execution = item?;
-        let started_at = execution
-            .start_time()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let age = std::time::SystemTime::now()
-            .duration_since(started_at)
-            .unwrap_or_default();
-        if age.as_secs() < 12 * 60 * 60 {
-            continue;
-        }
-        let wf_id = execution.id().to_string();
+    for wf_id in running_workflow_ids_older_than(
+        &temporal_client,
+        "alegria-pipeline",
+        std::time::Duration::from_secs(12 * 60 * 60),
+    )
+    .await?
+    {
         let is_pending_hitl = match uuid::Uuid::parse_str(&wf_id) {
             Ok(run_id) => sqlx_runtime_health_adapter::is_run_pending_hitl(&pool, run_id)
                 .await

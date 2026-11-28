@@ -6,18 +6,30 @@ edition = "2021"
 [features]
 default = []
 e2e = [
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/e2e",
+  "dep:integration_graph_fixtures",
+  "integration_graph_fixtures/e2e",
+  "dep:integration_temporal_fixtures",
+  "integration_temporal_fixtures/e2e",
   "dep:infrastructure",
-  "dep:neo4rs",
-  "dep:qdrant-client",
+  "dep:runtime_composition",
+  "dep:graph_neo4j",
+  "dep:vector_qdrant",
   "dep:sqlx",
   "dep:temporalio-client",
-  "dep:temporalio-sdk-core",
+  "dep:temporalio-common",
+  "dep:temporal_gateway",
   "dep:testcontainers",
   "dep:uuid",
 ]
 
 [dependencies]
 anyhow = { workspace = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
+integration_graph_fixtures = { path = "../integration_graph_fixtures", optional = true }
+integration_test_env = { path = "../integration_test_env" }
+integration_temporal_fixtures = { path = "../integration_temporal_fixtures", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -25,19 +37,24 @@ reqwest = { workspace = true, features = ["json", "rustls"] }
 axum = { version = "0.8.8", features = ["json"] }
 sqlx = { workspace = true, optional = true }
 testcontainers = { version = "0.28.0", optional = true }
-qdrant-client = { workspace = true, optional = true }
-neo4rs = { workspace = true, optional = true }
+vector_qdrant = { path = "../vector_qdrant", optional = true }
+graph_neo4j = { path = "../graph_neo4j", optional = true }
 infrastructure = { path = "../infrastructure", optional = true }
+runtime_composition = { path = "../runtime_composition", optional = true }
 temporalio-client = { workspace = true, optional = true }
-temporalio-sdk-core = { workspace = true, optional = true }
+temporalio-common = { workspace = true, optional = true }
+temporal_gateway = { path = "../temporal_gateway", optional = true }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
-outbox_worker = { path = "../../services/outbox_worker" }
+postgres_store = { path = "../postgres_store" }
+operation_protocol = { path = "../operation_protocol" }
 async-trait = "0.1"
 contracts = { path = "../contracts" }
 primitives = { path = "../primitives" }
 infrastructure = { path = "../infrastructure" }
+runtime_composition = { path = "../runtime_composition" }
+projection_delivery = { path = "../projection_delivery" }
 seo_application = { path = "../seo_application" }
 seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }

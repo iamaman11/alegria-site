@@ -5,12 +5,22 @@ edition = "2021"
 
 [dependencies]
 contracts = { path = "../contracts" }
+operation_protocol = { path = "../operation_protocol" }
+dataforseo_contracts = { path = "../dataforseo_contracts" }
+web_fetch_contracts = { path = "../web_fetch_contracts" }
 primitives = { path = "../primitives" }
 seo_domain = { path = "../seo_domain" }
+truth_domain = { path = "../truth_domain" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 runtime_models = { path = "../runtime_models" }
 serde_json = { workspace = true }
+schemars = { version = "1.2.3" }
 serde = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1"
+thiserror = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

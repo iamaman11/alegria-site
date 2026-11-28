@@ -1,0 +1,22 @@
+[package]
+name = "projection_delivery"
+version = "0.1.0"
+edition = "2021"
+
+# Effectful Neo4j/Qdrant/CMS materialization owns provider RPCs, but never
+# owns the durable PostgreSQL Outbox lease/revision/unknown-outcome fence.
+[dependencies]
+anyhow = { workspace = true }
+contracts = { path = "../contracts" }
+operation_protocol = { path = "../operation_protocol" }
+qdrant_effects_core = { path = "../qdrant_effects_core" }
+graph_neo4j = { path = "../graph_neo4j" }
+postgres_store = { path = "../postgres_store" }
+primitives = { path = "../primitives" }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+vector_qdrant = { path = "../vector_qdrant" }
+voyage_api = { path = "../voyage_api" }

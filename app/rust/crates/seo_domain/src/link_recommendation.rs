@@ -90,15 +90,22 @@ fn recommendation_for_pair(
     target: &LinkPage,
     topics_by_cluster: &BTreeMap<String, Vec<String>>,
 ) -> Option<RecommendedLink> {
-    if source.key == target.key || !linkable_page(source) || !linkable_page(target) {
+    // Every link is materialized as a same-scope graph relationship. Earlier
+    // policy allowed cross-scope *optional* candidates that the scoped Neo4j
+    // owner correctly refuses; persisting them would leave endlessly pending
+    // Outbox intents and block the canonical Temporal projection barrier.
+    // Until an explicit cross-scope contract is researched, fail closed at the
+    // producer boundary before any PostgreSQL Truth or Outbox write.
+    if source.key == target.key
+        || source.scope.trim().is_empty()
+        || source.scope != target.scope
+        || !linkable_page(source)
+        || !linkable_page(target)
+    {
         return None;
     }
     let (role, anchor_strategy, required, base_score) =
         link_kind(&source.page_type, &target.page_type);
-    let same_scope = source.scope == target.scope;
-    if !same_scope && required {
-        return None;
-    }
     let semantic = semantic_adjacency(&source.url_path, &target.url_path);
     let journey_bonus = if source.parent_key == target.key || target.parent_key == source.key {
         0.08
@@ -124,11 +131,9 @@ fn recommendation_for_pair(
         .cloned()
         .collect::<Vec<_>>();
     let graph_bonus = if shared_topics.is_empty() { 0.0 } else { 0.08 };
-    let score = clamp_score(if same_scope {
-        (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus
-    } else {
-        (base_score * 0.42) + (semantic * 0.13) + (graph_bonus * 0.5)
-    });
+    let score = clamp_score(
+        (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus,
+    );
     Some(RecommendedLink {
         key: seo_artifact_key(
             "link_recommendation",
@@ -291,6 +296,35 @@ mod tests {
         assert!(result
             .iter()
             .any(|link| link.source_key == "hub" && link.required && link.target_key == "detail"));
+    }
+
+    #[test]
+    fn optional_links_also_require_one_nonempty_scope_before_outbox_staging() {
+        let source = page("source", "cluster");
+        let same_scope = page("same", "cluster");
+        let mut foreign = page("foreign", "cluster");
+        foreign.scope = "another_scope".into();
+        let links = recommend_links(
+            &[source.clone(), same_scope.clone(), foreign.clone()],
+            &BTreeMap::new(),
+            3,
+        );
+        assert!(links.iter().all(|link| {
+            link.scope == "scope"
+                && link.source_key != foreign.key
+                && link.target_key != foreign.key
+        }));
+        assert!(links.iter().any(|link| {
+            link.source_key == source.key && link.target_key == same_scope.key && !link.required
+        }));
+
+        let mut unknown_scope_a = source;
+        unknown_scope_a.scope.clear();
+        let mut unknown_scope_b = same_scope;
+        unknown_scope_b.scope.clear();
+        assert!(
+            recommend_links(&[unknown_scope_a, unknown_scope_b], &BTreeMap::new(), 3,).is_empty()
+        );
     }
 
     #[test]

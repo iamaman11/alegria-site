@@ -3,7 +3,6 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-use contracts::generated::alegria::temporal::v1::SourceContextChunkState;
 use prost::Message;
 use reqwest::redirect::Policy;
 use reqwest::Url;
@@ -30,7 +29,6 @@ use primitives::url_norm::domain_norm;
 
 use super::proto_runtime_payload_store::classify_sqlx;
 use super::reqwest_adapter;
-use super::semantic_search_adapter;
 use super::sqlx_outbox_adapter::OutboxEnvelope;
 use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
 use super::truth_extraction_llm_adapter;

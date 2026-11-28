@@ -94,6 +94,16 @@ Write-Output "CI=PASS COMMIT=$Commit"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
 if ((Container-State $target) -ne 'running') { throw "$target not running" }
 if ((Container-Label $target 'com.docker.compose.project') -ne $project) { throw 'Worker project mismatch' }
+if ($Service -eq 'temporal-worker') {
+    # Staging deliberately uses --no-deps for exact-SHA image promotion, so
+    # Compose cannot enforce the ordinary service_healthy startup dependency.
+    # Require a real Outbox PostgreSQL-poll heartbeat before replacing Temporal.
+    $outboxHealth = ((& $docker inspect alegria_outbox_worker --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}unconfigured{{end}}') | Out-String).Trim()
+    Assert-Exit 'Outbox delivery owner health inspection'
+    if ($outboxHealth -ne 'healthy') {
+        throw "Outbox delivery owner is $outboxHealth; deploy healthy outbox-worker before temporal-worker"
+    }
+}
 $oldRoot = Container-Label $target 'com.docker.compose.project.working_dir'
 $oldSha = (Split-Path $oldRoot -Leaf) -replace '^alegria-site-', ''
 if ($oldSha -notmatch '^[a-f0-9]{40}$' -or -not (Test-Path (Join-Path $oldRoot 'docker-compose.yml'))) {

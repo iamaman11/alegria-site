@@ -41,6 +41,18 @@ impl TruthParamValue {
         }
     }
 
+    /// JSON numbers cannot represent NaN or infinities. Prevent Serde from
+    /// silently changing a nested scientific value into JSON null before a
+    /// verified Truth claim reaches durable PostgreSQL evidence.
+    pub(crate) fn decimals_are_finite(&self) -> bool {
+        match self {
+            Self::Decimal(value) => value.is_finite(),
+            Self::List(values) => values.iter().all(Self::decimals_are_finite),
+            Self::Object(values) => values.values().all(Self::decimals_are_finite),
+            _ => true,
+        }
+    }
+
     fn contains_numeric_token(&self) -> bool {
         match self {
             Self::Integer(_) | Self::Decimal(_) => true,

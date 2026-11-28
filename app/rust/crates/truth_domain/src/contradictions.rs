@@ -41,36 +41,58 @@ pub struct ContradictionGateOutput {
 }
 
 pub fn execute(input: &ContradictionGateInput) -> ContradictionGateOutput {
-    let mut first_seen: BTreeMap<(String, String), &FactAssertion> = BTreeMap::new();
+    // One representative per distinct normalized value, not the first record
+    // encountered. Otherwise a low-confidence duplicate can hide a critical
+    // conflict, and replaying the same facts in another order changes the
+    // publish decision.
+    let mut by_identity: BTreeMap<(String, String), BTreeMap<String, &FactAssertion>> =
+        BTreeMap::new();
     let mut conflicts: Vec<ConflictCase> = Vec::new();
 
     for fact in &input.facts {
-        let key = (fact.subject_key.clone(), fact.predicate_key.clone());
-        if let Some(prev) = first_seen.get(&key) {
-            if prev.value_normalized != fact.value_normalized {
-                let max_conf = prev.confidence.max(fact.confidence);
-                let severity = if max_conf >= 0.90 {
-                    "critical"
-                } else if max_conf >= 0.75 {
-                    "high"
-                } else {
-                    "medium"
-                };
-                conflicts.push(ConflictCase {
-                    subject_key: fact.subject_key.clone(),
-                    predicate_key: fact.predicate_key.clone(),
-                    value_left: prev.value_normalized.clone(),
-                    value_right: fact.value_normalized.clone(),
-                    source_left: prev.source_key.clone(),
-                    source_right: fact.source_key.clone(),
-                    confidence_left: prev.confidence,
-                    confidence_right: fact.confidence,
-                    severity: severity.to_string(),
-                    reason: "same (subject,predicate) has multiple normalized values".to_string(),
-                });
+        let distinct_values = by_identity
+            .entry((fact.subject_key.clone(), fact.predicate_key.clone()))
+            .or_default();
+        match distinct_values.get(&fact.value_normalized) {
+            Some(previous)
+                if previous.confidence.total_cmp(&fact.confidence).is_gt()
+                    || (previous.confidence.total_cmp(&fact.confidence).is_eq()
+                        && previous.source_key >= fact.source_key) => {}
+            _ => {
+                distinct_values.insert(fact.value_normalized.clone(), fact);
             }
-        } else {
-            first_seen.insert(key, fact);
+        }
+    }
+
+    // BTreeMap order gives deterministic representative pairs and output.
+    // A conflict against the canonical first distinct value is sufficient to
+    // report every alternative without duplicating the same contradiction.
+    for ((subject_key, predicate_key), distinct_values) in by_identity {
+        let mut facts = distinct_values.values();
+        let Some(reference) = facts.next() else {
+            continue;
+        };
+        for alternative in facts {
+            let max_conf = reference.confidence.max(alternative.confidence);
+            let severity = if max_conf >= 0.90 {
+                "critical"
+            } else if max_conf >= 0.75 {
+                "high"
+            } else {
+                "medium"
+            };
+            conflicts.push(ConflictCase {
+                subject_key: subject_key.clone(),
+                predicate_key: predicate_key.clone(),
+                value_left: reference.value_normalized.clone(),
+                value_right: alternative.value_normalized.clone(),
+                source_left: reference.source_key.clone(),
+                source_right: alternative.source_key.clone(),
+                confidence_left: reference.confidence,
+                confidence_right: alternative.confidence,
+                severity: severity.to_string(),
+                reason: "same (subject,predicate) has multiple normalized values".to_string(),
+            });
         }
     }
 
@@ -217,5 +239,102 @@ mod tests {
         assert_eq!(forward.decision, reverse.decision);
         assert_eq!(forward.conflict_count, reverse.conflict_count);
         assert_eq!(forward.conflicts[0].severity, reverse.conflicts[0].severity);
+    }
+
+    #[test]
+    fn higher_confidence_duplicate_cannot_be_hidden_by_input_order() {
+        let facts = vec![
+            FactAssertion {
+                subject_key: "fee".into(),
+                predicate_key: "amount".into(),
+                value_normalized: "80 EUR".into(),
+                source_key: Some("source:old".into()),
+                confidence: 0.50,
+            },
+            FactAssertion {
+                subject_key: "fee".into(),
+                predicate_key: "amount".into(),
+                value_normalized: "80 EUR".into(),
+                source_key: Some("source:official".into()),
+                confidence: 0.99,
+            },
+            FactAssertion {
+                subject_key: "fee".into(),
+                predicate_key: "amount".into(),
+                value_normalized: "120 EUR".into(),
+                source_key: Some("source:other".into()),
+                confidence: 0.60,
+            },
+        ];
+        for permutation in [
+            facts.clone(),
+            vec![facts[2].clone(), facts[0].clone(), facts[1].clone()],
+            facts.iter().rev().cloned().collect(),
+        ] {
+            let output = execute(&ContradictionGateInput {
+                run_id: "run-replay".into(),
+                facts: permutation,
+            });
+            assert!(output.is_blocked);
+            assert_eq!(output.decision, "block_publish");
+            assert_eq!(output.conflict_count, 1);
+            let conflict = &output.conflicts[0];
+            assert_eq!(conflict.severity, "critical");
+            // Value order is stable lexical order, not "preferred evidence
+            // always goes on the left". Verify the winning source is tied
+            // to the *80 EUR value* regardless of pair orientation.
+            let (source, confidence) = if conflict.value_left == "80 EUR" {
+                (conflict.source_left.as_deref(), conflict.confidence_left)
+            } else {
+                assert_eq!(conflict.value_right, "80 EUR");
+                (conflict.source_right.as_deref(), conflict.confidence_right)
+            };
+            assert_eq!(confidence, 0.99);
+            assert_eq!(source, Some("source:official"));
+        }
+    }
+
+    #[test]
+    fn repeated_alternate_evidence_does_not_duplicate_conflicts() {
+        let assertion = |value: &str, confidence: f32| FactAssertion {
+            subject_key: "fee".into(),
+            predicate_key: "amount".into(),
+            value_normalized: value.into(),
+            source_key: Some(format!("source:{confidence}")),
+            confidence,
+        };
+        let output = execute(&ContradictionGateInput {
+            run_id: "run-duplicates".into(),
+            facts: vec![
+                assertion("80 EUR", 0.80),
+                assertion("120 EUR", 0.65),
+                assertion("120 EUR", 0.95),
+                assertion("150 EUR", 0.60),
+            ],
+        });
+        assert_eq!(output.conflict_count, 2);
+        assert!(output.is_blocked);
+        // Canonical representative is lexicographically first, so an
+        // alternative can be on either side. Every conflict against the
+        // repeated 120 EUR value must use its strongest 0.95 evidence.
+        let alternatives = output
+            .conflicts
+            .iter()
+            .map(|conflict| {
+                assert_eq!(conflict.severity, "critical");
+                if conflict.value_left == "120 EUR" {
+                    assert_eq!(conflict.confidence_left, 0.95);
+                    conflict.value_right.as_str()
+                } else {
+                    assert_eq!(conflict.value_right, "120 EUR");
+                    assert_eq!(conflict.confidence_right, 0.95);
+                    conflict.value_left.as_str()
+                }
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            alternatives,
+            std::collections::BTreeSet::from(["80 EUR", "150 EUR"])
+        );
     }
 }

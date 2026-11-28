@@ -4,10 +4,13 @@ pub use qdrant_client::qdrant::{
     PointStruct, PointsIdsList, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
     VectorParamsBuilder,
 };
+use qdrant_client::qdrant::{PointsOperationResponse, UpdateStatus};
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::env;
+
+pub mod projection_commands;
 
 pub type AlegriaQdrantClient = Qdrant;
 
@@ -47,20 +50,25 @@ pub fn parse_distance(distance: &str) -> Result<Distance> {
     }
 }
 
+/// Every dense-vector entrypoint uses one provider-free preflight. In
+/// particular, serde_json encodes non-finite floats as `null`; sending such
+/// an embedding over REST could corrupt the attempted projection payload.
+pub(crate) fn validate_dense_vector(vector: &[f32]) -> Result<()> {
+    if vector.is_empty() {
+        bail!("dense vector is empty");
+    }
+    if let Some(index) = vector.iter().position(|value| !value.is_finite()) {
+        bail!("dense vector contains a non-finite component at index {index}");
+    }
+    Ok(())
+}
+
 pub fn normalize_payload(
     entity_type: &str,
     entity_key: &str,
     payload_value: Option<&Value>,
 ) -> Value {
     let mut merged = Map::new();
-    merged.insert(
-        "entity_type".to_string(),
-        Value::String(entity_type.to_string()),
-    );
-    merged.insert(
-        "entity_key".to_string(),
-        Value::String(entity_key.to_string()),
-    );
     if let Some(v) = payload_value {
         if let Some(obj) = v.as_object() {
             for (k, val) in obj {
@@ -70,7 +78,63 @@ pub fn normalize_payload(
             merged.insert("source_payload".to_string(), v.clone());
         }
     }
+    // Projection identity comes from the validated command, never from an
+    // arbitrary nested payload. Preserve every other caller-supplied field.
+    merged.insert(
+        "entity_type".to_string(),
+        Value::String(entity_type.to_string()),
+    );
+    merged.insert(
+        "entity_key".to_string(),
+        Value::String(entity_key.to_string()),
+    );
     Value::Object(merged)
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_entity_identity_cannot_be_overwritten_by_projection_payload() {
+        let supplied = serde_json::json!({
+            "entity_type": "other_type",
+            "entity_key": "other_key",
+            "rule_instance_id": "fact-1",
+            "source_key": "https://official.example/rule"
+        });
+        let payload = normalize_payload("rule_instance", "canonical-1", Some(&supplied));
+        assert_eq!(payload["entity_type"], "rule_instance");
+        assert_eq!(payload["entity_key"], "canonical-1");
+        assert_eq!(payload["rule_instance_id"], "fact-1");
+        assert_eq!(payload["source_key"], "https://official.example/rule");
+        // Do not mutate the source or let subsequent retries drift identity.
+        assert_eq!(supplied["entity_key"], "other_key");
+        assert_eq!(
+            normalize_payload("rule_instance", "canonical-1", Some(&supplied)),
+            payload
+        );
+    }
+
+    #[test]
+    fn scalar_payload_is_preserved_but_cannot_replace_identity() {
+        let supplied = serde_json::json!("source text");
+        assert_eq!(
+            normalize_payload("raw_section", "section-1", Some(&supplied)),
+            serde_json::json!({
+                "entity_type": "raw_section",
+                "entity_key": "section-1",
+                "source_payload": "source text"
+            })
+        );
+        assert_eq!(
+            normalize_payload("raw_section", "section-1", None),
+            serde_json::json!({
+                "entity_type": "raw_section",
+                "entity_key": "section-1"
+            })
+        );
+    }
 }
 
 pub async fn ensure_dense_collection(
@@ -111,9 +175,7 @@ pub async fn upsert_dense_point(
     vector: Vec<f32>,
     payload_value: Value,
 ) -> Result<()> {
-    if vector.is_empty() {
-        bail!("vector is empty");
-    }
+    validate_dense_vector(&vector)?;
     let rest_url = qdrant_rest_url_from_env();
     let endpoint = format!(
         "{}/collections/{}/points?wait=true",
@@ -144,6 +206,57 @@ pub async fn upsert_dense_point(
             text
         );
     }
+    // A 2xx response is not an application acknowledgement. Qdrant can return
+    // `acknowledged` for an operation that has only reached its WAL, or an
+    // unexpected response shape. Both cases must propagate an error to the
+    // dispatcher, never a successful delivery result.
+    let response_body = response
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read qdrant REST upsert response: {endpoint}"))?;
+    ensure_completed_rest_update(&response_body).with_context(|| {
+        format!(
+            "qdrant REST upsert completion unconfirmed for collection={}, point_id={}",
+            collection_name, point_id
+        )
+    })
+}
+
+/// Qdrant's documented `wait=true` REST result contains `status: ok` and
+/// `result.status: completed`. Neither HTTP success nor `acknowledged` proves
+/// that the point is ready for search. Never infer success from missing fields.
+fn ensure_completed_rest_update(bytes: &[u8]) -> Result<()> {
+    let body: Value = serde_json::from_slice(bytes).context("invalid Qdrant update JSON")?;
+    let status = body
+        .get("status")
+        .and_then(Value::as_str)
+        .context("missing or non-string Qdrant response status")?;
+    anyhow::ensure!(status == "ok", "Qdrant response status is not ok: {status}");
+    let update_status = body
+        .get("result")
+        .and_then(Value::as_object)
+        .and_then(|result| result.get("status"))
+        .and_then(Value::as_str)
+        .context("missing or non-string Qdrant result.status")?;
+    anyhow::ensure!(
+        update_status == "completed",
+        "Qdrant update was not completed: {update_status}"
+    );
+    Ok(())
+}
+
+/// gRPC's counterpart of the REST completion check. In the generated proto,
+/// `result` is optional and status may be unknown, acknowledged, rejected by
+/// a clock fence or timed out. Only `Completed` is an applied effect.
+fn ensure_completed_grpc_update(response: PointsOperationResponse) -> Result<()> {
+    let update = response
+        .result
+        .context("missing Qdrant gRPC update result")?;
+    anyhow::ensure!(
+        update.status == UpdateStatus::Completed as i32,
+        "Qdrant gRPC update was not completed: status={}",
+        update.status
+    );
     Ok(())
 }
 
@@ -173,14 +286,16 @@ pub async fn upsert_batch(
     let pts: Result<Vec<PointStruct>> = points
         .into_iter()
         .map(|(id, vec, payload)| {
+            validate_dense_vector(&vec)?;
             let p: Payload = payload.try_into().context("failed to convert payload")?;
             Ok(PointStruct::new(id, vec, p))
         })
         .collect();
-    client
+    let response = client
         .upsert_points(UpsertPointsBuilder::new(collection_name, pts?).wait(true))
         .await?;
-    Ok(())
+    ensure_completed_grpc_update(response)
+        .with_context(|| format!("qdrant batch upsert completion unconfirmed: {collection_name}"))
 }
 
 pub async fn upsert_batch_map(
@@ -194,6 +309,7 @@ pub async fn upsert_batch_map(
     let pts: Result<Vec<PointStruct>> = points
         .into_iter()
         .map(|(id, vec, payload_map)| {
+            validate_dense_vector(&vec)?;
             let payload_value = serde_json::to_value(payload_map)
                 .context("failed to serialize payload_map into json")?;
             let p: Payload = payload_value
@@ -202,10 +318,12 @@ pub async fn upsert_batch_map(
             Ok(PointStruct::new(id, vec, p))
         })
         .collect();
-    client
+    let response = client
         .upsert_points(UpsertPointsBuilder::new(collection_name, pts?).wait(true))
         .await?;
-    Ok(())
+    ensure_completed_grpc_update(response).with_context(|| {
+        format!("qdrant batch-map upsert completion unconfirmed: {collection_name}")
+    })
 }
 
 pub async fn upsert_embedding_points(
@@ -228,7 +346,7 @@ pub async fn delete_point_ids(
     if point_ids.is_empty() {
         return Ok(());
     }
-    client
+    let response = client
         .delete_points(
             DeletePointsBuilder::new(collection_name)
                 .points(PointsIdsList {
@@ -238,7 +356,57 @@ pub async fn delete_point_ids(
         )
         .await
         .with_context(|| format!("failed qdrant delete for collection={collection_name}"))?;
-    Ok(())
+    ensure_completed_grpc_update(response).with_context(|| {
+        format!("qdrant delete completion unconfirmed for collection={collection_name}")
+    })
+}
+
+#[cfg(test)]
+mod qdrant_completion_tests {
+    use super::*;
+    use qdrant_client::qdrant::UpdateResult;
+
+    #[test]
+    fn rest_accepts_only_explicit_completed_result() {
+        let completed =
+            br#"{"status":"ok","result":{"operation_id":7,"status":"completed"},"time":0.01}"#;
+        assert!(ensure_completed_rest_update(completed).is_ok());
+        for response in [
+            br#"{"status":"ok","result":{"status":"acknowledged"}}"#.as_slice(),
+            br#"{"status":"ok","result":{"status":"wait_timeout"}}"#,
+            br#"{"status":"error","result":{"status":"completed"}}"#,
+            br#"{"status":"ok","result":{}}"#,
+            br#"{"status":"ok","result":null}"#,
+            br#"{"result":{"status":"completed"}}"#,
+            br#"{"status":"ok","result":{"status":2}}"#,
+            br#"[]"#,
+            br#"not JSON"#,
+        ] {
+            assert!(ensure_completed_rest_update(response).is_err());
+        }
+    }
+
+    #[test]
+    fn grpc_accepts_only_completed_update_status() {
+        let result = |status| PointsOperationResponse {
+            result: Some(UpdateResult {
+                operation_id: Some(7),
+                status,
+            }),
+            ..Default::default()
+        };
+        assert!(ensure_completed_grpc_update(result(UpdateStatus::Completed as i32)).is_ok());
+        for status in [
+            UpdateStatus::UnknownUpdateStatus,
+            UpdateStatus::Acknowledged,
+            UpdateStatus::ClockRejected,
+            UpdateStatus::WaitTimeout,
+        ] {
+            assert!(ensure_completed_grpc_update(result(status as i32)).is_err());
+        }
+        assert!(ensure_completed_grpc_update(PointsOperationResponse::default()).is_err());
+        assert!(ensure_completed_grpc_update(result(999)).is_err());
+    }
 }
 
 pub async fn search_dense(
@@ -248,9 +416,7 @@ pub async fn search_dense(
     limit: u64,
     filter: Option<Filter>,
 ) -> Result<Vec<ScoredPoint>> {
-    if vector.is_empty() {
-        bail!("search vector is empty");
-    }
+    validate_dense_vector(&vector)?;
     // Callers consume entity_key/retrieval_text to map neighbors and rerank;
     // Qdrant omits point payloads unless they are explicitly requested.
     let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
@@ -262,6 +428,24 @@ pub async fn search_dense(
         .await
         .with_context(|| format!("qdrant search failed for collection={collection}"))?;
     Ok(resp.result)
+}
+
+#[cfg(test)]
+mod dense_vector_contract_tests {
+    use super::validate_dense_vector;
+
+    #[test]
+    fn every_dense_vector_must_have_only_finite_components() {
+        assert!(validate_dense_vector(&[0.0, -1.25, 3.4]).is_ok());
+        for invalid in [
+            vec![],
+            vec![f32::NAN],
+            vec![f32::INFINITY],
+            vec![-1.0, f32::NEG_INFINITY],
+        ] {
+            assert!(validate_dense_vector(&invalid).is_err());
+        }
+    }
 }
 
 /// Expected immutable source evidence for one physical Qdrant point.

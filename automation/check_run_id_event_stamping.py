@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "drafting": ROOT / "app/rust/crates/seo_application/src/drafting.rs",
     "ports": ROOT / "app/rust/crates/seo_ports/src/lib.rs",
-    "ports_adapter": ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs",
+    "ports_adapter": ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs",
     "seo_adapter": ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter.rs",
     "proto_runtime": ROOT / "app/rust/crates/infrastructure/src/adapters/proto_runtime_payload_store.rs",
     "source_projection": ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_source_projection_adapter.rs",

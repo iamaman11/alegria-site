@@ -12,10 +12,32 @@ case "${1:-}" in
     python3 -m compileall -q automation infra/analytics_lab/src
     python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
     python3 automation/check_ci_workflow_contract.py
+    # Opt-in physical A/B helpers are intentionally excluded from real E2E
+    # impact only because their contracts are checked in this mandatory gate.
+    python3 automation/check_owner_rebuild.py
+    python3 automation/test_measure_generic_temporal_rebuild.py
+    python3 automation/test_report_ci_critical_path.py
+    python3 automation/check_owner_build_evidence_summary.py
+    python3 automation/check_legacy_worker_split.py
+    python3 automation/check_temporal_activity_owner_inventory.py
+    python3 automation/test_temporal_activity_owner_inventory.py
+    # Issue #94 candidate ledger is source evidence, never a second runtime
+    # registry. Enforce exact typed/catalog/runner bindings and fail-closed
+    # drift tests on every PR alongside the Activity inventory.
+    python3 automation/check_operation_inventory.py
+    # The V1 prost DTO and V2 typed Rust DAG have distinct, intentional
+    # transport boundaries. Fail closed if either loses its typed owner gate,
+    # or if authoring JSON leaks into provider-free domain operations.
+    python3 automation/test_operation_wire_boundary.py
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py
+    python3 infra/temporal/check_v3_evaluation_topology.py
+    # Mandatory offline replay/cutover inventory regression: historical
+    # migrations and staged operator evidence must not bypass required PR CI.
+    python3 automation/test_temporal_history_transition.py
     python3 automation/check_rust_adapter_boundaries.py
+    python3 automation/check_rust_adapter_boundaries_tests.py
     python3 automation/check_rust_layer_isolation.py
     python3 automation/check_module_boundaries.py
     python3 automation/check_seo_architecture_wording.py
@@ -47,6 +69,7 @@ case "${1:-}" in
     python3 automation/check_run_report_completeness.py
     python3 automation/check_reconcile_failsafe.py
     python3 automation/check_sqlx_offline_contract.py
+    python3 automation/check_json_boundary_policy_tests.py
     python3 automation/check_expert_consistency.py --run-boundary --run-invariants --run-json-boundary --report-json automation/reports/consistency_report.json
     python3 automation/check_integration_harness_present.py
     python3 automation/check_graph_contract_gate.py docs/runs/graph_contract_gate_evidence.json

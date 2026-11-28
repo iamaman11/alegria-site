@@ -6,9 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYNC_PROTO = ROOT / "app" / "contracts" / "proto" / "sync.proto"
 SEO_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
-NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "neo4j_materialization_adapter.rs"
+NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "projection_delivery" / "src" / "neo4j_materialization_adapter.rs"
+NEO4J_PROJECTION_OWNER = ROOT / "app" / "rust" / "crates" / "graph_neo4j" / "src" / "projection.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
-PROJECTION_MATERIALIZER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "projection_materialize_adapter.rs"
+PROJECTION_MATERIALIZER = ROOT / "app" / "rust" / "crates" / "projection_delivery" / "src" / "projection_materialize_adapter.rs"
 SEO_DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src"
 CI = ROOT / "automation" / "ci_verify.sh"
 
@@ -67,7 +68,12 @@ def read_file_resolved(path: Path) -> str:
 def main() -> int:
     sync_proto = SYNC_PROTO.read_text(encoding="utf-8")
     seo_adapter = read_file_resolved(SEO_ADAPTER)
-    neo4j_adapter = NEO4J_ADAPTER.read_text(encoding="utf-8")
+    # The PostgreSQL-facing materializer dispatches to Neo4j-owned Cypher;
+    # contract assertions must cover both sides of that ownership boundary.
+    neo4j_adapter = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (NEO4J_ADAPTER, NEO4J_PROJECTION_OWNER)
+    )
     outbox_worker = OUTBOX_WORKER.read_text(encoding="utf-8")
     projection_materializer = PROJECTION_MATERIALIZER.read_text(encoding="utf-8")
     seo_domain = (SEO_DOMAIN / "rebuild.rs").read_text(encoding="utf-8")
@@ -102,8 +108,8 @@ def main() -> int:
 
     if "SeoGraphProjectionUpserted" not in seo_adapter:
         failures.append("SEO persistence adapter does not emit SeoGraphProjectionUpserted")
-    if "projection_materialize_adapter::dispatch_event" not in outbox_worker:
-        failures.append("outbox worker does not delegate projection dispatch to infrastructure materializer")
+    if "projection_materialize_adapter::dispatch_leased_event(" not in outbox_worker:
+        failures.append("outbox worker must delegate only leased, fenced projection dispatch")
     if "SeoGraphProjectionUpserted" not in projection_materializer:
         failures.append("projection materializer does not dispatch SeoGraphProjectionUpserted")
     if "cmd.metadata" not in projection_materializer:

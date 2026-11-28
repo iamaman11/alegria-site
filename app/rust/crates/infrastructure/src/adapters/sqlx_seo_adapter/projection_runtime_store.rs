@@ -29,13 +29,17 @@ use super::proto_runtime_payload_store::{
     classify_sqlx, contract_violation, encode_runtime_payload, validation_failure,
     RuntimeProtoPayload,
 };
-use super::sqlx_outbox_adapter::OutboxEnvelope;
+use super::sqlx_outbox_adapter::{OutboxEnvelope, VERIFIED_RULE_UNCERTAIN_MARKER};
 use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionBacklogCounts {
     pub pending_events: i64,
     pub failed_events: i64,
+    /// Subset of failures fenced before an external verified-rule Qdrant RPC.
+    /// These rows may become `done` on the worker's successful acknowledgement;
+    /// no observer may automatically requeue or clear an uncertain row.
+    pub uncertain_events: i64,
 }
 
 pub async fn projection_backlog_counts(
@@ -48,7 +52,13 @@ pub async fn projection_backlog_counts(
         SELECT
           -- Processing leases are still outstanding, not materialized points.
           COUNT(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending_events,
-          COUNT(*) FILTER (WHERE status = 'failed') AS failed_events
+          COUNT(*) FILTER (WHERE status = 'failed') AS failed_events,
+          COUNT(*) FILTER (
+            WHERE status = 'failed'
+              AND target_system = 'qdrant'
+              AND aggregate_type = 'rule_instance'
+              AND last_error = $3
+          ) AS uncertain_events
         FROM system.sync_outbox
         WHERE run_id = $1
           AND target_system = $2
@@ -56,6 +66,7 @@ pub async fn projection_backlog_counts(
     )
     .bind(run_id)
     .bind(target_system)
+    .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
     .fetch_one(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -63,6 +74,7 @@ pub async fn projection_backlog_counts(
     Ok(ProjectionBacklogCounts {
         pending_events: row.get("pending_events"),
         failed_events: row.get("failed_events"),
+        uncertain_events: row.get("uncertain_events"),
     })
 }
 
@@ -191,17 +203,14 @@ where
     let sorted = rule_ids
         .into_iter()
         .map(|id| id.as_ref().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    for rule_instance_id in sorted {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(format!(
-                "qdrant|verified_rules_4|rule_instance|{rule_instance_id}"
-            ))
-            .execute(&mut **tx)
-            .await
-            .map_err(classify_sqlx)?;
-    }
-    Ok(())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(tx, &sorted)
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("verified Truth mutation blocked by Qdrant uncertainty fence: {err}"),
+        })
 }
 
 /// A delayed older workflow must not overwrite a newer Truth commit for the
@@ -543,6 +552,19 @@ pub async fn upsert_verified_rule_instance(
     // Invalid scope never opens a connection, including through this pool API.
     validate_verified_rule_instance_write(rule)?;
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // The standalone legacy writer has no Outbox intent or staged registry
+    // mutation in its transaction. It may seed an as-yet unprojected identity,
+    // but must never mutate one that has ever been projected (including a
+    // previously tombstoned point). Canonical Truth writes use the in-tx
+    // writer and stage the revisioned Qdrant intent before commit instead.
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        std::slice::from_ref(&rule.rule_instance_id),
+    )
+    .await
+    .map_err(|error| DomainError::InfraUnavailable {
+        message: format!("legacy verified Truth upsert without Qdrant intent rejected: {error}"),
+    })?;
     upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
     tx.commit().await.map_err(classify_sqlx)
 }
@@ -553,6 +575,17 @@ pub async fn upsert_verified_rule_instance_in_tx(
 ) -> Result<(), DomainError> {
     // Validate the precise scope BEFORE any SQL mutation.
     let target = validate_verified_rule_instance_write(rule)?;
+    // This public low-level writer can also be called without the enclosing
+    // Truth workflow. Protect it independently from outstanding provider
+    // effects; the canonical caller's earlier lock is reentrant in this tx.
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx,
+        std::slice::from_ref(&rule.rule_instance_id),
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("verified Truth upsert blocked by Qdrant uncertainty fence: {err}"),
+    })?;
     if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
@@ -678,6 +711,17 @@ pub async fn demote_verified_rule_instance(
     adjudication_reason: &str,
 ) -> Result<(), DomainError> {
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // A standalone status change cannot atomically issue the Qdrant
+    // tombstone. Protect the entire lifetime of an ever-projected rule, not
+    // merely identities with a currently active registry row.
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &[rule_instance_id.to_owned()],
+    )
+    .await
+    .map_err(|error| DomainError::InfraUnavailable {
+        message: format!("legacy verified Truth demotion without Qdrant intent rejected: {error}"),
+    })?;
     demote_verified_rule_instance_in_tx(
         &mut tx,
         rule_instance_id,
@@ -698,6 +742,14 @@ pub async fn demote_verified_rule_instance_in_tx(
     verification_method: &str,
     adjudication_reason: &str,
 ) -> Result<(), DomainError> {
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx,
+        &[rule_instance_id.to_string()],
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("verified Truth demotion blocked by Qdrant uncertainty fence: {err}"),
+    })?;
     sqlx::query(
         "UPDATE verified.rule_instances
          SET status = $2,

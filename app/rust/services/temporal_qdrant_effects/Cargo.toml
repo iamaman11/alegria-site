@@ -1,0 +1,28 @@
+[package]
+name = "temporal_qdrant_effects"
+version = "0.1.0"
+edition = "2021"
+
+# This binary is a physically independent opt-in external-effect owner.
+# The PG Truth worker NEVER links or polls this Qdrant provider SDK.
+[dependencies]
+operation_protocol = { path = "../../crates/operation_protocol" }
+qdrant_contracts = { path = "../../crates/qdrant_contracts" }
+projection_contracts = { path = "../../crates/projection_contracts" }
+qdrant_effects_core = { path = "../../crates/qdrant_effects_core" }
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-common = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+futures-util = "0.3"

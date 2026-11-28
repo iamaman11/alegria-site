@@ -1,18 +1,19 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CanonicalMappingInput {
     pub section_id: String,
     pub mentions: Vec<MentionForMapping>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MentionForMapping {
     pub raw_text: String,
     pub entity_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MappingResult {
     pub raw_text: String,
     pub canonical_key: Option<String>,
@@ -24,12 +25,12 @@ pub struct MappingResult {
     pub needs_hitl: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CanonicalMappingOutput {
     pub mappings: Vec<MappingResult>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchingStage {
     TypedEntity,
@@ -94,8 +95,15 @@ fn lexicon_token_lookup(s: &str) -> Option<&'static str> {
 }
 
 pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
-    let mut out = Vec::with_capacity(input.mentions.len());
-    for m in &input.mentions {
+    map_mentions(&input.mentions)
+}
+
+/// Pure canonical lookup over typed mentions. The source section identity is
+/// carried by the admitted artifact envelope when this function is composed
+/// after entity extraction, rather than being invented by the adapter.
+pub fn map_mentions(mentions: &[MentionForMapping]) -> CanonicalMappingOutput {
+    let mut out = Vec::with_capacity(mentions.len());
+    for m in mentions {
         let entity_type = normalized(&m.entity_type);
         let entity_type_map = match entity_type.as_str() {
             "fee" => Some(("consular_fee", "typed_entity", 0.97f32)),

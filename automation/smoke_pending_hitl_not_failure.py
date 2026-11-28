@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RECONCILE_MAIN = ROOT / "app" / "rust" / "services" / "reconcile" / "src" / "main.rs"
-HEALTH = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_runtime_health_adapter.rs"
+HEALTH = ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_runtime_health_adapter.rs"
 
 
 def must_contain(path: Path, needle: str) -> str | None:

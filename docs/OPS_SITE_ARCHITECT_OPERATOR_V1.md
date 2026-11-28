@@ -1,0 +1,457 @@
+# siteArchitect: MCP для ChatGPT, типизированные рецепты и проверка результатов (recipe v2)
+
+`siteArchitect` — единое название инструмента. CLI использует `site-architect`,
+Rust API — `site_architect` / `SiteArchitect*`, переменные окружения оператора —
+`SITE_ARCHITECT_SINGLE_V2_*`, MCP публикует `site_architect_*`, а имя сервера —
+`alegria-siteArchitect`. Это не второй DAG. Переименование не изменяет
+существующие идентификаторы уже записанных Temporal Workflow и SQL-таблиц.
+
+## Зачем
+
+Это простой штатный способ для ChatGPT и оператора исследовать разные рецепты создания сайта **без изменения Rust-кода после каждой гипотезы**. Здесь только три понятия:
+
+1. **Инструмент** — версия операции, владелец, типы входов/выходов, эффекты, **описание параметров и его хеш**. Каталог определяется установленными доверенными Rust-владельцами; наличие контракта не доказывает, что API доступен.
+2. **Рецепт** — редактируемый JSON: источники с заявленной provenance, шаги со своими `parameters`, типизированные связи и необязательные `after`. Никаких Task Queue, секретов, провайдерских URL или динамического кода.
+3. **Проверка** — детерминированная валидация графа через существующий `operation_protocol` и проверка параметров конкретного владельца там, где его Rust DTO установлен. Сравнение двух рецептов показывает только **структурные различия**, не результат SEO-эксперимента.
+
+### Отдельные действия — обязательный интерфейс
+
+ChatGPT должен иметь возможность выбирать **одно** действие, задавать его
+типизированные параметры, проверять разрешения, запускать через Temporal и
+получать результат/диагностику без создания многошагового сценария. Тот же
+`OperationContract` и тот же авторизованный Temporal-путь должны использоваться
+при последующем включении действия в произвольный DAG: никаких прямых
+HTTP-вызовов поставщиков из общего MCP-обработчика.
+
+| Действие | Имеющийся нативный контракт | Чего не хватает для `ready` |
+|---|---|---|
+| Выдача Google по ключевому запросу | `dataforseo.google_organic.search@1`, `DataForSeoGoogleOrganicSearchInputV1` → `DataForSeoGoogleOrganicSearchOutputV1` | Настоящий разрешённый DataForSEO owner с ограничением стоимости, credential isolation, подтверждённым provider receipt и Temporal E2E. Текущий HTTP путь — только loopback fixture |
+| Скачать публичную HTTPS-страницу | `web.public_page.fetch@1`, `WebFetchRequestV1` → `WebPageSnapshotV1` | Независимый web owner с проверками DNS/SSRF/robots/redirect, ограничением размера, immutable snapshot и Temporal History |
+
+**Ни одно действие нельзя называть `ready` только из-за контракта или тестового
+HTTP-стенда.** До установки соответствующего владельца оно должно возвращать
+`blocked`/`needs_adapter` с конкретным `next_action`, а не поддельную выдачу
+или snapshot. Пять существующих семантических операций и два запущенных в
+пилоте Acquisition poller также не доказывают готовность 52 строк инвентаризации.
+
+Команды штатного бинарника `cli_tools` (запускать из корня репозитория):
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect tools
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect operation --id semantic.entity_spans --revision 1
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect one-step --recipe-file docs/site_architect_single_step_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect check --recipe-file docs/site_architect_recipe_v1.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect diff --first-file docs/site_architect_recipe_v1.json --second-file docs/site_architect_recipe_v1_alternative.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect inspect --plan-file saved-plan.json --receipt-file saved-v2-receipt.json
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect compare-results --first-plan-file a-plan.json --first-receipt-file a-v2-receipt.json --second-plan-file b-plan.json --second-receipt-file b-v2-receipt.json
+```
+
+`operation` выбирает **строго установленную** версию операции по `--id` и
+`--revision`; для отдельной проверки настроек допустим дополнительный
+`--parameters-file /path/to/settings.json` или `--parameters-file -`.
+Команда показывает точные типы портов, объявленные владельцем продвинутые
+параметры и отпечаток проверенной конфигурации, но не возвращает значения
+секретов. Локальный Rust DTO проверяется типизированно; для внешнего владельца
+JSON-объект получает только `schema_shape_checked_only` до настоящего
+`ValidateOnly` Child. Каталог, наличие контракта или URL провайдера сами по
+себе **не** доказывают работоспособность, подключение или полномочия.
+
+`one-step` принимает обычный `SiteRecipe`, но требует ровно **один шаг**.
+Он использует тот же текущий план/валидатор, что и многозвенный рецепт, и
+возвращает `single_step_preview_only`: без исходных заверенных байтов,
+Temporal Start, server History, независимого допуска и эффекта. Полный
+предстартовый V2-контроль уже имеет узкую одношаговую обёртку
+`preflight_unadmitted_single_operation_v2_start`, которой нужны отдельные
+зафиксированные хеши команды и источника. Это **не** разрешение на Start.
+
+Тот же инспектор и просмотр одного шага доступны через новые локальные MCP
+инструменты `site_architect_operation` и `site_architect_one_step`. После их добавления
+локальный MCP предлагает **12 инструментов** управления и read-only анализа,
+а не 12 работающих внешних SEO API. Двенадцатый инструмент читает только
+ограниченный статус V2 через отдельно запущенного Unix-оператора. Удалённая
+аутентификация ChatGPT, запуск через MCP и независимая аттестация provider
+receipt остаются P0.
+
+### Изолированный оператор DataForSEO — только локальная заглушка
+
+Новый независимый оператор вызывается отдельной командой
+`temporal_dataforseo --issue-stub-admission /path/to/private-locator.json`,
+а не из `site_architect_one_step`. Он требует явного
+`ALEGRIA_ENABLE_DATAFORSEO_STUB_OPERATOR_V1=true`, доверенный build ID,
+локальный Temporal endpoint/namespace и отдельный закрытый файл SQL-учётных
+данных. Локатор содержит только UUID бизнес-запуска и точные server Workflow
+ID/Run ID родителя и owner-child с ограниченным временем допуска. Оператор
+сам читает реальные Temporal Histories родителя, Child и всех ValidateOnly,
+проверяет независимую SQL-governance, фиксирует допуск в транзакции и лишь
+после COMMIT посылает Signal. Signal никогда не является допуском сам по себе.
+
+Проверка остаётся **test-only/stub-only**: отдельный owner допускает HTTP
+POST/GET лишь к локальному фиктивному серверу на `127.0.0.1`; его receipt
+имеет `StubFixtureOnly` и не может считаться SEO-свидетельством. Платных
+запросов, доверенного удалённого ChatGPT Start или production cutover нет.
+
+Обязательный CI-сценарий `dataforseo_native_v2_temporal_sql_http_restart_and_ambiguous_post`
+проверяет полный **тестовый** путь: реальный Temporal V2 Parent и ValidateOnly/
+effect Child Histories → разные PostgreSQL LOGIN для business/governance/
+issuer/worker → SQL-допуск → физический локальный POST/GET → неизменяемый
+receipt, байты которого сравниваются с Temporal output. Тест останавливает
+Worker между записанным POST и GET, затем проверяет GET-only восстановление.
+Отдельная ветка теряет ответ POST и требует состояния `uncertain` с нулём
+повторных POST. Поддельный Child Run ID и чужой tenant не получают допуск.
+Сценарий включён в существующий `temporal_qdrant` CI shard и использует
+отдельно упакованный SHA-проверяемый исполняемый файл owner.
+Это **не** проверка настоящего DataForSEO, стоимости, подлинности SERP,
+деплойного Worker Build ID или входа ChatGPT в production Temporal.
+
+Для ChatGPT/скриптов допустим **один ограниченный JSON из stdin** без промежуточного файла:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p cli_tools -- site-architect check --recipe-file - < docs/site_architect_recipe_v1.json
+```
+
+То же работает с `diff`, `inspect` и `compare-results`. Если команда получает несколько файлов, только один аргумент может быть `-`; иначе возвращаются JSON `code: stdin_reused` и exit code 2. Бюджеты остаются прежними: рецепт 256 KiB, каждый сохранённый план/receipt 512 KiB. Открываемые пути в ошибках не раскрываются.
+
+## MCP для ChatGPT: без отдельного UI
+
+Штатный `cli_tools` содержит **локальный stdio MCP-адаптер** для составления сценариев:
+
+```bash
+cargo build --manifest-path app/rust/Cargo.toml -p cli_tools
+./app/rust/target/debug/cli_tools mcp-site-architect
+```
+
+MCP-клиент должен **запустить этот бинарник как подпроцесс** с аргументом `mcp-site-architect` и общаться по JSON-RPC 2.0 (один JSON на строку). Это не открытый интернет-MCP endpoint и не означает, что удалённый ChatGPT уже подключён: если клиент не умеет локальный stdio, потребуется отдельно разрешённый и аутентифицированный мост. Никаких ключей поставщиков, маршрутов или произвольных файлов этот MCP-адаптер не принимает. `stdout` отведён только под протокол, сообщения ограничены 3 MiB (чтобы вместить два типизированных плана и две квитанции по 512 KiB плюс JSON-оболочку); ошибки не копируют параметры.
+
+**Дополнительные серверные ограничения:** каждый рецепт и пакет редактирования не более 256 KiB, не более 128 изменений за вызов, общий авторский запрос не более 516 KiB; идентификаторы scope не более 128 байт. Лимиты проверяются исполняемым MCP, даже если клиент игнорирует JSON Schema. Черновик, который после редактирования превысил бюджет, не возвращается и не сохраняется. Диагностические поля ошибок сохраняют типизированный `code` и безопасный идентификатор обычного шага, но не копируют произвольные пользовательские ID, URL и строки внутренних валидаторов. **Сам редактируемый рецепт возвращается клиенту целиком**, поэтому пароль, API-ключ или иной секрет никогда нельзя помещать в его `parameters`: полномочия провайдера принадлежат отдельному owner. Более крупный транспортный лимит 3 MiB предназначен только для ограниченных пар сохранённых результатов, а не для произвольных сценариев.
+
+### Штатное расширение каталога владельцами
+
+`cli_tools` и Temporal Orchestrator теперь используют **один загрузчик доверенного каталога** и один `TEMPORAL_OPERATION_DAG_CATALOG_PATH`. Если каталог установлен, `site-architect tools` и MCP `site_architect_tools` показывают его реальные owner-контракты наряду с пятью базовыми semantic-операциями. Ни MCP-запрос, ни рецепт не могут указать путь к каталогу или определить Workflow Type/Task Queue.
+
+Файл устанавливается оператором под `/etc/alegria/`, принадлежит root, не является симлинком и не доступен на запись группе/остальным; все родительские каталоги также проверяются. Вне Unix загрузчик отказывает. Каталог не более 1 MiB, загружается при запуске процесса. Если переменная задана, но доверие/формат нарушены, запуск **останавливается**, а не переключается на произвольный JSON.
+
+Формат v2 добавляет к каждому существующему `{ "contract": ..., "route": ... }` поле `"parameter_schema": { "type": "object", "properties": { ... } }`. Версии операций, порты, owner, fingerprint, допустимая очередь и immutable build ID проверяются общим загрузчиком. Schema привязывается к точному доверенному контракту; MCP показывает её с `requires_owner_validate_only`, пока независимый провайдер не проверит реальные параметры. Каталог v1 продолжает обслуживать маршруты Temporal, но не содержит описания параметров: такие операции видны как `missing_parameter_schema` и не проходят проверку настроек.
+
+**Чтобы добавить нового поставщика, не требуется пересобирать MCP или ядро DAG**: независимо развёрнутый владелец публикует версионированный контракт и схему в защищённом файле, оператор обновляет каталог и перезапускает MCP/Orchestrator. Это не разрешение на эффекты — отдельный owner `ValidateOnly`, аутентификация источников и допуск Temporal по-прежнему обязательны.
+
+MCP предоставляет двенадцать инструментов составления сценария, индивидуальной проверки операций, оценки независимости свидетельств и чтения ограниченного серверного статуса; это **не** двенадцать внешних SEO API:
+
+| MCP-инструмент | Результат |
+| --- | --- |
+| `site_architect_tools` | Действительно установленные операции: владелец, версия, входы, выходы, эффекты, схема продвинутых настроек, readiness |
+| `site_architect_operation` | Одноимённая операция по точной версии: её параметры, порты и локальная типизация либо честное требование владельческого ValidateOnly; эффект не запускается |
+| `site_architect_one_step` | Рецепт из ровно одного шага: проверка типизированных связей и параметров тем же валидатором, без Temporal Start и без выдачи допуска |
+| `site_architect_run_status` | Безопасный статус ровно одного реального одношагового Temporal V2-run по каноническому UUID через доверенного Unix-оператора; без передачи tenant, SQL, пути или права на Start |
+| `site_architect_new` | Пустой рецепт v2 с `tenant_id` и `run_id` |
+| `site_architect_edit` | Новый рецепт после *атомарного пакета* `changes`: `add_step`, `remove_step`, `set_operation`, `set_parameters`, `set_input`, `remove_input`, `set_after`, `upsert_source`, `remove_source` |
+| `site_architect_check` | Проверка существующим V2 DAG-валидатором, точные ошибки, fingerprint и порядок шагов, без запуска |
+| `site_architect_diff` | Сравнение двух сценариев, включая типизированные параметры, без подмены SEO-метрик |
+| `site_architect_connections` | Подсказки подходящих выходов предыдущих шагов и источников для каждого входного порта по совпадению версии и типа; полная проверка остаётся за `site_architect_check` |
+| `site_architect_inspect` | Локальная проверка **полных JSON-объектов** сохранённых sealed V2 плана и receipt на согласованность с установленным каталогом; только диагностические идентификаторы, размеры и хеши, без исходных данных |
+| `site_architect_compare_results` | Сравнение двух полных пар `first:{plan,receipt}` и `second:{plan,receipt}` при совпадении исходных байтов и tenant; только структурные различия результатов, **не** доказательство SEO-эффективности |
+| `site_architect_evidence` | Группировка типизированных наблюдений и гипотез о потребностях; SERP-сниппеты, зеркала и пересказы не считаются независимыми первичными источниками. Только `insufficient_evidence` либо `multi_source_candidate_unattested`, **без аттестации источников** |
+
+Каждый вызов редактирования получает и возвращает весь рецепт: скрытой сессии и отдельной БД нет. После `site_architect_new` можно одним `site_architect_edit` добавить источники и несколько шагов, связать их типизированными портами и изменить параметры. `site_architect_connections` поможет увидеть кандидатов, но ничего не подключает без явного изменения рецепта. Если после правки сценарий ещё невалиден, ответ `draft_needs_changes` **сохраняет новый черновик**, показывает проблему и позволяет следующую правку. При необходимости независимой проверки параметров поставщика статус `draft_pending_owner_parameter_validation`, а не `draft_validated`: локальная структурная проверка не означает допуск владельца. Дублирующиеся ID или ссылка на отсутствующий шаг при редактировании дают `recipe_edit_rejected` — исходный рецепт не меняется. Удаление поставщика результата **не переподключает** зависимые шаги автоматически: ошибку обнаруживает исходный V2 валидатор. JSON Schema команды и owner schema доступны самому ChatGPT через MCP `tools/list` и `site_architect_tools`.
+
+Никаких `site_architect_run` / `temporal_start` в MCP нет: начать эффект без независимого допуска владельцев и проверки реальных источников нельзя. MCP `site_architect_inspect` и `site_architect_compare_results` принимают **сами типизированные JSON-объекты**, не пути к файлам; у CLI остаются команды `inspect` и `compare-results` для локальных файлов. `site_architect_evidence` также принимает типизированный объект `batch` с ревизией, scope, наблюдениями (source ID, original publisher/document, хеши документа и выдержки, тип primary/snippet/mirror/summary) и отдельными гипотезами. Два разных пользовательских origin ID — **не доказательство** двух независимых источников: ответ всегда `structural_only_unattested`; `source_authentication` и `owner_receipt_attestation` равны `not_checked`. Эти проверки **не удостоверяют Temporal History, подпись/подлинность owner receipt, авторизацию источника или реальный эффект провайдера** — это должен сделать отдельный доверенный слой. MCP пока не является завершённым циклом исполнения.
+
+### Внешние источники: контракт, допуск и подтверждённый запуск — разные состояния
+
+Добавлены независимые типизированные операции-предшественники владельцев:
+
+- `dataforseo.google_organic.search@1`: типизированный Google Organic Standard (запрос, регион/язык, глубина, предельный бюджет), источник `serp_discovery_only`, `AtMostOnce`. Отдельный `temporal_dataforseo` реализует native Temporal `ValidateOnly` и owner-child Workflow с ожиданием **независимого PostgreSQL допуска**. Первое исполнение только `StubFixtureOnly`: отдельная tenant/run/History-привязанная таблица, запись попытки до эффекта и неизменяемая квитанция. В исходном коде этого owner **нет платного HTTP POST**; запуск требует явного флага тестового режима и отдельной роли PostgreSQL. Отдельный физический E2E удостоверяет только локальный stub и отказоустойчивость; наличие owner-кода и теста само по себе не выдаёт production-допуск.
+- `web.public_page.fetch@1`: строгая статическая и runtime-политика HTTPS, точных хостов, операторского allowlist, публичных DNS/IP и pinning соединения, per-hop TLS/robots, лимитов ответа, redirect и времени. Проверяемый цикл `drive_owner_web_fetch_v1` работает с предоставленным transport; тесты моделируют двухшаговый redirect и атаки. **Реальных HTTPS/robots-адаптера, долговечного снимка и Temporal web owner пока нет**, поэтому нельзя выставлять операцию как исполняемый crawler.
+
+Ни один из этих контрактов **не установлен автоматически в доверенный каталог как готовый production-инструмент**. Тестовый DataForSEO owner, даже если его самостоятельно развернули, не открывает API списаний. Для настоящего DataForSEO нужен отдельно аттестующий Temporal History оператор, платёжный эффект с точно ограниченным бюджетом и физический тест с настоящими Temporal/PostgreSQL и безопасным HTTP-стендом. Ни один новый DTO не содержит provider API credentials.
+
+### Мост исследования потребностей без подмены доказательств
+
+Типизированная функция `preview_serp_fetch_candidates_v1` превращает обнаруженные в SERP URL в **предложения** на получение страниц: проверяет связность поискового ответа и запроса, точный HTTPS-host, политику запроса и дубликаты. Статус `requires_independent_owner_admission` — это не сетевое разрешение; оператор web owner дополнительно проверяет своё собственное allowlist и фактическую DNS/robots цепочку.
+
+Функция `bind_public_page_findings_v1` связывает модельные наблюдения с конкретными байтами снимка: tenant, исходный/конечный URL, размер, BLAKE3-хеш всего HTML и буквальное наличие цитаты в документе. Затем исходная оценка независимости сравнивает источники по происхождению, а не по количеству страниц, поисковых сниппетов или пересказов. Выход остаётся **`structural_only_unattested`**: совпадение хеша с переданными вызывающим байтами не подтверждает, кто добыл страницу, является ли автор реальным покупателем и справедлива ли гипотеза.
+
+Оба примера используют одни и те же задекларированные источники. Во втором `editorial` ждёт `canonicalize`; можно проверить, как это меняет зависимости. Оба файла сохранили историческое имя `*_v1.json` ради прежних ссылок, но содержат `schema_revision: 2` и поле `parameters: {}` у шагов. Рецепты с ревизией **1** и без параметров остаются совместимыми. Это **не A/B-тест с трафиком**.
+
+## Нативный семантический владелец V2
+
+`temporal_semantic_pure` обслуживает пять существующих операций владельца
+`semantic_extraction` на очереди `alegria-semantic-pure-owner-v1`. Он публикует
+V3-манифест с контрактами, маршрутами и схемами из того же Rust-кода, что
+применяется при локальной проверке рецепта.
+
+```bash
+WORKER_BUILD_ID=<source-sha> temporal_semantic_pure --export-trusted-catalog-v3
+```
+
+Для стенда оператор устанавливает этот манифест в доверенный каталог под
+`/etc/alegria` и передаёт его путь через
+`TEMPORAL_OPERATION_DAG_CATALOG_PATH` родительскому workflow, worker и CLI.
+Worker требует `ALEGRIA_ENABLE_SEMANTIC_PURE_OWNER_V1=true`, явные
+`TEMPORAL_URL`, `TEMPORAL_NAMESPACE` и `WORKER_BUILD_ID`. При подключении
+маршрута к уже известной семантической операции CLI сверяет её ревизию,
+контракт и схемы владельца и сохраняет локальную проверку DTO.
+
+Общий Temporal V2 DAG исполняет и одиночный `semantic.entity_spans@1`, и
+его связку с `semantic.canonicalize_mentions@1`. Перед выполнением
+операции read-only Activity сверяет истории дочернего и родительского
+Workflow и результаты `ValidateOnly`. Для Produced-входа она также сверяет
+его байты с фактическим результатом завершившегося шага-производителя.
+
+### Связка Acquisition и семантики
+
+Оператор добавляет в установленный каталог V3 записи, экспортированные
+обоими воркерами. Acquisition публикует собственные контракты командой
+`temporal_acquisition_pure --export-trusted-catalog-v3` с тем же правилом
+для `WORKER_BUILD_ID`. Его очередь — `alegria-acquisition-pure-owner-v1`,
+запуск требует `ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1=true`.
+
+| Шаг | Операция | Вход |
+| --- | --- | --- |
+| `prepare` | `acquisition.prepare_entity_span_input@1` | Внешний `acquisition.prepare_entity_span_input@1` |
+| `extract` | `semantic.entity_spans@1` | `prepare.output` с общей схемой `semantic.entity_span_input@1` |
+| `canonicalize` | `semantic.canonicalize_mentions@1` | `extract.output` со схемой `semantic.entity_span_output@1` |
+
+Для `prepare` вход содержит `page` с полями `url`, `title`, `raw_text`
+и `block` с полями `dom_block_id`, `block_role`, `text`. Acquisition
+применяет правила допустимости страницы и блока на этапе `ValidateOnly`.
+В выходе он сохраняет идентификатор блока в `section_id` и текст блока в
+`raw_text`. Внешний документ сохраняет статус источника без подтверждённой
+подлинности. В операторском чтении по `run_id` завершённая связка содержит
+три шага, их связи `input_steps` и идентификаторы дочерних запусков Temporal.
+
+## Как типизированно подключать шаги
+
+В `site-architect tools` у операции опубликованы два независимых контракта:
+
+- **Порты** `inputs` / `outputs` — стабильные `ArtifactTypeId` и ревизии DTO. Их проверяет существующий валидатор DAG; несовместимый порт нельзя соединить.
+- **Параметры** `parameters.json_schema` и `parameters.schema_hash` — описание возможностей владельца для ChatGPT или UI, отдельное от входных данных. Версия `operation.revision`, `contract_hash` и `schema_hash` должны фиксироваться в результате авторинга.
+
+В рецепте достаточно указать операцию, связи и параметры:
+
+```json
+{
+  "id": "search",
+  "operation": { "id": "provider.hybrid_search", "revision": 1 },
+  "inputs": { "input": { "source": "external", "artifact": "queries" } },
+  "parameters": { "mode": "hybrid", "top_k": 20 }
+}
+```
+
+Это **иллюстрация синтаксиса**, не доступный сегодня инструмент: `provider.hybrid_search` отсутствует в штатном каталоге. Добавлять операцию или схему из самого recipe JSON запрещено.
+
+Для операции с локально установленным Rust DTO значение `parameters` десериализуется **в конкретный тип владельца** (`typed_local`): неизвестные ключи/неверные типы отклоняются, если DTO их запрещает. JSON Schema показывает редактору допустимые поля, но не подменяет этот DTO и сама по себе не является исполняемым валидатором. Для отдельно развёрнутого владельца каталог может опубликовать `requires_owner_validate_only`: синтаксис фиксируется, однако **до независимого owner ValidateOnly нельзя считать значения проверенными, а эффект — разрешённым**. Проверка этого owner-child пока не реализована в siteArchitect.
+
+Дополнительная защита `typed_local`: введённые поля должны сохраняться при строгом DTO round-trip. Даже если сам владелец забыл `deny_unknown_fields`, **молчаливое отбрасывание** нового, вложенного или продвинутого параметра отклоняется. Значения параметров не выводятся в JSON-диагностику.
+
+При добавлении нового провайдера необходимо зарегистрировать *его* доверенный `OperationContract` и схему параметров, связанную с отпечатком контракта; граф и CLI при этом остаются без provider-specific ветвей. По умолчанию каталог содержит пять pure semantic операций; сторонние операции появляются только после установки доверенного каталога оператором. Наличие кода Qdrant/Neo4j/Voyage/Google **не означает**, что их реальные операции уже установлены или допущены через этот интерфейс.
+
+## Что показывает результат
+
+- `valid_preview_only`: контрактный граф корректен, параметры проверены доступными локальными Rust DTO; показаны `plan_hash` и `ordered_steps`. Это **не допуск к запуску**.
+- `pending_owner_parameter_validation`: граф корректен, но параметры хотя бы одного удалённого владельца ещё должен принять через `ValidateOnly` сам владелец. Схема в каталоге не заменяет этот ответ.
+- `recipe_hash`: идентификатор *графа вместе с параметрами и хешами их схем*; изменение параметров или схемы меняет `recipe_hash`, даже если `plan_hash` прежний. Перестановка независимых шагов не меняет его. Значения параметров в preview не копируются: только `parameter_hashes` по шагам.
+- `same_recipe`: два варианта имеют одинаковый граф и одинаковые типизированные параметры с теми же schema hashes; `same_plan` само по себе не означает `same_recipe`.
+- `steps_requiring_owner_admission`: операции с эффектами; в предварительном просмотре они допустимы **только как схема**, не как право вызвать провайдера.
+- `source_authentication: not_verified`, `execution: not_started`: данные не загружались, Temporal не запускался, внешние эффекты не выполнялись.
+- `invalid`: код проблемы, текст и `next_action`; завершение команды с кодом 2. Размер JSON ограничен 256 KiB; неизвестные поля уровня рецепта запрещены, а поля параметров проверяются только когда доступен локальный DTO.
+- Ошибки параметров дополнительно содержат **`step`** с точным `OperationInstanceId`, а не только общую причину. Для отсутствующей схемы — `operation_parameter_schema_missing`, для несовпадения отпечатка установленного контракта — `operation_parameter_contract_mismatch`. Ни DTO-значения, ни команды владельцев в сообщение не копируются.
+- При `incompatible_ports` поле `incompatible_input` указывает позицию шага в массиве рецепта с нуля, операцию, входной порт и ожидаемую схему. Для связи между шагами также видны позиция производителя, его операция, выходной порт и фактическая схема. Для внешнего входа возвращаются объявленная ревизия и признак совпадения типа.
+- `structural_comparison_only`: проверены две структуры с объявленными источниками; результатов ранжирования, конверсии и поведения пользователей пока нет.
+- `self_consistent_not_attested`: `inspect` проверил исходный **сохранённый** `ExecutionPlan` и конечный `OperationDagReceiptV1` V2 по доверенному каталогу: хеш плана, детерминированный порядок, полный набор external/produced артефактов, схемы, scope, каждый owner result, payload/result/receipt hashes и V2 Child Workflow ID. Это **локальная проверка согласованности**, а не серверное подтверждение Temporal History или долговечной записи owner.
+- В `inspect.steps` входные и выходные порты ссылаются на артефакты из `inspect.artifacts`. От результата можно перейти к шагу-производителю и его входу, сверить хеши и найти Child Workflow по вычисленному `child_workflow_id`.
+- `same_source_bytes_structural_result_comparison`: `compare-results` сравнивает выходные артефакты двух **разных** run_id только при идентичных реальных байтах исходных артефактов, tenant, source schema и provenance. Показывает изменившиеся хеши (`added/removed/modified/schema_changed`) и количество неизменённых выходов, но **не делает** выводов об эффективности SEO/сайта.
+- `different_source_snapshot`: сравнение запрещено, пока фактические исходные байты или происхождение различаются. Два одинаковых текстовых описания источников не считаются доказательством идентичности данных.
+
+Команды `inspect`/`compare-results` работают с типизированными сохранёнными JSON-планами и V2-квитанциями, **не** с пользовательским recipe JSON. Файлы должны поступать из отдельного доверенного экспортёра завершённых Temporal-run; такой экспортёр через MCP пока не готов. Утилиты принимают файлы как *недоверенные* и сверяют операции с установленным `semantic_extraction_registry` (сейчас 5 pure-операций). Квитанции ещё не подключённых PG/Qdrant/Neo4j owner-контрактов честно отклоняются — подгружать контракт из того же файла нельзя. Максимум каждого входа — 512 KiB, данные источников, содержимое страниц, байты owner receipt и credentials в выдачу не копируются.
+
+`inspect` не обращается к Temporal API, PostgreSQL или другим поставщикам. В отчёте явно указаны `temporal_history_attestation: not_checked`, `owner_receipt_attestation: not_checked`, `source_authentication: not_checked`. Самосогласованную подделку файлов он **не может** отличить от настоящего завершённого выполнения: для P0 нужны серверные History и отдельно подтверждённые владельцами записи эффектов.
+
+## Нативная проверка перед операторским Temporal Start
+
+В `operation_protocol` есть **read-only** `preflight_unadmitted_site_architect_v2_start`. Она принимает уже построенный `OperationDagRunV6`, тот же доверенный `TrustedRouteCatalog` и заранее записанные ожидаемые `plan_hash`, хеши точных owner-command bytes и исходных payload bytes. Сначала выполняется **существующая** проверка V2 DAG/маршрутов/контрактов/источников, затем сверяются все ожидаемые BLAKE3-хеши. Подмена команды, отдельного источника, плана или маршрута завершится отказом. Результат имеет статус `preflight_only_not_admitted` и не содержит raw payloads.
+
+Сама `preflight_unadmitted_site_architect_v2_start` **не запускает CLI/Temporal** и не подтверждает подлинность данных. Ожидаемые хеши должен независимо закрепить доверенный типизированный owner codec/issuer: присланные пользователем хеши не создают полномочий. В этой функции **нет** Temporal Start, выполнения owner-child `ValidateOnly`, допуска эффектов или аттестации History. Отдельный операторский Start ниже сохраняет эти границы.
+
+### Отдельный операторский Start одной операции — локальный pilot
+
+Для физической проверки существует отдельная **явно включаемая оператором** команда, не входящая в ChatGPT/MCP:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
+  --operator-start-single-v2 /absolute/private/single-step-intent.json
+```
+
+Команда размещается в уже существующем операторе PostgreSQL/Temporal; общий `temporal_orchestrator` остаётся без PostgreSQL-зависимости и без полномочий поставщиков. Требуются `ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START=true`, независимо заданные `SITE_ARCHITECT_SINGLE_V2_TENANT_ID`, `SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE`, `SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL`, `SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE` и `SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE`. SQL DSN читается из отдельного приватного файла для ограниченной **tenant-bound SELECT-only** роли, а доверенный каталог контрактов/маршрутов — из отдельно установленного приватного операторского файла. Temporal допускается **только на точном loopback HTTP URL с портом** (`http://127.0.0.1:7233/` или `http://localhost:7233/`), не через произвольный публичный endpoint. Ни PostgreSQL-роль, ни каталог не выбираются из рецепта.
+
+Приватный файл — канонический JSON ровно со схемой `{schema_revision:1,run:OperationDagRunV6,context_key:<canonical_context>,expected:SiteArchitectExpectedStartV1,expires_at_unix_seconds:<unix_seconds>}`. Он должен иметь абсолютный путь, быть обычным файлом без симлинков, не более 2 MiB, с разрешением `0600/0400` и защищёнными каталогами-предками. Срок действия — максимум 10 минут в будущем. **До Start** отдельный бизнес-оператор должен выдать tenant business root командой `temporal_pg_effects --operator-issue-business-run-v1`, закрепив tenant, context, plan hash и parent Workflow ID. Оператор Start читает эту уже существующую **действующую**, неотозванную запись через независимую SQL-роль, сверяет её с запросом, проверяет канонический UUID и неизменяемые байты команд/источников/маршрутов тем же одношаговым V2 preflight. Отсутствующий или чужой business root, другой контекст, подмена источника и повторный Start с тем же Workflow ID приводят к отказу. Самосогласованные пользовательские хеши **не** подтверждают provenance.
+
+Только после этих проверок оператор обращается к нативному Temporal `AlegriaOperationDagV2Workflow`, возвращая `status: started_business_root_verified_owner_unadmitted`, серверный `parent_workflow_run_id`, business `run_id` и `plan_hash` **без payload/секретов**. Это факт разрешённого бизнесом и принятого сервером **Start**, а не успешный запуск поставщика. Отказ **до** Temporal RPC теперь отличается от `start_outcome_unknown`: если запрос мог быть отправлен, повторный Start запрещён до независимой проверки серверного Workflow ID. SQL-проверки ограничены таймаутом, а TTL перепроверяется после последнего асинхронного чтения. Процесс **не выдаёт** новую business root, governance или owner admission, не выполняет сам ValidateOnly и не выдаёт SEO-доказательства. Для эффекта после Start всё ещё нужны независимые `--operator-admit-dag-run-v2` и допуск конкретного владельца с настоящими server Histories.
+
+### Отдельное чтение `run_id` с серверной History — без провайдерских утверждений
+
+Отдельная **локальная операторская** команда читает состояние существующего V2-запуска по его бизнес-UUID.
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
+  --operator-read-dag-run-v2 /absolute/private/run-locator.json
+```
+
+Локатор строго ограничен приватным JSON `{ "canonical_run_id": "<UUID>" }`: **никакой переданный `tenant_id`, путь к receipt, Workflow Run ID или провайдерский токен не принимаются**. Требуются `ALEGRIA_ENABLE_OPERATION_DAG_READ_V2=true`, `OPERATION_DAG_READ_V2_TENANT_ID`, `OPERATION_DAG_READ_V2_DATABASE_URL_FILE`, `OPERATION_DAG_READ_V2_TEMPORAL_URL`, `OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE` и `OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE`. SQL DSN читается из отдельного приватного файла; сессия обязана быть самостоятельным **tenant-bound SELECT-only LOGIN** без побочных прав на таблицы. Temporal URL также обязан быть локальным loopback.
+
+Читатель сопоставляет tenant business root с отдельной SQL-governance V2,
+находит точную серверную Temporal History и сверяет байты Start с SQL SHA-256
+и доверенным каталогом. Для завершённого запуска он проверяет две Child
+Histories на каждый узел, `ValidateOnly` и исполнение владельца. Проверяются
+принадлежность родителю, порядок волн, точные входы и результаты. Итоговая
+квитанция, заново собранная через `OperationDagMachine`, должна побайтово
+совпасть с завершением родителя.
+
+Для завершённых многошаговых запусков ответ содержит `trace.schema_revision = 1`.
+Массив `trace.steps` следует каноническому порядку. В записи есть точная
+операция, `input_steps` с индексами производителей входов, Child Workflow ID,
+серверный Child Run ID и `receipt_blake3`. Индексы начинаются с нуля и
+соответствуют этому массиву. Сводка одношагового запуска содержит
+идентификаторы родителя, хеши, число шагов и статус. При отсутствии
+полномочий, несоответствии или другом tenant возвращается общий отказ
+`run_unavailable_or_untrusted`.
+
+Статус **`temporal_completed_owner_unverified` подтверждает серверное завершение V2 parent, подлинность отдельных `ValidateOnly`/owner Child Histories и согласованность их типизированных результатов**. Он *не* означает независимо подтверждённый durable provider receipt, реальный эффект Neo4j/Qdrant/DataForSEO, пригодное SEO-доказательство, завершённое исследование потребностей или проверенную provenance. До такого утверждения нужен отдельный независимый durable owner receipt и проверка первоисточника. Читатель не возвращает сохранённые plan/receipt для `site-architect inspect` или MCP: подтверждённый серверный экспорт содержимого пока отдельное P0. Сам Start не опубликован в MCP.
+
+### Локальный канал `site_architect_run_status`: отдельные полномочия
+
+Для текущего read-only пилота один и тот же native Temporal/SQL-reader можно
+запустить как **отдельную локальную службу** (Unix only), без второго
+исполнителя DAG и без сетевого HTTP endpoint:
+
+```bash
+cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
+  --operator-serve-dag-read-v2
+```
+
+Все настройки чтения остаются операторскими: `ALEGRIA_ENABLE_OPERATION_DAG_READ_V2=true`,
+`OPERATION_DAG_READ_V2_TENANT_ID`, `OPERATION_DAG_READ_V2_DATABASE_URL_FILE`,
+`OPERATION_DAG_READ_V2_TEMPORAL_URL`, `OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE`
+и `OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE`. Дополнительно нужен
+`OPERATION_DAG_READ_V2_SOCKET_PATH` — **не** поле MCP-вызова, а абсолютный
+администраторский Unix-путь — и
+`OPERATION_DAG_READ_V2_ALLOWED_CLIENT_UID`: точный отдельный UID
+локального MCP-клиента, отличный от UID SQL/Temporal-reader.
+
+Операторский каталог сокета заранее создаётся администратором с режимом
+`02710`, отдельной группой и проверяемыми владельцем и `setgid`;
+сам Unix socket получает `0660` и наследует эту группу. Клиентский
+процесс должен входить в выделенную группу. Оператор сверяет
+`SO_PEERCRED` каждого соединения с **точным** разрешённым UID, не принимает
+от клиента tenant, SQL DSN, provider endpoint, секреты, произвольный путь
+или Workflow Run ID; сообщение — только канонический UUID бизнес-запуска
+в ограниченном JSON. Сам MCP-клиент проверяет родительский каталог,
+сокет и отдельно настроенный `OPERATION_DAG_READ_V2_OPERATOR_UID`.
+Обмен ограничен по времени, размерам и параллелизму. При сбое соединения,
+несоответствии Histories, неизвестном или чужом run возвращается
+безопасный отказ без уточнения о существовании чужих данных.
+Чтобы показать многошаговый `trace`, MCP сверяет каждую ревизию операции
+со своим установленным доверенным каталогом. Отдельного доступа к SQL или
+Temporal для этого у него нет.
+
+Это **локальная аутентификация процесса через Unix**, а не аутентификация
+облачного пользователя ChatGPT; удалённый MCP transport с сопоставлением
+идентичности tenant пока не реализован. До независимой выдачи SQL-governance
+статус может оставаться `run_unavailable_or_untrusted` даже после
+подтверждённого Start. Reader по-прежнему не выдаёт owner admission и не
+заверяет внешние доказательства; `ENABLE RLS` сам по себе не заменяет
+production-переход на `FORCE RLS`. Если процесс упал и оставил Unix socket,
+повторный запуск **отказывает**, не удаляя чужой/живой сокет вслепую;
+администратор проверяет состояние и адресно очищает только заведомо
+устаревший pathname.
+
+### Отдельный источник Acquisition V1 — сохранённая HTML-страница → ACQ-01
+
+`acquisition_source_issuer` — отдельный **операторский** исполняемый файл.
+Он не является новым Temporal-исполнителем или пользовательским MCP. Команда:
+
+```text
+acquisition_source_issuer --issue-source-v1 /absolute/private/issue.json
+```
+
+Только при `ALEGRIA_ENABLE_ACQUISITION_SOURCE_ISSUER_V1=true` и отдельно
+установленном приватном файле DSN по
+`ACQUISITION_SOURCE_ISSUER_DATABASE_URL_FILE` issuer читает сохранённую
+`raw.pages` по tenant-bound SQL LOGIN. Оба файла должны быть 0600/0400,
+каждый компонент пути открывается без следования символическим ссылкам.
+Нельзя выдавать этому LOGIN право записи `raw.pages`, право выпуска business
+root, членство в других PostgreSQL-ролях, superuser или bypass RLS.
+Аттестационная таблица требует независимого SQL INSERT и проверяет права.
+
+Приватная заявка содержит только типизированный V6 `run`, `context_key`,
+положительный `source_page_id`, конечный `expires_at_unix_seconds` и ревизию
+схемы. Издатель самостоятельно читает фактический `raw_html`, проверяет
+первоначальный BLAKE3/размер/status/content type/URL, детерминированно
+формирует `ClassifySourcePageInput` и сравнивает **точные байты** с
+`run.admitted`. SQL отдельно вычисляет SHA-256 того же HTML и фиксирует
+его вместе с хешем типизированного payload; после INSERT исходный снимок
+неизменяем. Фальшивый `raw_text`, иной title, чужой tenant, чужая роль или
+другой payload не могут создать доказательство. Допуск применим только к
+одному ACQ-01, не ко всем операциям Acquisition и не к PDF.
+
+Это **доказательство верности извлечения из захваченного SQL-снимка**, а
+не независимое доказательство веб-происхождения HTML, HTTPS/TLS и личности
+автора страницы. Общий `temporal_pg_effects` проверяет независимую SQL-запись
+и точный payload hash перед Temporal Start, не линкуя парсер Acquisition.
+Неизвестный исход SQL commit требует проверки `record_id`, не слепого повтора.
+Только после реальных PostgreSQL/Temporal E2E можно считать этот *внутренний*
+операторский путь физически доказанным; он всё ещё не является завершённым
+пользовательским шагом.
+
+Отдельный чистый протокол `one_step_request_grant_v1` пока обеспечивает
+проверку будущего одноразового разрешения, **но не выдаёт разрешение**.
+Нет SQL issuance+CAS/consume по действующей пользовательской сессии,
+сквозных ACL/бюджета, метеринга и безопасного разрешения потерянного ACK:
+публиковать `site_architect_run` до этого нельзя.
+
+### Условие для пользовательского `Запустить` — отдельный доверенный посредник
+
+Пока **не публиковать** мутирующий MCP `site_architect_run`: ни UUID из
+`site_architect_run_status`, ни локальный Unix UID, ни редактируемый рецепт
+не являются разрешением удалённого пользователя на исполнение. Существующий
+`--operator-start-single-v2` принимает только операторский приватный
+канонический intent; нельзя превращать его путь или содержимое в аргумент MCP
+и нельзя добавлять Start в read-only сокет.
+
+Будущий посредник должен принимать от MCP **только непрозрачный идентификатор
+заранее авторизованной одноразовой заявки**. Независимый issuer до этого
+проверяет аутентифицированного пользователя, tenant, ACL, контекст, лимиты и
+бюджет, закрепляет одну версию операции и точные хеши sealed plan,
+owner-command и исходных байтов в неизменяемой записи с конечным TTL,
+отзывом и защитой от повторной выдачи. Отдельная аттестация источника
+должна совпадать с tenant, контекстом и payload hash; текст `provenance`
+из рецепта не считается доказательством. Подписи/хеши, вычисленные самим
+MCP-запросом, не создают полномочий.
+
+Привилегированный посредник заново сверяет всё по своей ограниченной
+read-only роли и только затем использует **существующий**
+`operator_single_step_start_v2`, без второго DAG-движка и без принятия от
+клиента пути, DSN, Temporal URL, Task Queue, owner-route или сырого payload.
+Неизвестная, просроченная, отозванная, уже использованная или межтенантная
+заявка отвергается без раскрытия чужого run. При неопределённом результате
+Temporal Start нельзя повторять запрос: нужно сверить точный Workflow ID с
+серверной History. Нужны отрицательные физические тесты подмены байтов,
+чужого tenant, истечения/отзыва, повторного Start и потери ACK. До такой
+проверки пользовательский Start остаётся **fail-closed и отсутствует в MCP**.
+
+## Расширение возможностей
+
+Чтобы подключить Voyage AI, Qdrant, Neo4j, Google Search Console, Google API, DataForSEO, аналитические источники спроса или любого нового поставщика:
+
+1. Владелец провайдера оформляет типизированные операции, версии входных/выходных артефактов (`OperationContract`), собственные параметры (Rust DTO либо удалённый `ValidateOnly`) и проверяемое описание JSON Schema; маркирует побочные эффекты, инвалидации и правила идемпотентности. Контракты поступают **в доверенный каталог** через адаптер владельца, не из пользовательского JSON.
+2. siteArchitect автоматически отображает новые операции. Существующие рецепты продолжают привязываться к своим версиям; пользователь может редактировать связи и проверять гипотезы.
+3. Для *реального* запуска требуется независимый operator admission, проверенная provenance, зафиксированные schema/parameter hashes и эффект-владелец со своим маршрутом/секретами, idempotency/receipt fence. Отдельно развёрнутый владелец сначала отвечает на typed `ValidateOnly`. Нынешний `recipe_hash` — только authoring identity: пока он **не привязан к Temporal owner commands или History**. Единственный исполнитель production-графов остаётся за Temporal, без второй очереди или нового самодельного DAG-движка.
+4. Локальная диагностика уже умеет проверять сохранённые typed receipts и сравнивать два snapshot-compatible результата. Реальное подключение run_id → Temporal History → provider receipts, содержательное сравнение SEO-метрик и превью ещё не реализованы.
+
+Нельзя создавать «готовые» операции в интерфейсе только потому, что библиотека провайдера существует в репозитории: прежде нужен честный контракт владельца и его допуск. Не нужно создавать ещё один Temporal DAG, служебный процесс или дублирующую базу сценариев ради siteArchitect.
+
+## Следующий полноценный продуктовый срез
+
+- Унифицированная выдача каталога/preview/check через уже штатный native API/MCP поверх **того же** `site_architect` без нового валидатора; понятная диагностика и схемы для ChatGPT.
+- Доверенная регистрация доступных provider operations у их реальных владельцев. Отдельно `available to compose` и `ready to execute`.
+- Старт **прошедшего admission** рецепта через существующий Temporal путь, сравнение реальных run_id и метрик качества/спроса, инструментальные evidence/trace.
+- Простое представление: «Инструменты → Рецепт → Проверить → Запустить → Сравнить»; скрыть технические хеши до раскрытия диагностики.
