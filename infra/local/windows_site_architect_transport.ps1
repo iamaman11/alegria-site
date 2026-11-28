@@ -39,7 +39,9 @@ function Assert-Exit([string]$Stage) {
     if ($LASTEXITCODE -ne 0) { throw "$Stage failed (exit $LASTEXITCODE)" }
 }
 function Invoke-Compose([string[]]$Arguments) {
-    & $docker @script:composeArgs @Arguments
+    # Compose writes successful lifecycle progress to stderr. Preserve its
+    # exit-code check while avoiding a false COMMAND_ERROR in remote PowerShell.
+    & $docker @script:composeArgs @Arguments 2>$null
     Assert-Exit "compose $($Arguments[0])"
 }
 function Volumes {
