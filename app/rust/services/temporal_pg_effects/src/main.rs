@@ -67,6 +67,17 @@ async fn connect_client(temporal_url: &str, identity: String, namespace: &str) -
         .map_err(|error| anyhow::anyhow!("{error}"))
 }
 
+fn worker_namespace(read: impl Fn(&str) -> Option<String>) -> Result<String> {
+    let namespace = read("TEMPORAL_NAMESPACE").unwrap_or_else(|| "default".to_owned());
+    anyhow::ensure!(
+        !namespace.is_empty()
+            && namespace.trim() == namespace
+            && !namespace.chars().any(char::is_control),
+        "TEMPORAL_NAMESPACE must be an exact nonempty name"
+    );
+    Ok(namespace)
+}
+
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
 /// distinct V3/V4 Worker DSN source is permitted; there is no DATABASE_URL
@@ -878,7 +889,8 @@ async fn main() -> Result<()> {
     let temporal_url =
         std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string());
     let identity = format!("alegria-pg-effect-v3:{}", std::process::id());
-    let client = connect_client(&temporal_url, identity, "default").await?;
+    let namespace = worker_namespace(|name| std::env::var(name).ok())?;
+    let client = connect_client(&temporal_url, identity, &namespace).await?;
 
     // Command and effect queues intentionally have disjoint registrations.
     // Every poller on one queue sees the same registered Types; this does
@@ -940,6 +952,18 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owner_worker_namespace_is_explicit_or_defaults_to_legacy() {
+        assert_eq!(worker_namespace(|_| None).unwrap(), "default");
+        assert_eq!(
+            worker_namespace(|_| Some("site-architect-pilot".to_owned())).unwrap(),
+            "site-architect-pilot"
+        );
+        for invalid in ["", " ", "site-architect-pilot ", "\nprivate", "pilot\nwrong"] {
+            assert!(worker_namespace(|_| Some(invalid.to_owned())).is_err());
+        }
+    }
 
     #[test]
     fn effect_worker_has_distinct_temporal_queues() {

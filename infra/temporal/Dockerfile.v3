@@ -1,5 +1,5 @@
-# Two existing native Rust binaries, two independent final images. Neither
-# image contains the legacy provider-linked temporal_worker executable.
+# Four existing native Rust binaries, four independent final images. None
+# contains the legacy provider-linked temporal_worker executable.
 # This is an opt-in runtime topology experiment, not a production cutover.
 FROM rust:1.100.0-slim-bookworm AS build-base
 
@@ -22,6 +22,8 @@ COPY dependency-skeleton/app ./app
 RUN case "$OWNER_PACKAGE" in \
       temporal_orchestrator) set -- --features legacy-workflows ;; \
       temporal_pg_effects) set -- ;; \
+      temporal_acquisition_pure) set -- ;; \
+      acquisition_source_issuer) set -- ;; \
       *) echo "invalid owner package" >&2; exit 1 ;; \
     esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
@@ -35,6 +37,8 @@ RUN find /app/app/rust -type f -name '*.rs' \
     && case "$OWNER_PACKAGE" in \
       temporal_orchestrator) set -- --features legacy-workflows ;; \
       temporal_pg_effects) set -- ;; \
+      temporal_acquisition_pure) set -- ;; \
+      acquisition_source_issuer) set -- ;; \
       *) echo "invalid owner package" >&2; exit 1 ;; \
     esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
@@ -43,6 +47,10 @@ RUN find /app/app/rust -type f -name '*.rs' \
 FROM build-base AS pure-builder
 
 FROM build-base AS pg-builder
+
+FROM build-base AS acquisition-builder
+
+FROM build-base AS source-issuer-builder
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
@@ -56,3 +64,11 @@ ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]
 FROM runtime AS pg
 COPY --from=pg-builder /app/app/rust/target/release/temporal_pg_effects /usr/local/bin/temporal_pg_effects
 ENTRYPOINT ["/usr/local/bin/temporal_pg_effects"]
+
+FROM runtime AS acquisition
+COPY --from=acquisition-builder /app/app/rust/target/release/temporal_acquisition_pure /usr/local/bin/temporal_acquisition_pure
+ENTRYPOINT ["/usr/local/bin/temporal_acquisition_pure"]
+
+FROM runtime AS source-issuer
+COPY --from=source-issuer-builder /app/app/rust/target/release/acquisition_source_issuer /usr/local/bin/acquisition_source_issuer
+ENTRYPOINT ["/usr/local/bin/acquisition_source_issuer"]

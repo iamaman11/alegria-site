@@ -5,8 +5,8 @@ Cargo still resolves the original workspace manifests and Cargo.lock. A crate
 outside the actual Worker/CLI dependency closure gets a metadata-only inert
 target, so editing that crate's Rust source cannot invalidate the release
 compilation layer. The accepted legacy image owner comes from ci_impact.py;
-two additional package names are explicitly allowed only for opt-in V3 image
-evaluation and never become accepted Worker release selectors.
+Additional owner package names are explicitly allowed only for opt-in isolated
+image evaluation and never become accepted Worker release selectors.
 """
 
 from __future__ import annotations
@@ -32,6 +32,8 @@ IMAGE_CONTEXT_ROOTS = {
     "temporal-worker": frozenset(IMAGE_OWNERS["temporal-worker"]["crates"]),
     "temporal-orchestrator-v3": frozenset({"temporal_orchestrator"}),
     "temporal-pg-effects-v3": frozenset({"temporal_pg_effects"}),
+    "temporal-acquisition-pure-v1": frozenset({"temporal_acquisition_pure"}),
+    "acquisition-source-issuer-v1": frozenset({"acquisition_source_issuer"}),
 }
 
 

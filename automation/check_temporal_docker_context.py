@@ -349,7 +349,11 @@ class TemporalDockerContextTests(unittest.TestCase):
         owners = {
             "app/rust/services/temporal_orchestrator": "temporal_orchestrator",
             "app/rust/services/temporal_pg_effects": "temporal_pg_effects",
+            "app/rust/services/temporal_acquisition_pure": "temporal_acquisition_pure",
+            "app/rust/services/acquisition_source_issuer": "acquisition_source_issuer",
             "app/rust/services/temporal": "temporal_worker",
+            "app/rust/crates/acquisition": "acquisition",
+            "app/rust/crates/operation_protocol": "operation_protocol",
             "app/rust/crates/truth_domain": "truth_domain",
             "app/rust/crates/postgres_store": "postgres_store",
             "app/rust/crates/graph_neo4j": "graph_neo4j",
@@ -357,8 +361,12 @@ class TemporalDockerContextTests(unittest.TestCase):
         }
         reverse = {
             "temporal_orchestrator": set(), "temporal_pg_effects": set(),
+            "temporal_acquisition_pure": set(),
+            "acquisition_source_issuer": set(),
             "temporal_worker": set(), "truth_domain": {"temporal_orchestrator", "temporal_pg_effects"},
             "postgres_store": {"temporal_pg_effects"},
+            "acquisition": {"temporal_acquisition_pure", "acquisition_source_issuer"},
+            "operation_protocol": {"temporal_acquisition_pure", "acquisition_source_issuer", "acquisition"},
             "graph_neo4j": {"temporal_worker"},
             "vector_qdrant": {"temporal_worker"},
         }
@@ -376,6 +384,12 @@ class TemporalDockerContextTests(unittest.TestCase):
         expected = {
             "temporal-orchestrator-v3": {"temporal_orchestrator", "truth_domain"},
             "temporal-pg-effects-v3": {"temporal_pg_effects", "truth_domain", "postgres_store"},
+            "temporal-acquisition-pure-v1": {
+                "temporal_acquisition_pure", "acquisition", "operation_protocol",
+            },
+            "acquisition-source-issuer-v1": {
+                "acquisition_source_issuer", "acquisition", "operation_protocol",
+            },
         }
         for image_owner, allowed in expected.items():
             with self.subTest(image_owner=image_owner):
@@ -396,6 +410,8 @@ class TemporalDockerContextTests(unittest.TestCase):
 
         self.assertEqual(set(IMAGE_CONTEXT_ROOTS), {
             "temporal-worker", "temporal-orchestrator-v3", "temporal-pg-effects-v3",
+            "temporal-acquisition-pure-v1",
+            "acquisition-source-issuer-v1",
         })
         with self.assertRaisesRegex(ValueError, "unknown Cargo image context owner"):
             release_closure(owners, reverse, image_owner="temporal-worker-v4")
@@ -423,7 +439,10 @@ class TemporalDockerContextTests(unittest.TestCase):
                 reverse[dependency].add(consumer)
         closures = {
             image_owner: release_closure(owners, reverse, image_owner=image_owner)
-            for image_owner in ("temporal-orchestrator-v3", "temporal-pg-effects-v3")
+            for image_owner in (
+                "temporal-orchestrator-v3", "temporal-pg-effects-v3",
+                "temporal-acquisition-pure-v1", "acquisition-source-issuer-v1",
+            )
         }
         for image_owner, packages in closures.items():
             with self.subTest(image_owner=image_owner):
@@ -432,9 +451,32 @@ class TemporalDockerContextTests(unittest.TestCase):
                     "graph_neo4j", "vector_qdrant", "runtime_composition",
                     "infrastructure", "projection_delivery", "outbox_worker",
                 }))
-                self.assertIn("truth_domain", packages)
+                if image_owner in ("temporal-acquisition-pure-v1", "acquisition-source-issuer-v1"):
+                    self.assertIn("acquisition", packages)
+                    self.assertIn("operation_protocol", packages)
+                    self.assertNotIn("postgres_store", packages)
+                    self.assertNotIn("temporal_orchestrator", packages)
+                    self.assertNotIn("temporal_pg_effects", packages)
+                else:
+                    self.assertIn("truth_domain", packages)
         self.assertNotIn("postgres_store", closures["temporal-orchestrator-v3"])
         self.assertIn("postgres_store", closures["temporal-pg-effects-v3"])
+
+    def test_opt_in_acquisition_images_have_separate_native_runtime_targets(self) -> None:
+        dockerfile = (ROOT / V3_DOCKERFILE).read_text(encoding="utf-8")
+        for owner, stage, image_stage in (
+            ("temporal_acquisition_pure", "acquisition-builder", "acquisition"),
+            ("acquisition_source_issuer", "source-issuer-builder", "source-issuer"),
+        ):
+            with self.subTest(owner=owner):
+                self.assertEqual(dockerfile.count(f"{owner}) set -- ;;"), 2)
+                self.assertIn(f"FROM build-base AS {stage}", dockerfile)
+                self.assertIn(f"FROM runtime AS {image_stage}\n", dockerfile)
+                self.assertIn(
+                    f"COPY --from={stage} /app/app/rust/target/release/{owner} "
+                    f"/usr/local/bin/{owner}", dockerfile,
+                )
+                self.assertIn(f'ENTRYPOINT ["/usr/local/bin/{owner}"]', dockerfile)
 
     def test_missing_manifest_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "workspace manifest"):
