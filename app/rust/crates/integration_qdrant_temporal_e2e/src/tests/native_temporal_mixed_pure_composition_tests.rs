@@ -72,12 +72,12 @@ fn mixed_pure_native_v2_case(
         let result_id = format!("{instance}_result");
         let input_schema = contract.inputs[&"input".into()].clone();
         let provenance = "ci-user-supplied-unverified-dto".to_owned();
-        external_artifacts.insert(source_id.clone().into(), ExternalArtifact {
+        external_artifacts.insert(source_id.as_str().into(), ExternalArtifact {
             schema: input_schema.clone(),
             scope: scope.clone(),
             provenance: provenance.clone(),
         });
-        admitted.insert(source_id.clone().into(), AdmittedArtifactV1 {
+        admitted.insert(source_id.as_str().into(), AdmittedArtifactV1 {
             schema: input_schema,
             scope: scope.clone(),
             provenance,
@@ -88,9 +88,9 @@ fn mixed_pure_native_v2_case(
             operation: contract.reference.clone(),
             inputs: BTreeMap::from([(
                 "input".into(),
-                ArtifactBinding::External { artifact: source_id.into() },
+                ArtifactBinding::External { artifact: source_id.as_str().into() },
             )]),
-            outputs: BTreeMap::from([("output".into(), result_id.into())]),
+            outputs: BTreeMap::from([("output".into(), result_id.as_str().into())]),
             after: BTreeSet::new(),
             permitted_effects: BTreeSet::new(),
         });
