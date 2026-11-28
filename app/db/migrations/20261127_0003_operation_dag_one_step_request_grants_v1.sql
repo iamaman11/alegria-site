@@ -610,9 +610,29 @@ BEGIN
          AND sp.policy_id=p_policy_id
          AND pipeline.one_step_limits_within_v1(g.limits,sp.max_limits)
   ) THEN RETURN FALSE; END IF;
-  -- Only authenticated raw payloads qualify for externally supplied inputs.
-  -- Check the EXACT expected hash set, not an invented client URL or DTO.
-  IF EXISTS (SELECT 1 FROM jsonb_each_text(g.expected_start->'source_payload_hashes') src
+  -- An approved zero-effect *pure calculation* may consume one exact-hash
+  -- user-supplied DTO without claiming authenticated source provenance. Both
+  -- independent SQL roles already bound the exact command, payload hash,
+  -- operation, tenant, user and one-use budget. This exception is strictly
+  -- enumerated: never admit a provider/effect, a future revision, a multi-
+  -- source request or a nonzero budget through the pure-input path.
+  -- All other externally supplied inputs still REQUIRE a separately issued,
+  -- immutable raw-snapshot attestation (a URL or provenance label is not one).
+  IF NOT (
+      g.operation_revision=1
+      AND g.operation_id IN (
+          'seo_steps.extract_procedural_rules',
+          'seo_steps.normalize_serp_queries',
+          'seo_steps.build_seo_opportunities',
+          'truth.judge_completeness',
+          'truth.detect_contradictions'
+      )
+      AND (g.limits->>'max_effect_dispatches')::numeric=0
+      AND (g.limits->>'max_provider_requests')::numeric=0
+      AND (g.limits->>'max_charge_minor_units')::numeric=0
+      AND (SELECT count(*) FROM jsonb_object_keys(
+          g.expected_start->'source_payload_hashes'))=1
+  ) AND EXISTS (SELECT 1 FROM jsonb_each_text(g.expected_start->'source_payload_hashes') src
        WHERE NOT EXISTS (
          SELECT 1 FROM pipeline.operation_dag_external_source_attestations_v1 att
           WHERE att.run_id=p_run_id AND att.tenant_id=p_tenant_id

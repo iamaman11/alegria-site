@@ -414,6 +414,67 @@ async fn one_step_grant_pg_roles_and_atomic_one_use_lifecycle() {
     .await
     .is_err(), "issuer cannot rewrite an unknown outcome into a new chance");
 
+    // User-approved pure DTO input is not authenticated crawler evidence.
+    // The SQL exception requires an exact-hash single source, a recognized
+    // revision-1 pure owner, and a zero-effect/provider/charge budget. Neither
+    // a source-requiring Acquisition owner nor a paid-budget pure impersonator
+    // may bypass the independent raw-snapshot attestation boundary.
+    let source_expected = serde_json::json!({
+        "schema_revision": 1,
+        "plan_hash": "e".repeat(64),
+        "command_hashes": {"one_step": "b".repeat(64)},
+        "source_payload_hashes": {"source": "f".repeat(64)},
+    });
+    let nonzero_provider_limits = serde_json::json!({
+        "max_admitted_source_bytes": 65536,
+        "max_effect_dispatches": 0,
+        "max_provider_requests": 1,
+        "currency_code": "USD",
+        "max_charge_minor_units": 0,
+    });
+    for (operation, input_limits, permitted) in [
+        ("acquisition.classify_source_page", limits.clone(), false),
+        ("seo_steps.extract_procedural_rules", limits.clone(), true),
+        ("seo_steps.normalize_serp_queries", nonzero_provider_limits, false),
+    ] {
+        let next_run_id = Uuid::new_v4();
+        let next_request_id = Uuid::new_v4();
+        let next_approval_id = Uuid::new_v4();
+        let next_parent_id = format!("alegria-operation-dag-v2-{next_run_id}");
+        let next_plan_hash = "e".repeat(64);
+        sqlx::query(
+            "INSERT INTO pipeline.operation_dag_business_runs_v1
+               (run_id,tenant_id,context_key,plan_hash,parent_workflow_id,expires_at)
+             VALUES ($1,$2,$3,$4,$5,clock_timestamp()+interval '15 minutes')",
+        )
+        .bind(next_run_id).bind(&tenant).bind(&context)
+        .bind(&next_plan_hash).bind(&next_parent_id)
+        .execute(&business_pool).await.unwrap();
+        sqlx::query(grant_fields)
+            .bind(next_approval_id).bind(next_request_id).bind(next_run_id)
+            .bind(&tenant).bind("authenticated-ci-principal")
+            .bind("ci-bounded-approval-v1").bind(&context)
+            .bind(operation).bind(1_i32)
+            .bind(&next_parent_id).bind(&next_plan_hash)
+            .bind(source_expected.to_string()).bind(input_limits.to_string())
+            .execute(&approver_pool).await.unwrap();
+        sqlx::query(grant_insert)
+            .bind(next_approval_id).bind(next_request_id).bind(next_run_id)
+            .bind(&tenant).bind("authenticated-ci-principal")
+            .bind("ci-bounded-approval-v1").bind(&context)
+            .bind(operation).bind(1_i32)
+            .bind(&next_parent_id).bind(&next_plan_hash)
+            .bind(source_expected.to_string()).bind(input_limits.to_string())
+            .execute(&issuer_pool).await.unwrap();
+        let reserved: bool = sqlx::query_scalar(reserve)
+            .bind(next_request_id).bind(next_run_id).bind(&tenant)
+            .bind("authenticated-ci-principal").bind("ci-bounded-approval-v1")
+            .bind(&context).bind(&next_plan_hash).bind(Uuid::new_v4())
+            .fetch_one(&operator_pool).await.unwrap();
+        assert_eq!(reserved, permitted,
+            "{operation}: raw attestation may be absent ONLY for zero-budget, approved pure inputs");
+    }
+
     issuer_pool.close().await;
     approver_pool.close().await;
     operator_pool.close().await;
