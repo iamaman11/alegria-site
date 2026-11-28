@@ -78,7 +78,8 @@ def check() -> None:
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
     assert "  workflow_dispatch:\n" in workflow
-    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))\n" in workflow
+    # Only accepted-main manual releases may join the standard CI gate.
+    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('[\"worker-image\",\"site-architect-images\"]'), inputs.operation) && github.ref == 'refs/heads/main'))\n" in workflow
     assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
     assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
@@ -180,6 +181,23 @@ def check() -> None:
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
+    # siteArchitect images are built only by Actions from accepted main;
+    # the Windows operator can load attested images but cannot build them.
+    site_architect = release.split("  package-site-architect:\n", 1)[1]
+    assert "    needs: gate\n" in site_architect
+    assert "needs.gate.result == 'success'" in site_architect
+    assert "github.event_name == 'workflow_dispatch'" in site_architect
+    assert "inputs.operation == 'site-architect-images'" in site_architect
+    assert "github.ref == 'refs/heads/main'" in site_architect
+    assert "      id-token: write\n      attestations: write\n      artifact-metadata: write\n" in site_architect
+    assert "docker buildx build --load --platform linux/amd64" in site_architect
+    assert "uses: actions/attest@v4" in site_architect
+    assert "site-architect-images-${{ env.SOURCE_SHA }}" in site_architect
+    assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1" in workflow
+    windows_installer = (ROOT / "infra/local/windows_site_architect_images.ps1").read_text(encoding="utf-8")
+    assert "docker load" in windows_installer
+    installer_commands = "\n".join(line for line in windows_installer.splitlines() if not line.lstrip().startswith("#"))
+    assert not re.search(r"\bdocker\s+(?:build|compose\s+build)\b", installer_commands)
     assert "report['worker_release_decision']" in release
     assert "print('WORKER_IMAGE_REASON=' + decision['reason'])" in release
     selection_script = textwrap.dedent(
