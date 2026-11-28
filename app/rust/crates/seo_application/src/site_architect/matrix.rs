@@ -124,8 +124,8 @@ fn operation_ref(key: &str) -> Result<OperationRef, MatrixError> {
 /// Join two observations: the accepted product plan and installed owner descriptions.
 /// Port schemas, parameters, effects and readiness live once in ToolDescription.
 pub fn operation_matrix(tools: &[ToolDescription]) -> Result<OperationMatrix, MatrixError> {
-    let plan: Decisions =
-        serde_json::from_str(include_str!("site_architect_action_matrix_v1.json"))?;
+    let manifest = include_bytes!("site_architect_action_matrix_v1.json");
+    let plan = Decisions::deserialize(crate::typed_json::parse_unique_json_bytes(manifest)?)?;
     let installed: BTreeSet<_> = tools.iter().map(|tool| tool.operation.clone()).collect();
     let mut areas = BTreeMap::<_, Vec<_>>::new();
     let mut actions = BTreeMap::new();
