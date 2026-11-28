@@ -232,6 +232,44 @@ fn trusted_owner_catalog(build_id: &str) -> Result<TrustedRouteCatalog> {
     Ok(trusted)
 }
 
+/// Export exactly this binary's compiled owner contracts, routes and DTO
+/// schemas. Printing a catalog does not install it or authorize execution:
+/// the operator must independently install it under the trusted root.
+fn trusted_catalog_document_v3(build_id: &str) -> Result<serde_json::Value> {
+    let routes = trusted_owner_catalog(build_id)?;
+    let schemas = acquisition_owner_schemas()?;
+    let mut entries = Vec::with_capacity(2);
+    for operation in [
+        ClassifySourcePage::contract().reference,
+        EvaluateDomBlocks::contract().reference,
+    ] {
+        let installed = routes
+            .catalog()
+            .contract(&operation)
+            .context("compiled Acquisition contract missing from trusted routes")?;
+        let route = routes
+            .trusted_snapshot_for([&operation])?
+            .into_iter()
+            .next()
+            .context("compiled Acquisition route missing")?;
+        let owner_schema = schemas
+            .get(&operation)
+            .context("compiled Acquisition owner DTO schema missing")?;
+        owner_schema.validate(installed)?;
+        entries.push(serde_json::json!({
+            "contract": installed,
+            "route": route,
+            "parameter_schema": {"type": "object", "additionalProperties": false},
+            "owner_schema": owner_schema,
+        }));
+    }
+    ensure!(
+        entries.len() == schemas.len(),
+        "unexpected Acquisition owner DTO schema count"
+    );
+    Ok(serde_json::json!({"schema_revision": 3, "entries": entries}))
+}
+
 fn install_catalog() -> Result<()> {
     let build_id = std::env::var("WORKER_BUILD_ID")?;
     TRUSTED_ACQUISITION
@@ -300,6 +338,12 @@ async fn replay_history(path: &Path) -> Result<()> {
 async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(argument) = args.next() {
+        if argument == "--export-trusted-catalog-v3" {
+            ensure!(args.next().is_none(), "unexpected catalog export arguments");
+            let build_id = std::env::var("WORKER_BUILD_ID")?;
+            println!("{}", trusted_catalog_document_v3(&build_id)?);
+            return Ok(());
+        }
         ensure!(
             argument == "--replay-history",
             "unknown Acquisition owner command"
@@ -421,5 +465,41 @@ mod tests {
                 revision: 1,
             })
             .is_none());
+    }
+
+    #[test]
+    fn catalog_export_reuses_compiled_contracts_routes_and_schemas() {
+        assert!(trusted_catalog_document_v3("dev").is_err());
+        assert!(trusted_catalog_document_v3(&"0".repeat(40)).is_err());
+        let build_id = "a".repeat(40);
+        let document = trusted_catalog_document_v3(&build_id).unwrap();
+        assert_eq!(document["schema_revision"], 3);
+        let entries = document["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        for operation in [
+            ClassifySourcePage::contract().reference,
+            EvaluateDomBlocks::contract().reference,
+        ] {
+            let contract = contract(&operation).unwrap();
+            let entry = entries
+                .iter()
+                .find(|entry| entry["contract"]["reference"]["id"] == operation.id.as_str())
+                .unwrap();
+            assert_eq!(entry["contract"], serde_json::to_value(&contract).unwrap());
+            assert_eq!(entry["route"]["build_id"], build_id.as_str());
+            assert_eq!(entry["route"]["workflow_type"], OWNER_OPERATION_CHILD_TYPE_V1);
+            assert_eq!(entry["route"]["task_queue"], OWNER_QUEUE_V1);
+            assert_eq!(
+                entry["route"]["contract_hash"],
+                serde_json::to_value(contract.fingerprint().unwrap()).unwrap()
+            );
+            assert_eq!(
+                entry["owner_schema"],
+                serde_json::to_value(&acquisition_owner_schemas().unwrap()[&operation]).unwrap()
+            );
+            assert_eq!(entry["parameter_schema"], serde_json::json!({
+                "type": "object", "additionalProperties": false
+            }));
+        }
     }
 }
