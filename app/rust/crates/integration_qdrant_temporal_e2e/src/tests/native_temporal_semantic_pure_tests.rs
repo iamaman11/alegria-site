@@ -480,9 +480,10 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             assert_eq!(view["canonical_run_id"], run.plan.scope.run_id);
             assert_eq!(view["owner_result_count"], 2);
             let expected = CanonicalizeMentions::evaluate(&typed);
-            let actual: serde_json::Value =
-                serde_json::from_slice(&result.artifacts[&"canonical".into()].payload).unwrap();
-            assert_eq!(actual, serde_json::to_value(expected).unwrap());
+            assert_eq!(
+                result.artifacts[&"canonical".into()].payload,
+                serde_json::to_vec(&expected).unwrap()
+            );
             let producer_start = executions
                 .iter()
                 .find(|(_, id)| id == &proof.child_workflow_id)
