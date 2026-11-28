@@ -180,8 +180,14 @@ async fn mixed_pure_native_v2_three_distinct_owners_and_incompatible_produced_re
         port: "output".into(),
         artifact: "seo_result".into(),
     });
-    assert!(incompatible.seal(first_routes.catalog()).is_err(),
-        "mismatched output/Input artifact identities may never create a fake Produced edge");
+    let incompatible = incompatible.seal(first_routes.catalog()).unwrap();
+    assert!(
+        matches!(
+            incompatible.validate(first_routes.catalog()),
+            Err(operation_protocol::PlanError::ArtifactSchemaMismatch { .. })
+        ),
+        "mismatched output/input DTO schemas must be rejected before Start"
+    );
 
     let temporal = TemporalHarness::start().await.expect("real disposable native Temporal server");
     let _parent = ChildGuard(Some(Command::new(binary("INTEGRATION_EFFECT_DAG_WORKER_BIN"))
