@@ -411,12 +411,15 @@ TRUTH_NATIVE_V2_RUNTIME_BINARIES = {
 SEMANTIC_NATIVE_V2_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_pg_effects", "-p", "temporal_semantic_pure",
+    "-p", "temporal_acquisition_pure",
     "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects", "--bin", "temporal_semantic_pure",
+    "--bin", "temporal_acquisition_pure",
 )
 SEMANTIC_NATIVE_V2_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
     "INTEGRATION_SEMANTIC_PURE_OWNER_BIN": "temporal_semantic_pure",
+    "INTEGRATION_ACQUISITION_PURE_OWNER_BIN": "temporal_acquisition_pure",
 }
 ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
     "cargo", "build", "--locked",
@@ -996,6 +999,9 @@ SUITE_OWNERS = {
         },
         "prefixes": (
             "app/rust/services/temporal_semantic_pure/",
+            "app/rust/services/temporal_acquisition_pure/",
+            "app/rust/crates/source_section_contracts/",
+            "app/rust/crates/acquisition/",
             "app/rust/crates/seo_domain/src/extraction/",
             "app/rust/crates/seo_application/src/operation_adapter/",
             "app/rust/crates/operation_protocol/",
@@ -1003,6 +1009,7 @@ SUITE_OWNERS = {
             "app/rust/services/temporal_orchestrator/",
         ),
         "lock_crates": {"seo_domain", "seo_application", "temporal_semantic_pure",
+                        "source_section_contracts", "acquisition", "temporal_acquisition_pure",
                         "operation_protocol", "trusted_owner_catalog", "temporal_orchestrator",
                         "temporal_pg_effects", "integration_qdrant_temporal_e2e"},
         "on_unknown_global_input": True,

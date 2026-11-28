@@ -106,7 +106,7 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
     use acquisition::operation_owner_schema_json::acquisition_owner_schemas;
     use acquisition::operations::{
         ClassifySourcePage, ClassifySourcePageInput, DomBlockRelevanceInput, EvaluateDomBlocks,
-        StrictDomBlockInput,
+        PrepareEntitySpanInput, StrictDomBlockInput,
     };
     use acquisition::source_relevance::{
         BlockRole, DomBlockRelevanceOutput, PageUtilityClassifierOutput,
@@ -119,7 +119,7 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
     let build_id = env::var("GITHUB_SHA").expect("real worker binary must pin exact CI SHA");
     assert_eq!(build_id.len(), 40);
     let schemas = acquisition_owner_schemas().unwrap();
-    assert_eq!(schemas.len(), 2);
+    assert!(schemas.contains_key(&PrepareEntitySpanInput::contract().reference));
     let cases = [
         acquisition_native_v2_case(
             ClassifySourcePage::contract(),

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+source_section_contracts = { path = "../source_section_contracts" }
 primitives = { path = "../primitives" }
 operation_protocol = { path = "../operation_protocol" }
 anyhow = { workspace = true }

@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/acquisition",
+  "crates/source_section_contracts",
   "crates/truth_domain",
   "crates/primitives",
   "crates/contracts",

@@ -20,19 +20,28 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
     let build_id = env::var("GITHUB_SHA").expect("exact-source owner build ID");
     assert_eq!(build_id.len(), 40);
     let owner_bin = binary("INTEGRATION_SEMANTIC_PURE_OWNER_BIN");
-    let exported = Command::new(&owner_bin)
-        .arg("--export-trusted-catalog-v3")
-        .env("WORKER_BUILD_ID", &build_id)
-        .output()
-        .expect("owner catalog export");
-    assert!(
-        exported.status.success(),
-        "{}",
-        String::from_utf8_lossy(&exported.stderr)
-    );
+    let acquisition_bin = binary("INTEGRATION_ACQUISITION_PURE_OWNER_BIN");
+    let mut document = serde_json::json!({"schema_revision": 3, "entries": []});
+    for bin in [&owner_bin, &acquisition_bin] {
+        let exported = Command::new(bin)
+            .arg("--export-trusted-catalog-v3")
+            .env("WORKER_BUILD_ID", &build_id)
+            .output()
+            .expect("owner catalog export");
+        assert!(
+            exported.status.success(),
+            "{}",
+            String::from_utf8_lossy(&exported.stderr)
+        );
+        let mut owner: serde_json::Value = serde_json::from_slice(&exported.stdout).unwrap();
+        assert_eq!(owner["schema_revision"], 3);
+        document["entries"]
+            .as_array_mut()
+            .unwrap()
+            .append(owner["entries"].as_array_mut().unwrap());
+    }
     let catalog = SiteArchitectV2CiRootCatalog::new();
-    catalog
-        .install(&serde_json::from_slice(&exported.stdout).expect("owner-exported catalog JSON"));
+    catalog.install(&document);
     let installed = trusted_owner_catalog::load_trusted_owner_bundle(&catalog.0).unwrap();
     let spans_contract = EntitySpans::contract();
     let canonical_contract = CanonicalizeMentions::contract();
@@ -46,15 +55,33 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             contract
         );
     }
+    let prepare_ref = operation_protocol::OperationRef {
+        id: "acquisition.prepare_entity_span_input".into(),
+        revision: 1,
+    };
+    let prepare_contract = installed
+        .routes
+        .catalog()
+        .contract(&prepare_ref)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        prepare_contract.outputs[&"output".into()],
+        spans_contract.inputs[&"input".into()]
+    );
     let frozen =
         br#"{"section_id":"fees","raw_text":"Visa fee is 80 EUR and processing takes 10 days."}"#
             .to_vec();
-    let make_run = |two: bool| {
+    let make_run = |two: bool, acquisition: bool, reject: u8| {
         let scope = RunScope {
             tenant_id: "ci-semantic-unverified".into(),
             run_id: Uuid::new_v4().to_string(),
         };
-        let source_schema = spans_contract.inputs[&"input".into()].clone();
+        let source_schema = if acquisition {
+            prepare_contract.inputs[&"input".into()].clone()
+        } else {
+            spans_contract.inputs[&"input".into()].clone()
+        };
         let mut nodes = vec![OperationNode {
             instance: "extract".into(),
             operation: spans_contract.reference.clone(),
@@ -68,6 +95,32 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             after: BTreeSet::new(),
             permitted_effects: BTreeSet::new(),
         }];
+        if acquisition {
+            nodes[0].inputs.insert(
+                "input".into(),
+                ArtifactBinding::Produced {
+                    producer: "prepare".into(),
+                    port: "output".into(),
+                    artifact: "span_input".into(),
+                },
+            );
+            nodes.insert(
+                0,
+                OperationNode {
+                    instance: "prepare".into(),
+                    operation: prepare_ref.clone(),
+                    inputs: BTreeMap::from([(
+                        "input".into(),
+                        ArtifactBinding::External {
+                            artifact: "source".into(),
+                        },
+                    )]),
+                    outputs: BTreeMap::from([("output".into(), "span_input".into())]),
+                    after: BTreeSet::new(),
+                    permitted_effects: BTreeSet::new(),
+                },
+            );
+        }
         if two {
             nodes.push(OperationNode {
                 instance: "canonicalize".into(),
@@ -135,14 +188,30 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                     schema: source_schema,
                     scope,
                     provenance: "ci-unverified-source".into(),
-                    payload: frozen.clone(),
+                    payload: if acquisition {
+                        serde_json::to_vec(&serde_json::json!({
+                        "page": {"url": if reject == 1 { "https://example.org/login" } else { "https://example.org/visa" },
+                            "title": if reject == 1 { "Login" } else { "Visa requirements" },
+                            "raw_text": if reject == 1 { "Sign in to your account" } else { "Visa requirements and fees" }},
+                        "block": {"dom_block_id": "fees", "block_role": if reject == 2 { "navigation" } else { "content_main" },
+                            "text": "Visa fee is 80 EUR and processing takes 10 days."}
+                    })).unwrap()
+                    } else {
+                        frozen.clone()
+                    },
                 },
             )]),
             owner_commands: commands,
             pinned_routes,
         }
     };
-    let runs = [make_run(false), make_run(true)];
+    let runs = [
+        make_run(false, false, 0),
+        make_run(true, false, 0),
+        make_run(true, true, 0),
+        make_run(true, true, 1),
+        make_run(true, true, 2),
+    ];
     // A changed consumer revision is incompatible with the real producer's
     // output, even if a plausible Produced edge is authored.
     let mut incompatible = canonical_contract.clone();
@@ -213,6 +282,17 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             .env_remove("DATABASE_URL")
             .spawn()
             .expect("native semantic owner"),
+    ));
+    let _acquisition_owner = ChildGuard(Some(
+        Command::new(&acquisition_bin)
+            .env("ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1", "true")
+            .env("TEMPORAL_OPERATION_DAG_CATALOG_PATH", &catalog.0)
+            .env("WORKER_BUILD_ID", &build_id)
+            .env("TEMPORAL_URL", &temporal.temporal_url)
+            .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env_remove("DATABASE_URL")
+            .spawn()
+            .expect("native acquisition owner"),
     ));
     let client = connect_client(
         &temporal.temporal_url,
@@ -291,10 +371,44 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             parent.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("semantic native DAG timed out")
-        .expect("semantic native DAG failed");
+        .expect("semantic native DAG timed out");
+        if index >= 3 {
+            assert!(
+                completed.is_err(),
+                "utility/navigation input must be rejected"
+            );
+            let events = parent
+                .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events()
+                .await
+                .unwrap();
+            let children: Vec<_> = events
+                .iter()
+                .filter_map(|event| match &event.attributes {
+                    Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a)) => {
+                        Some(&a.workflow_id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(children
+                .iter()
+                .any(|id| id.starts_with("alegria-owner-validate-v1-")));
+            assert!(!children
+                .iter()
+                .any(|id| id.starts_with("alegria-owner-operation-v2-")));
+            assert!(events.iter().any(|event| matches!(
+                &event.attributes,
+                Some(Attributes::ChildWorkflowExecutionFailedEventAttributes(_))
+            )));
+            continue;
+        }
+        let completed = completed.expect("semantic native DAG failed");
         let result: OperationDagReceiptV1 = completed.to_value(&PayloadConverter::serde_json());
         assert_eq!(result.owner_results.len(), index + 1);
+        if index == 2 {
+            assert_eq!(result.artifacts[&"span_input".into()].payload, frozen);
+        }
         let mentions = &result.artifacts[&"mentions".into()].payload;
         let typed: entity_spans::EntitySpanOutput = serde_json::from_slice(mentions).unwrap();
         assert!(!typed.mentions.is_empty());
@@ -332,6 +446,42 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
         assert!(executions
             .iter()
             .any(|(_, id)| id == &proof.child_workflow_id));
+        if index == 2 {
+            for artifact in ["span_input", "mentions"] {
+                let produced = &result.produced_evidence[&artifact.into()];
+                let producer_start = executions
+                    .iter()
+                    .find(|(_, id)| id == &produced.child_workflow_id)
+                    .unwrap()
+                    .0;
+                let producer_complete = history
+                    .iter()
+                    .find_map(|event| match &event.attributes {
+                        Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(a))
+                            if a.initiated_event_id == producer_start =>
+                        {
+                            Some(event.event_id)
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                assert!(
+                    history.iter().any(|event| match &event.attributes {
+                        Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(
+                            a,
+                        )) if event.event_id > producer_complete => {
+                            a.input.as_ref().is_some_and(|input| {
+                                let wire = String::from_utf8_lossy(&input.payloads[0].data);
+                                wire.contains(&produced.payload_hash)
+                                    && wire.contains(&produced.child_workflow_id)
+                            })
+                        }
+                        _ => false,
+                    }),
+                    "consumer must follow producer completion and carry its proof"
+                );
+            }
+        }
         for (_, child_id) in &children {
             let child = client.get_workflow_handle::<UntypedWorkflow>(child_id.clone());
             let server_history = child
@@ -347,22 +497,50 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                 "semantic-child-history",
                 std::str::from_utf8(&server_history).expect("server History is UTF-8 JSON"),
             );
-            let replay = Command::new(&owner_bin)
-                .arg("--replay-history")
-                .arg(&replay_file)
-                .env("WORKER_BUILD_ID", &build_id)
-                .env("TEMPORAL_OPERATION_DAG_CATALOG_PATH", &catalog.0)
-                .env_remove("DATABASE_URL")
-                .output()
-                .expect("replay captured server child History");
+            let acquisition_child = index == 2
+                && (child_id == &result.produced_evidence[&"span_input".into()].child_workflow_id
+                    || {
+                        let event = history
+                            .iter()
+                            .find_map(|event| match &event.attributes {
+                                Some(
+                                    Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(
+                                        a,
+                                    ),
+                                ) if &a.workflow_id == child_id => Some(a),
+                                _ => None,
+                            })
+                            .unwrap();
+                        event
+                            .task_queue
+                            .as_ref()
+                            .is_some_and(|q| q.name == "alegria-acquisition-pure-owner-v1")
+                    });
+            let replay = Command::new(if acquisition_child {
+                &acquisition_bin
+            } else {
+                &owner_bin
+            })
+            .arg("--replay-history")
+            .arg(&replay_file)
+            .env("WORKER_BUILD_ID", &build_id)
+            .env("TEMPORAL_OPERATION_DAG_CATALOG_PATH", &catalog.0)
+            .env_remove("DATABASE_URL")
+            .output()
+            .expect("replay captured server child History");
             fs::remove_file(&replay_file).unwrap();
             assert!(
                 replay.status.success(),
                 "semantic replay: {}",
                 String::from_utf8_lossy(&replay.stderr)
             );
-            assert!(String::from_utf8_lossy(&replay.stdout)
-                .contains("CI_TEMPORAL_SEMANTIC_PURE_OWNER_REPLAY=PASS"));
+            assert!(
+                String::from_utf8_lossy(&replay.stdout).contains(if acquisition_child {
+                    "CI_TEMPORAL_ACQUISITION_PURE_OWNER_REPLAY=PASS"
+                } else {
+                    "CI_TEMPORAL_SEMANTIC_PURE_OWNER_REPLAY=PASS"
+                })
+            );
             if index == 1
                 && child_id.starts_with("alegria-owner-operation-v2-")
                 && child_id != &proof.child_workflow_id
@@ -444,6 +622,8 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                 )),
                 "History attestation Activity must reject the direct invocation"
             );
+        }
+        if index >= 1 {
             let locator = locators.request(
                 "semantic-run-read",
                 &serde_json::json!({
@@ -478,7 +658,61 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
             let view: serde_json::Value = serde_json::from_slice(&read.stdout).unwrap();
             assert_eq!(view["status"], "temporal_completed_owner_unverified");
             assert_eq!(view["canonical_run_id"], run.plan.scope.run_id);
-            assert_eq!(view["owner_result_count"], 2);
+            assert_eq!(view["owner_result_count"], index + 1);
+            let trace: operation_protocol::OperationDagReadTraceV1 =
+                serde_json::from_value(view["trace"].clone()).unwrap();
+            assert!(trace.has_valid_shape(index + 1));
+            if index == 2 {
+                assert_eq!(
+                    trace
+                        .steps
+                        .iter()
+                        .map(|step| step.operation.id.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "acquisition.prepare_entity_span_input",
+                        "semantic.entity_spans",
+                        "semantic.canonicalize_mentions"
+                    ]
+                );
+                for (step, expected_queue) in trace.steps.iter().zip([
+                    "alegria-acquisition-pure-owner-v1",
+                    "alegria-semantic-pure-owner-v1",
+                    "alegria-semantic-pure-owner-v1",
+                ]) {
+                    let start = history
+                        .iter()
+                        .find_map(|event| match &event.attributes {
+                            Some(
+                                Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a),
+                            ) if a.workflow_id == step.child_workflow_id => Some(a),
+                            _ => None,
+                        })
+                        .unwrap();
+                    assert_eq!(start.task_queue.as_ref().unwrap().name, expected_queue);
+                }
+                assert_eq!(trace.steps[1].input_steps, [0]);
+                assert_eq!(trace.steps[2].input_steps, [1]);
+                let proof = &result.produced_evidence[&"span_input".into()];
+                assert_eq!(proof.payload_hash, owner_content_hash(&frozen));
+                let consumer = history
+                    .iter()
+                    .find_map(|event| match &event.attributes {
+                        Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(
+                            a,
+                        )) if a.workflow_id
+                            == result.produced_evidence[&"mentions".into()].child_workflow_id =>
+                        {
+                            a.input.as_ref()
+                        }
+                        _ => None,
+                    })
+                    .unwrap();
+                let wire = String::from_utf8_lossy(&consumer.payloads[0].data);
+                assert!(
+                    wire.contains(&proof.payload_hash) && wire.contains(&proof.child_workflow_id)
+                );
+            }
             let expected = CanonicalizeMentions::evaluate(&typed);
             assert_eq!(
                 result.artifacts[&"canonical".into()].payload,
@@ -502,7 +736,13 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                 .expect("producer completion in real parent History");
             let consumer_start = executions
                 .iter()
-                .find(|(_, id)| id != &proof.child_workflow_id)
+                .find(|(_, id)| {
+                    index == 1 && id != &proof.child_workflow_id
+                        || index == 2
+                            && id != &proof.child_workflow_id
+                            && id
+                                != &result.produced_evidence[&"span_input".into()].child_workflow_id
+                })
                 .unwrap()
                 .0;
             assert!(

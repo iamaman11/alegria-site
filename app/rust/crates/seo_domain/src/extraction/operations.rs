@@ -21,27 +21,22 @@ pub trait PureExtractionOperation: Operation<Failure = Infallible> {
     fn evaluate(input: &Self::Input) -> Self::Output;
 }
 
-fn pure_contract(id: &str, input_schema: &str, output_schema: &str) -> OperationContract {
+fn artifact_v1(id: &str) -> ArtifactSchema {
+    ArtifactSchema {
+        id: id.into(),
+        revision: 1,
+    }
+}
+
+fn pure_contract(id: &str, input: ArtifactSchema, output_type: &str) -> OperationContract {
     OperationContract {
         reference: OperationRef {
             id: OperationId::from(id),
             revision: 1,
         },
         owner: OperationOwnerId::from("semantic_extraction"),
-        inputs: BTreeMap::from([(
-            PortId::from("input"),
-            ArtifactSchema {
-                id: input_schema.into(),
-                revision: 1,
-            },
-        )]),
-        outputs: BTreeMap::from([(
-            PortId::from("output"),
-            ArtifactSchema {
-                id: output_schema.into(),
-                revision: 1,
-            },
-        )]),
+        inputs: BTreeMap::from([(PortId::from("input"), input)]),
+        outputs: BTreeMap::from([(PortId::from("output"), artifact_v1(output_type))]),
         // These semantic transformations do not alter an authoritative Truth
         // revision; no previously admitted artifact becomes stale by running
         // a pure extraction operation.
@@ -61,7 +56,7 @@ impl Operation for LayerRoute {
     fn contract() -> OperationContract {
         pure_contract(
             "semantic.layer_route",
-            "semantic.layer_router_input",
+            artifact_v1("semantic.layer_router_input"),
             "semantic.layer_router_output",
         )
     }
@@ -83,7 +78,7 @@ impl Operation for EntitySpans {
     fn contract() -> OperationContract {
         pure_contract(
             "semantic.entity_spans",
-            "semantic.entity_span_input",
+            source_section_contracts::entity_span_input_schema(),
             "semantic.entity_span_output",
         )
     }
@@ -108,7 +103,7 @@ impl Operation for CanonicalizeMentions {
     fn contract() -> OperationContract {
         pure_contract(
             "semantic.canonicalize_mentions",
-            "semantic.entity_span_output",
+            artifact_v1("semantic.entity_span_output"),
             "semantic.canonical_mapping_output",
         )
     }
@@ -138,7 +133,7 @@ impl Operation for EditorialTopics {
     fn contract() -> OperationContract {
         pure_contract(
             "semantic.editorial_topics",
-            "semantic.editorial_extraction_input",
+            artifact_v1("semantic.editorial_extraction_input"),
             "semantic.editorial_extraction_output",
         )
     }
@@ -163,7 +158,7 @@ impl Operation for OperationalEntities {
     fn contract() -> OperationContract {
         pure_contract(
             "semantic.operational_entities",
-            "semantic.operational_extraction_input",
+            artifact_v1("semantic.operational_extraction_input"),
             "semantic.operational_extraction_output",
         )
     }

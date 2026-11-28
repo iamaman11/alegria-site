@@ -324,6 +324,10 @@ class ImpactFixtures(unittest.TestCase):
             SUITE_OWNERS["semantic_pure_native_v2"]["runtime_binaries"]["INTEGRATION_SEMANTIC_PURE_OWNER_BIN"],
             "temporal_semantic_pure",
         )
+        self.assertEqual(
+            SUITE_OWNERS["semantic_pure_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_PURE_OWNER_BIN"],
+            "temporal_acquisition_pure",
+        )
         for name, owner_bin in (
             ("seo_steps_native_v2", "temporal_seo_steps_pure"),
             ("truth_native_v2", "temporal_truth_pure"),

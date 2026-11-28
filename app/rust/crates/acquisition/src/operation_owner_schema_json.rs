@@ -1,12 +1,11 @@
 //! Acquisition-owned JSON wire codec and structural DTO attestations.
 //!
-//! This is the only external JSON boundary for these two pure operations.
+//! This is the external JSON boundary for the pure acquisition operations.
 //! The acquisition domain remains independent of the generic DAG runner and
 //! never opens a provider, SQL connection, or Temporal connection. A separate
 //! Temporal worker must still establish scope, source admission and History.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 
 use operation_protocol::{
     ArtifactSchema, ArtifactTypeId, Operation, OperationRef, OwnerDtoDescriptorFormatV3,
@@ -17,19 +16,23 @@ use operation_protocol::{
 use schemars::{generate::SchemaSettings, JsonSchema};
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::operations::{ClassifySourcePage, EvaluateDomBlocks, PureAcquisitionOperation};
+use crate::operations::{
+    ClassifySourcePage, EvaluateDomBlocks, PrepareEntitySpanInput, PrepareEntitySpanInputFailure,
+    PrepareEntitySpanRequest, PureAcquisitionOperation,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcquisitionPureWireError {
     UnknownOperation,
     InputTooLarge,
     InvalidInput,
+    PreparationRejected(PrepareEntitySpanInputFailure),
     InvalidOutput,
     OutputTooLarge,
 }
 
-/// ValidateOnly performs exact typed decode without evaluating the business
-/// function or interpreting the result as a remote-source observation.
+/// ValidateOnly decodes inputs and enforces the preparation gate without
+/// interpreting the result as a remote-source observation.
 pub fn validate_acquisition_pure_input(
     operation: &OperationRef,
     payload: &[u8],
@@ -42,6 +45,9 @@ pub fn validate_acquisition_pure_input(
     }
     if operation == &EvaluateDomBlocks::contract().reference {
         return decode_input::<EvaluateDomBlocks>(payload);
+    }
+    if operation == &PrepareEntitySpanInput::contract().reference {
+        return prepare(payload).map(|_| ());
     }
     Err(AcquisitionPureWireError::UnknownOperation)
 }
@@ -71,7 +77,18 @@ pub fn execute_acquisition_pure(
     if operation == &EvaluateDomBlocks::contract().reference {
         return evaluate::<EvaluateDomBlocks>(payload);
     }
+    if operation == &PrepareEntitySpanInput::contract().reference {
+        return encode_output(&prepare(payload)?);
+    }
     Err(AcquisitionPureWireError::UnknownOperation)
+}
+
+fn prepare(
+    payload: &[u8],
+) -> Result<source_section_contracts::EntitySpanInput, AcquisitionPureWireError> {
+    let input: PrepareEntitySpanRequest =
+        serde_json::from_slice(payload).map_err(|_| AcquisitionPureWireError::InvalidInput)?;
+    PrepareEntitySpanInput::evaluate(&input).map_err(AcquisitionPureWireError::PreparationRejected)
 }
 
 fn evaluate<O>(payload: &[u8]) -> Result<Vec<u8>, AcquisitionPureWireError>
@@ -82,8 +99,11 @@ where
 {
     let input: O::Input =
         serde_json::from_slice(payload).map_err(|_| AcquisitionPureWireError::InvalidInput)?;
-    let output = O::evaluate(&input);
-    let bytes = serde_json::to_vec(&output).map_err(|_| AcquisitionPureWireError::InvalidOutput)?;
+    encode_output(&O::evaluate(&input))
+}
+
+fn encode_output(output: &impl Serialize) -> Result<Vec<u8>, AcquisitionPureWireError> {
+    let bytes = serde_json::to_vec(output).map_err(|_| AcquisitionPureWireError::InvalidOutput)?;
     if bytes.len() > DAG_MAX_RESULT_BYTES {
         return Err(AcquisitionPureWireError::OutputTooLarge);
     }
@@ -117,9 +137,11 @@ fn dto_descriptor<T: JsonSchema>(
     })
 }
 
-fn generated_owner_schema<O>() -> Result<PinnedOwnerOperationSchemaV3, OwnerSchemaErrorV3>
+fn generated_owner_schema<O>(
+    failure: OwnerDtoDescriptorV3,
+) -> Result<PinnedOwnerOperationSchemaV3, OwnerSchemaErrorV3>
 where
-    O: PureAcquisitionOperation<Failure = Infallible>,
+    O: Operation,
     O::Input: JsonSchema,
     O::Output: JsonSchema,
 {
@@ -150,12 +172,7 @@ where
             output_port.clone(),
             dto_descriptor::<O::Output>(output_schema, WireRole::SerializeOutput)?,
         )]),
-        failure: OwnerDtoDescriptorV3 {
-            schema_id: ArtifactTypeId::from("acquisition.infallible_failure"),
-            revision: 1,
-            format: OwnerDtoDescriptorFormatV3::JsonSchema2020_12,
-            descriptor_bytes: b"false".to_vec(),
-        },
+        failure,
     }
     .seal(&contract)
 }
@@ -165,9 +182,23 @@ where
 /// as an admission credential by an untrusted caller.
 pub fn acquisition_owner_schemas(
 ) -> Result<BTreeMap<OperationRef, PinnedOwnerOperationSchemaV3>, OwnerSchemaErrorV3> {
+    let infallible = || OwnerDtoDescriptorV3 {
+        schema_id: ArtifactTypeId::from("acquisition.infallible_failure"),
+        revision: 1,
+        format: OwnerDtoDescriptorFormatV3::JsonSchema2020_12,
+        descriptor_bytes: b"false".to_vec(),
+    };
+    let failure = dto_descriptor::<<PrepareEntitySpanInput as Operation>::Failure>(
+        &ArtifactSchema {
+            id: "acquisition.prepare_entity_span_input_failure".into(),
+            revision: 1,
+        },
+        WireRole::SerializeOutput,
+    )?;
     let entries = [
-        generated_owner_schema::<ClassifySourcePage>()?,
-        generated_owner_schema::<EvaluateDomBlocks>()?,
+        generated_owner_schema::<ClassifySourcePage>(infallible())?,
+        generated_owner_schema::<EvaluateDomBlocks>(infallible())?,
+        generated_owner_schema::<PrepareEntitySpanInput>(failure)?,
     ];
     Ok(entries
         .into_iter()
@@ -181,14 +212,16 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn both_owner_schemas_are_generated_from_real_input_and_output_dtos() {
+    fn owner_schemas_are_generated_from_real_input_and_output_dtos() {
         let schemas = acquisition_owner_schemas().unwrap();
-        assert_eq!(schemas.len(), 2);
+        assert_eq!(schemas.len(), 3);
         for (operation, pinned) in schemas {
             let contract = if operation == ClassifySourcePage::contract().reference {
                 ClassifySourcePage::contract()
-            } else {
+            } else if operation == EvaluateDomBlocks::contract().reference {
                 EvaluateDomBlocks::contract()
+            } else {
+                PrepareEntitySpanInput::contract()
             };
             pinned.validate(&contract).unwrap();
             for descriptor in pinned
@@ -205,7 +238,9 @@ mod tests {
                 assert_eq!(schema["type"], "object");
                 assert!(schema["properties"].is_object());
             }
-            assert_eq!(pinned.schema.failure.descriptor_bytes, b"false");
+            if operation != PrepareEntitySpanInput::contract().reference {
+                assert_eq!(pinned.schema.failure.descriptor_bytes, b"false");
+            }
         }
     }
 
@@ -230,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn leaf_owner_executes_exactly_two_operations_and_fails_closed() {
+    fn existing_leaf_operations_execute_and_fail_closed() {
         let page = execute_acquisition_pure(
             &ClassifySourcePage::contract().reference,
             br#"{"url":"https://example.org/menu","title":"Menu","raw_text":"Visa fee EUR 25"}"#,
@@ -279,6 +314,45 @@ mod tests {
             ),
             Err(AcquisitionPureWireError::InputTooLarge)
         );
+    }
+
+    #[test]
+    fn prepare_enforces_gate_in_validation_and_execution() {
+        use PrepareEntitySpanInputFailure::*;
+
+        let reference = PrepareEntitySpanInput::contract().reference;
+        let good = br#"{"page":{"url":"https://example.org/visa","title":"Visa","raw_text":"Visa fee EUR 25"},"block":{"dom_block_id":"body","block_role":"content_main","text":"Visa fee EUR 25"}}"#;
+        validate_acquisition_pure_input(&reference, good).unwrap();
+        let output: Value =
+            serde_json::from_slice(&execute_acquisition_pure(&reference, good).unwrap()).unwrap();
+        assert_eq!(output["section_id"], "body");
+        assert_eq!(output["raw_text"], "Visa fee EUR 25");
+        let good: Value = serde_json::from_slice(good).unwrap();
+        for (pointer, value, reason) in [
+            ("/block/dom_block_id", " body", InvalidBlockId),
+            ("/block/text", "   ", BlankRawText),
+            ("/block/block_role", "navigation", BlockDisallowsExtraction),
+            ("/page/title", "Login", PageDisallowsExtraction),
+        ] {
+            let mut bad = good.clone();
+            *bad.pointer_mut(pointer).unwrap() = Value::String(value.to_owned());
+            let bytes = serde_json::to_vec(&bad).unwrap();
+            assert_eq!(
+                validate_acquisition_pure_input(&reference, &bytes),
+                Err(AcquisitionPureWireError::PreparationRejected(reason))
+            );
+            assert_eq!(
+                execute_acquisition_pure(&reference, &bytes),
+                Err(AcquisitionPureWireError::PreparationRejected(reason))
+            );
+        }
+        let schemas = acquisition_owner_schemas().unwrap();
+        let schema = &schemas[&reference].schema;
+        assert_eq!(
+            schema.outputs[&PortId::from("output")].schema_id,
+            source_section_contracts::entity_span_input_schema().id
+        );
+        assert_ne!(schema.failure.descriptor_bytes, b"false");
     }
 
     #[test]

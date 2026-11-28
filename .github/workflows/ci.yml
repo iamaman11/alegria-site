@@ -1451,7 +1451,7 @@ jobs:
           name: rust-e2e-dataforseo-effects-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/dataforseo_effects
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'temporal_acquisition'
+        if: contains(fromJSON('["temporal_acquisition","temporal_semantic"]'), matrix.shard)
         with:
           name: rust-e2e-acquisition-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/acquisition_pure
@@ -1490,7 +1490,7 @@ jobs:
             temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure) ;;
             temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
             temporal_truth) kinds=(v3 truth_pure) ;;
-            temporal_semantic) kinds=(v3 semantic_pure) ;;
+            temporal_semantic) kinds=(v3 acquisition_pure semantic_pure) ;;
             *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
           esac
           for kind in "${kinds[@]}"; do

@@ -193,12 +193,31 @@ Worker требует `ALEGRIA_ENABLE_SEMANTIC_PURE_OWNER_V1=true`, явные
 
 Общий Temporal V2 DAG исполняет и одиночный `semantic.entity_spans@1`, и
 его связку с `semantic.canonicalize_mentions@1`. Перед выполнением
-операции read-only Activity сверяет подлинные истории дочернего и
-родительского Workflow и результаты `ValidateOnly`. Для Produced-входа
-канонизации она также проверяет фактический результат завершившегося
-шага-производителя. Семантическая квитанция фиксирует преобразование
-байтов, а исходный внешний документ сохраняет статус недоверенного источника.
-В операторском пилоте проверенные результаты связки можно найти по `run_id`.
+операции read-only Activity сверяет истории дочернего и родительского
+Workflow и результаты `ValidateOnly`. Для Produced-входа она также сверяет
+его байты с фактическим результатом завершившегося шага-производителя.
+
+### Связка Acquisition и семантики
+
+Оператор добавляет в установленный каталог V3 записи, экспортированные
+обоими воркерами. Acquisition публикует собственные контракты командой
+`temporal_acquisition_pure --export-trusted-catalog-v3` с тем же правилом
+для `WORKER_BUILD_ID`. Его очередь — `alegria-acquisition-pure-owner-v1`,
+запуск требует `ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1=true`.
+
+| Шаг | Операция | Вход |
+| --- | --- | --- |
+| `prepare` | `acquisition.prepare_entity_span_input@1` | Внешний `acquisition.prepare_entity_span_input@1` |
+| `extract` | `semantic.entity_spans@1` | `prepare.output` с общей схемой `semantic.entity_span_input@1` |
+| `canonicalize` | `semantic.canonicalize_mentions@1` | `extract.output` со схемой `semantic.entity_span_output@1` |
+
+Для `prepare` вход содержит `page` с полями `url`, `title`, `raw_text`
+и `block` с полями `dom_block_id`, `block_role`, `text`. Acquisition
+применяет правила допустимости страницы и блока на этапе `ValidateOnly`.
+В выходе он сохраняет идентификатор блока в `section_id` и текст блока в
+`raw_text`. Внешний документ сохраняет статус источника без подтверждённой
+подлинности. В операторском чтении по `run_id` завершённая связка содержит
+три шага, их связи `input_steps` и идентификаторы дочерних запусков Temporal.
 
 ## Как типизированно подключать шаги
 

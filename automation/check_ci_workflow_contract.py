@@ -475,7 +475,7 @@ def check() -> None:
     download_gates = {
         "qdrant-effects": 'contains(fromJSON(\'["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]\'), matrix.shard)',
         "dataforseo-effects": "matrix.shard == 'temporal_dataforseo'",
-        "acquisition-pure": "matrix.shard == 'temporal_acquisition'",
+        "acquisition-pure": 'contains(fromJSON(\'["temporal_acquisition","temporal_semantic"]\'), matrix.shard)',
         "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
         "seo-steps-pure": 'contains(fromJSON(\'["temporal_seo_steps","temporal_acquisition"]\'), matrix.shard)',
         "truth-pure": 'contains(fromJSON(\'["temporal_truth","temporal_acquisition"]\'), matrix.shard)',
@@ -520,7 +520,7 @@ def check() -> None:
         "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure)",
         "temporal_seo_steps) kinds=(v3 seo_steps_pure)",
         "temporal_truth) kinds=(v3 truth_pure)",
-        "temporal_semantic) kinds=(v3 semantic_pure)",
+        "temporal_semantic) kinds=(v3 acquisition_pure semantic_pure)",
     )
     for entry in expected_installs:
         assert entry in qdrant_runner, entry

@@ -38,6 +38,7 @@ mod produced_history;
 
 const OWNER_QUEUE: &str = "alegria-semantic-pure-owner-v1";
 const OWNER_OPT_IN: &str = "ALEGRIA_ENABLE_SEMANTIC_PURE_OWNER_V1";
+const ENTITY_SPANS_PRODUCED_PATCH: &str = "semantic-entity-spans-produced-v1";
 static OWNER_CATALOG: OnceLock<TrustedRouteCatalog> = OnceLock::new();
 
 fn fail(error: impl std::fmt::Display) -> WorkflowTermination {
@@ -52,13 +53,19 @@ fn installed_catalog() -> Result<&'static TrustedRouteCatalog> {
         .context("semantic owner catalog is unavailable")
 }
 
-fn supports_produced(operation: &OperationRef) -> bool {
-    operation.id.as_str() == "semantic.canonicalize_mentions" && operation.revision == 1
+fn is_entity_spans(operation: &OperationRef) -> bool {
+    operation.revision == 1 && operation.id.as_str() == "semantic.entity_spans"
+}
+
+fn supports_produced(operation: &OperationRef, spans_produced_enabled: bool) -> bool {
+    (operation.revision == 1 && operation.id.as_str() == "semantic.canonicalize_mentions")
+        || (spans_produced_enabled && is_entity_spans(operation))
 }
 
 fn verify_validation(
     catalog: &TrustedRouteCatalog,
     request: &OwnerValidationRequestV1,
+    spans_produced_enabled: bool,
 ) -> Result<()> {
     request.validate_shape()?;
     let contract = catalog
@@ -72,7 +79,8 @@ fn verify_validation(
             && request.contract_hash == contract.fingerprint()?
             && request.input_schemas == contract.inputs
             && request.command_bytes == b"{}"
-            && (request.produced_input_ports.is_empty() || supports_produced(&request.operation)),
+            && (request.produced_input_ports.is_empty()
+                || supports_produced(&request.operation, spans_produced_enabled)),
         "semantic ValidateOnly rejected its pinned contract, settings or input binding"
     );
     for artifact in request.external_inputs.values() {
@@ -84,6 +92,7 @@ fn verify_validation(
 fn checked_input<'a>(
     catalog: &TrustedRouteCatalog,
     invocation: &'a OwnerInvocationV1,
+    spans_produced_enabled: bool,
 ) -> Result<&'a AdmittedArtifactV1> {
     invocation.verify_integrity(catalog)?;
     let checked = &invocation.checked_dispatch;
@@ -102,7 +111,7 @@ fn checked_input<'a>(
         .context("semantic input port is absent")?;
     ensure!(
         matches!(input.source, ArtifactBinding::External { .. })
-            || supports_produced(&checked.operation),
+            || supports_produced(&checked.operation, spans_produced_enabled),
         "semantic owner cannot accept this Produced binding"
     );
     Ok(&input.artifact)
@@ -168,7 +177,15 @@ impl AlegriaOwnerValidateV1Workflow {
         if ctx.info().workflow_id() != expected {
             return Err(fail("unexpected ValidateOnly identity"));
         }
-        verify_validation(installed_catalog().map_err(fail)?, &request).map_err(fail)?;
+        let spans_produced_enabled = is_entity_spans(&request.operation)
+            && !request.produced_input_ports.is_empty()
+            && ctx.patched(ENTITY_SPANS_PRODUCED_PATCH);
+        verify_validation(
+            installed_catalog().map_err(fail)?,
+            &request,
+            spans_produced_enabled,
+        )
+        .map_err(fail)?;
         OwnerValidationResultV1::accepted(&request).map_err(fail)
     }
 }
@@ -189,7 +206,13 @@ impl AlegriaOwnerOperationV1Workflow {
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerResultV1> {
         let invocation = ctx.state(|state| state.invocation.clone());
         let catalog = installed_catalog().map_err(fail)?;
-        let input = checked_input(catalog, &invocation).map_err(fail)?;
+        let spans_produced_enabled = is_entity_spans(&invocation.checked_dispatch.operation)
+            && invocation
+                .bound_inputs
+                .values()
+                .any(|bound| matches!(bound.source, ArtifactBinding::Produced { .. }))
+            && ctx.patched(ENTITY_SPANS_PRODUCED_PATCH);
+        let input = checked_input(catalog, &invocation, spans_produced_enabled).map_err(fail)?;
         if ctx.info().workflow_id()
             != owner_child_workflow_id_v2(&invocation.checked_dispatch.execution_key)
         {
@@ -240,7 +263,8 @@ impl SemanticHistoryActivities {
         invocation: &OwnerInvocationV1,
     ) -> Result<()> {
         let catalog = installed_catalog()?;
-        checked_input(catalog, invocation)?;
+        // The operation Workflow records the patch before it schedules this Activity.
+        checked_input(catalog, invocation, true)?;
         let info = ctx.info();
         ensure!(
             info.workflow_type.as_deref() == Some(OWNER_OPERATION_CHILD_TYPE_V1)

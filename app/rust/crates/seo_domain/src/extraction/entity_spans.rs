@@ -2,11 +2,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct EntitySpanInput {
-    pub section_id: String,
-    pub raw_text: String,
-}
+pub use source_section_contracts::EntitySpanInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EntityMention {
