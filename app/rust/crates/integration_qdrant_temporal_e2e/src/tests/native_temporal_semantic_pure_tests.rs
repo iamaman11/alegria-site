@@ -343,7 +343,10 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                 server_history.len() > 100,
                 "inspectable native child History"
             );
-            let replay_file = secret("semantic-child-history", &server_history);
+            let replay_file = secret(
+                "semantic-child-history",
+                std::str::from_utf8(&server_history).expect("server History is UTF-8 JSON"),
+            );
             let replay = Command::new(&owner_bin)
                 .arg("--replay-history")
                 .arg(&replay_file)
