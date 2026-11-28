@@ -184,62 +184,16 @@ if ($oldSha -eq $Commit) {
     }
 }
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
-# Preserve the previous image BEFORE building :latest. A preparatory build may
-# already have displaced its tag, leaving only the still-running old container.
-# Recover only from its exact checkout and demand byte-identical runtime files.
+# Preserve the previous immutable image before selecting the candidate :latest.
+# A missing rollback image is a NO-GO: Windows must never compile a replacement.
+# Restore the original GitHub-built image before retrying.
 & $docker image inspect $oldImage --format '{{.Id}}' 2>$null | Out-Null
-if ($LASTEXITCODE -eq 0) {
-    & $docker image tag $oldImage $rollbackTag
-    Assert-Exit 'preserve previous image'
-} else {
-    if ($Service -ne 'temporal-worker') {
-        throw 'Previous image absent: recovery is not certified for this service'
-    }
-    Write-Output "ROLLBACK_RECOVERY=REBUILD_PREVIOUS_SOURCE PREVIOUS_SHA=$oldSha"
-    & $docker @previousArgs config --quiet
-    Assert-Exit 'previous Compose config'
-    & $docker @previousArgs build --quiet $Service
-    Assert-Exit 'rebuild previous image'
-    $recoveredImage = $project + '-' + $Service + ':latest'
-    # Create, but never run, a disposable verifier. No provider secret is copied
-    # into the image and no second Compose project or persistent service is made.
-    $verifier = (& $docker create --network none --entrypoint /bin/true $recoveredImage | Out-String).Trim()
-    Assert-Exit 'create recovered-image verifier'
-    $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("alegria-rollback-" + [guid]::NewGuid().ToString('n'))
-    New-Item -ItemType Directory -Path $scratch -Force | Out-Null
-    try {
-        foreach ($file in @(
-            'usr/local/bin/temporal_worker',
-            'usr/local/bin/temporal_starter',
-            'usr/local/bin/cli_tools',
-            'app/automation/deploy_seo_static_cloudflare.py',
-            'app/automation/check_first_site_release.py',
-            'app/automation/check_public_http_readback.py',
-            'app/automation/check_public_static_output.py'
-        )) {
-            $live = Join-Path $scratch 'live'
-            $rebuilt = Join-Path $scratch 'rebuilt'
-            & $docker cp ($target + ':/' + $file) $live
-            Assert-Exit "read running worker file $file"
-            & $docker cp ($verifier + ':/' + $file) $rebuilt
-            Assert-Exit "read recovered worker file $file"
-            if ((Get-FileHash $live -Algorithm SHA256).Hash -ne
-                (Get-FileHash $rebuilt -Algorithm SHA256).Hash) {
-                throw "Rollback mismatch in $file; keep current worker running"
-            }
-            Remove-Item -LiteralPath $live,$rebuilt -Force
-        }
-        & $docker image tag $recoveredImage $rollbackTag
-        Assert-Exit 'preserve verified recovered image'
-        Write-Output "ROLLBACK_RECOVERY=PASS CHECKED_FILES=7"
-    } finally {
-        & $docker rm $verifier | Out-Null
-        Remove-Item -LiteralPath $scratch -Force -Recurse
-    }
+if ($LASTEXITCODE -ne 0) {
+    throw "ROLLBACK_IMAGE_MISSING: $oldImage for $Service. Restore the signed GitHub image; local Windows builds are prohibited."
 }
+& $docker image tag $oldImage $rollbackTag
+Assert-Exit 'preserve previous image'
 # The rollback tag is now immutable across the candidate :latest selection.
-# The old container's .Image can be absent from the local image store; a verified
-# rebuild can have a different ID. Compare post-rollback state to this tag.
 $rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'rollback guard: verified image absent'
 if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }

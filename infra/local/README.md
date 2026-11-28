@@ -83,9 +83,15 @@ It verifies the resulting eight runtime containers. If the old
 project's volumes or project name already exist, use `Update` or a **new**
 Compose project name for another clean installation; a repeat of `Install`
 never silently reuses a previous database.
+After `Remove`, choose e.g. `-Project alegria-site-clean2` for the next
+fresh install and use that same `-Project` for subsequent `Status`, `Update`,
+and `Remove` commands. This deliberately leaves each previous volume set
+available for recovery.
 
 `Update` delegates to the existing guarded `windows_staging.ps1` release
-promotions and does not run database migrations. Incompatible schema changes
+promotions. If a previous rollback image is absent, it refuses the update and
+requires restoring the original GitHub-built image; **no Windows rebuild
+fallback** is allowed. It does not run database migrations. Incompatible schema changes
 still require a separately tested migration or an explicit new clean install.
 
 `Remove` uses `docker compose down --remove-orphans` only for the exact project
