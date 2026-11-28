@@ -53,12 +53,25 @@ TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
 TEMPORAL_QDRANT_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_qdrant_effects" / "src"
 TEMPORAL_DATAFORSEO_SRC = RUST_ROOT / "services" / "temporal_dataforseo" / "src"
 TEMPORAL_ACQUISITION_PURE_SRC = RUST_ROOT / "services" / "temporal_acquisition_pure" / "src"
+TEMPORAL_SEO_STEPS_PURE_SRC = RUST_ROOT / "services" / "temporal_seo_steps_pure" / "src"
+TEMPORAL_TRUTH_PURE_SRC = RUST_ROOT / "services" / "temporal_truth_pure" / "src"
+TEMPORAL_WEB_FETCH_SRC = RUST_ROOT / "services" / "temporal_web_fetch" / "src"
 ACQUISITION_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_acquisition_pure" / "Cargo.toml").resolve()
 ACQUISITION_PURE_OWNER_SOURCE_FILES = frozenset({
     (TEMPORAL_ACQUISITION_PURE_SRC / "main.rs").resolve(),
 })
 ACQUISITION_PURE_OWNER_TEMPORAL_SDKS = frozenset({
     "temporalio-sdk", "temporalio-client", "temporalio-common", "temporalio-macros",
+})
+SEO_STEPS_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_seo_steps_pure" / "Cargo.toml").resolve()
+TRUTH_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_truth_pure" / "Cargo.toml").resolve()
+WEB_FETCH_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_web_fetch" / "Cargo.toml").resolve()
+PURE_OWNER_RUNTIME_SOURCE_FILES = frozenset({
+    (TEMPORAL_SEO_STEPS_PURE_SRC / "main.rs").resolve(),
+    (TEMPORAL_TRUTH_PURE_SRC / "main.rs").resolve(),
+})
+WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES = frozenset({
+    (TEMPORAL_WEB_FETCH_SRC / "transport.rs").resolve(),
 })
 OPERATION_PROTOCOL_MANIFEST = RUST_ROOT / "crates" / "operation_protocol" / "Cargo.toml"
 PG_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml"
@@ -107,6 +120,9 @@ QDRANT_EFFECTS_SDK_SOURCE_FILES = frozenset({
 DATAFORSEO_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_dataforseo" / "Cargo.toml").resolve()
 DATAFORSEO_OWNER_SOURCE_FILES = frozenset({
     (TEMPORAL_DATAFORSEO_SRC / "main.rs").resolve(),
+})
+DATAFORSEO_PAID_PROVIDER_SOURCE_FILES = frozenset({
+    (TEMPORAL_DATAFORSEO_SRC / "paid_provider.rs").resolve(),
 })
 DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS = frozenset({
     "reqwest", "temporalio-sdk", "temporalio-client",
@@ -173,6 +189,9 @@ MANIFEST_DEP_EXCEPTIONS = {
     QDRANT_EFFECTS_MANIFEST.resolve(): QDRANT_EFFECTS_RUNTIME_SDKS,
     DATAFORSEO_OWNER_MANIFEST: DATAFORSEO_OWNER_DIRECT_EXTERNAL_SDKS,
     ACQUISITION_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    SEO_STEPS_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    TRUTH_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    WEB_FETCH_OWNER_MANIFEST: frozenset({"reqwest"}),
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
         "qdrant-client",
@@ -486,6 +505,9 @@ def dataforseo_owner_direct_sdk_allowed(file_path: Path, pattern: re.Pattern[str
     ) or exact_temporal_sdk_source_allowed(
         file_path, pattern, exact_files=DATAFORSEO_ISSUER_SOURCE_FILES,
         sdk_set=DATAFORSEO_ISSUER_DIRECT_EXTERNAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=DATAFORSEO_PAID_PROVIDER_SOURCE_FILES,
+        sdk_set=frozenset({"reqwest"}),
     )
 
 
@@ -493,6 +515,16 @@ def acquisition_pure_owner_direct_sdk_allowed(file_path: Path, pattern: re.Patte
     return exact_temporal_sdk_source_allowed(
         file_path, pattern, exact_files=ACQUISITION_PURE_OWNER_SOURCE_FILES,
         sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    )
+
+
+def new_site_architect_owner_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=PURE_OWNER_RUNTIME_SOURCE_FILES,
+        sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES,
+        sdk_set=frozenset({"reqwest"}),
     )
 
 
@@ -529,6 +561,8 @@ def main() -> int:
             if dataforseo_owner_direct_sdk_allowed(file_path, pat):
                 continue
             if acquisition_pure_owner_direct_sdk_allowed(file_path, pat):
+                continue
+            if new_site_architect_owner_sdk_allowed(file_path, pat):
                 continue
             if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
                 f"{sdk.replace('-', '_')}::" in pat.pattern
@@ -643,6 +677,21 @@ def main() -> int:
             violations.append(
                 f"native DataForSEO effect owner links unrelated `{dependency}`"
             )
+        for manifest in (SEO_STEPS_PURE_OWNER_MANIFEST, TRUTH_PURE_OWNER_MANIFEST):
+            pure_closure, _ = workspace_dependency_closure(manifest)
+            for dependency in sorted(pure_closure & (
+                DAG_PROVIDER_CRATES | (NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME - {"seo_domain"})
+                | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+            )):
+                violations.append(
+                    f"{manifest.parent.name} pure owner links effect/parent `{dependency}`"
+                )
+        web_closure, _ = workspace_dependency_closure(WEB_FETCH_OWNER_MANIFEST)
+        for dependency in sorted(web_closure & (
+            DAG_PROVIDER_CRATES | NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME
+            | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+        )):
+            violations.append(f"web fetch transport links effect/parent `{dependency}`")
         mixed_e2e_closure, _ = workspace_dependency_closure(
             QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml"
         )

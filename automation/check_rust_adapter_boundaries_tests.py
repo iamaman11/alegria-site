@@ -11,9 +11,15 @@ from check_rust_adapter_boundaries import (
     ACQUISITION_PURE_OWNER_MANIFEST,
     ACQUISITION_PURE_OWNER_SOURCE_FILES,
     ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    DATAFORSEO_PAID_PROVIDER_SOURCE_FILES,
     DELIVERY_MANIFEST,
     DELIVERY_FORBIDDEN_LOCAL_OWNERS,
     MANIFEST_DEP_EXCEPTIONS,
+    PURE_OWNER_RUNTIME_SOURCE_FILES,
+    SEO_STEPS_PURE_OWNER_MANIFEST,
+    TRUTH_PURE_OWNER_MANIFEST,
+    WEB_FETCH_OWNER_MANIFEST,
+    WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES,
     OUTBOX_MANIFEST,
     PG_E2E_DIR,
     PG_E2E_SRC,
@@ -29,6 +35,8 @@ from check_rust_adapter_boundaries import (
     RUST_ROOT,
     VOYAGE_MANIFEST,
     acquisition_pure_owner_direct_sdk_allowed,
+    dataforseo_owner_direct_sdk_allowed,
+    new_site_architect_owner_sdk_allowed,
     pg_e2e_direct_temporal_sdk_allowed,
     qdrant_e2e_direct_temporal_sdk_allowed,
     qdrant_runtime_direct_temporal_sdk_allowed,
@@ -59,6 +67,45 @@ class NativeAcquisitionPureOwnerBoundaryTests(unittest.TestCase):
         ):
             self.assertFalse(acquisition_pure_owner_direct_sdk_allowed(
                 source, re.compile(r"\buse\s+temporalio_sdk::")))
+
+
+class SiteArchitectNewOwnerSdkBoundaryTests(unittest.TestCase):
+    def test_pure_workers_get_only_exact_native_temporal_sdk_access(self) -> None:
+        self.assertEqual(len(PURE_OWNER_RUNTIME_SOURCE_FILES), 2)
+        for manifest in (SEO_STEPS_PURE_OWNER_MANIFEST, TRUTH_PURE_OWNER_MANIFEST):
+            self.assertEqual(MANIFEST_DEP_EXCEPTIONS[manifest],
+                             ACQUISITION_PURE_OWNER_TEMPORAL_SDKS)
+        for source in PURE_OWNER_RUNTIME_SOURCE_FILES:
+            self.assertEqual(source.name, "main.rs")
+            for sdk in ACQUISITION_PURE_OWNER_TEMPORAL_SDKS:
+                self.assertTrue(new_site_architect_owner_sdk_allowed(
+                    source, re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
+            self.assertFalse(new_site_architect_owner_sdk_allowed(
+                source, re.compile(r"\buse\s+reqwest::")))
+        for path in (
+            SEO_STEPS_PURE_OWNER_MANIFEST.parent / "src" / "other.rs",
+            RUST_ROOT / "crates" / "seo_steps" / "src" / "owner_pure_operations.rs",
+        ):
+            self.assertFalse(new_site_architect_owner_sdk_allowed(
+                path, re.compile(r"\btemporalio_sdk::")))
+
+    def test_web_transport_and_paid_client_do_not_grant_sibling_sdk_access(self) -> None:
+        self.assertEqual(MANIFEST_DEP_EXCEPTIONS[WEB_FETCH_OWNER_MANIFEST], {"reqwest"})
+        self.assertEqual(len(WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES), 1)
+        self.assertEqual(len(DATAFORSEO_PAID_PROVIDER_SOURCE_FILES), 1)
+        for source in WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES:
+            self.assertTrue(new_site_architect_owner_sdk_allowed(
+                source, re.compile(r"\buse\s+reqwest::")))
+            self.assertFalse(new_site_architect_owner_sdk_allowed(
+                source, re.compile(r"\btemporalio_sdk::")))
+        for source in DATAFORSEO_PAID_PROVIDER_SOURCE_FILES:
+            self.assertTrue(dataforseo_owner_direct_sdk_allowed(
+                source, re.compile(r"\buse\s+reqwest::")))
+            self.assertFalse(dataforseo_owner_direct_sdk_allowed(
+                source, re.compile(r"\btemporalio_client::")))
+        self.assertFalse(new_site_architect_owner_sdk_allowed(
+            WEB_FETCH_OWNER_MANIFEST.parent / "src" / "archive.rs",
+            re.compile(r"\buse\s+reqwest::")))
 
 
 class PgE2eSdkBoundaryTests(unittest.TestCase):
