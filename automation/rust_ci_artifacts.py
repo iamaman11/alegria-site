@@ -49,6 +49,11 @@ KINDS = {
     # existing architecture owner job: pure Temporal Child and source-only SQL
     # issuer. Each filename is pinned and hash-verified separately at install.
     "acquisition_pure": ("temporal_acquisition_pure", "acquisition_source_issuer"),
+    # Independently built native pure owners. Each has its own strictly
+    # content-verified artifact, Task Queue and trusted V3 route, never a
+    # synthetic path through the generic parent binary.
+    "seo_steps_pure": ("temporal_seo_steps_pure",),
+    "truth_pure": ("temporal_truth_pure",),
     "one_step_request_issuer": ("one_step_request_issuer",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")

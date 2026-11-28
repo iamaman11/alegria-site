@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 62)
+                             for _, _, _, count in rows), 64)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -180,6 +180,7 @@ class ImpactFixtures(unittest.TestCase):
                 "temporal_qdrant_v8", "temporal_mixed_v6_contract", "temporal_mixed_v7_produced",
                 "temporal_mixed_v2_native", "dataforseo_native_v2",
                 "acquisition_native_v2", "one_step_grant_native_v1",
+                "seo_steps_native_v2", "truth_native_v2",
             },
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
@@ -306,6 +307,19 @@ class ImpactFixtures(unittest.TestCase):
             ("acquisition_native_v2", "acquisition_native_v2_", 2),
             ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
         ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_seo_steps"], (
+            ("seo_steps_native_v2", "seo_steps_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_truth"], (
+            ("truth_native_v2", "truth_native_v2_", 1),
+        ))
+        for name, owner_bin in (
+            ("seo_steps_native_v2", "temporal_seo_steps_pure"),
+            ("truth_native_v2", "temporal_truth_pure"),
+        ):
+            self.assertIn(owner_bin, SUITE_OWNERS[name]["prepare"])
+            self.assertIn(owner_bin, SUITE_OWNERS[name]["runtime_binaries"].values())
+            self.assertEqual(SUITE_OWNERS[name]["command"][7], f"{name}_")
         self.assertEqual(
             SUITE_OWNERS["acquisition_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN"],
             "acquisition_source_issuer",
@@ -446,15 +460,22 @@ class ImpactFixtures(unittest.TestCase):
             ("acquisition_native_v2", "acquisition_native_v2_", 2),
             ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
         ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_seo_steps"], (
+            ("seo_steps_native_v2", "seo_steps_native_v2_", 1),
+        ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_truth"], (
+            ("truth_native_v2", "truth_native_v2_", 1),
+        ))
         self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], (
             "temporal_mixed_v6", "temporal_mixed_v7",
             "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+            "temporal_seo_steps", "temporal_truth",
         ))
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"],
                          ("temporal_qdrant",))
 
-    def test_full_real_e2e_shards_cover_all_63_including_optional_certification(self) -> None:
+    def test_full_real_e2e_shards_cover_all_65_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -473,7 +494,7 @@ class ImpactFixtures(unittest.TestCase):
             sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 42
         )
         self.assertEqual(
-            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 21
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 23
         )  # Architecture regressions incl. live mixed E2E, catalog and Truth cert.
         self.assertEqual(
             [(name, test_filter) for rows in shards.values()
@@ -531,6 +552,43 @@ class ImpactFixtures(unittest.TestCase):
                     assignments["architecture-and-rust"], suite_commands_for_report(report),
                 )
 
+    def test_new_pure_owner_changes_select_independent_real_temporal_replay_suites(self) -> None:
+        from ci_impact import (
+            SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES, TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+        )
+
+        owners = {
+            **self.owners,
+            "app/rust/services/temporal_seo_steps_pure": "temporal_seo_steps_pure",
+            "app/rust/services/temporal_truth_pure": "temporal_truth_pure",
+            "app/rust/crates/truth_domain": "truth_domain",
+        }
+        reverse = {
+            **self.reverse,
+            "temporal_seo_steps_pure": set(),
+            "temporal_truth_pure": set(),
+            "truth_domain": set(),
+        }
+        for changed, suite in (
+            ("app/rust/services/temporal_seo_steps_pure/src/main.rs", "seo_steps_native_v2"),
+            ("app/rust/crates/seo_steps/src/operation_owner_schema_json.rs", "seo_steps_native_v2"),
+            ("app/rust/services/temporal_truth_pure/src/main.rs", "truth_native_v2"),
+            ("app/rust/crates/truth_domain/src/operations.rs", "truth_native_v2"),
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertIn(suite, report["selected_suites"])
+                command = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])[suite]
+                self.assertIn(f"{suite}_", command)
+                self.assertEqual(
+                    SUITE_OWNERS[suite]["runtime_binaries"],
+                    SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES
+                    if suite == "seo_steps_native_v2" else TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+                )
+                self.assertEqual(E2E_SHARD_RUNS[
+                    "temporal_seo_steps" if suite == "seo_steps_native_v2" else "temporal_truth"
+                ][0][-1], 1)
+
     def test_real_orchestrator_edit_selects_pure_and_v4_parent_child_replay_without_old_workers(self) -> None:
         from ci_impact import PURE_V3_E2E_PREPARE, PURE_V3_E2E_RUNTIME_BINARIES, WORKER_E2E_PREPARE
 
@@ -542,13 +600,13 @@ class ImpactFixtures(unittest.TestCase):
         )
         self.assertEqual(impact["scope"], "scoped")
         self.assertEqual(impact["selected_suites"], [
-            "acquisition_native_v2", "dataforseo_native_v2", "one_step_grant_native_v1", "pg_effect_v3", "pure_dag_v3", "temporal_mixed_v2_native",
-            "temporal_mixed_v7_produced", "temporal_qdrant_v8",
+            "acquisition_native_v2", "dataforseo_native_v2", "one_step_grant_native_v1", "pg_effect_v3", "pure_dag_v3", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
         ])
         architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
         self.assertEqual(set(architecture), {
-            "acquisition_native_v2", "dataforseo_native_v2", "one_step_grant_native_v1", "pure_dag_v3", "pg_effect_v3", "temporal_mixed_v2_native",
-            "temporal_mixed_v7_produced", "temporal_qdrant_v8",
+            "acquisition_native_v2", "dataforseo_native_v2", "one_step_grant_native_v1", "pure_dag_v3", "pg_effect_v3", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
         })
         self.assertIn("pure_v3_", architecture["pure_dag_v3"])
         self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)

@@ -290,7 +290,7 @@ async fn dataforseo_paid_owner_v2_requires_one_use_budget_and_never_reposts_unkn
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "GRANT INSERT ON pipeline.dataforseo_paid_owner_attempts_v2,
              pipeline.dataforseo_paid_owner_posted_tasks_v2 TO {worker};"
-    ))
+    )))
     .execute(&pg.pool).await.unwrap();
     assert!(sqlx::query(
         "INSERT INTO pipeline.dataforseo_paid_owner_attempts_v2(admission_id,tenant_id)

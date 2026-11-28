@@ -208,6 +208,27 @@ class RustArtifactTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "digest"):
                 artifacts.install("one_step_request_issuer", SHA, bundle, target=self.root / "forged")
 
+    def test_independent_pure_seo_steps_and_truth_owner_artifacts_are_exact_sha_pinned(self) -> None:
+        with patch.object(artifacts, "TARGET", self.target):
+            for kind, executable in (
+                ("seo_steps_pure", "temporal_seo_steps_pure"),
+                ("truth_pure", "temporal_truth_pure"),
+            ):
+                with self.subTest(kind=kind):
+                    source = self.executable(executable, f"compiled {kind} owner".encode())
+                    bundle = self.root / f"{kind}_bundle"
+                    manifest = artifacts.package(kind, SHA, bundle)
+                    self.assertEqual(set(manifest["files"]), {executable})
+                    for foreign in ("v3", "acquisition_pure", "dataforseo_effects"):
+                        with self.subTest(foreign=foreign), self.assertRaisesRegex(ValueError, "manifest"):
+                            artifacts.install(foreign, SHA, bundle, target=self.root / f"wrong_{kind}_{foreign}")
+                    destination = self.root / f"installed_{kind}"
+                    artifacts.install(kind, SHA, bundle, target=destination)
+                    self.assertEqual((destination / executable).read_bytes(), source.read_bytes())
+                    (bundle / executable).write_bytes(b"forged owner binary")
+                    with self.assertRaisesRegex(ValueError, "digest"):
+                        artifacts.install(kind, SHA, bundle, target=self.root / f"tampered_{kind}")
+
     def test_rejects_manifest_confusion_symlink_and_extra_payload(self) -> None:
         source = self.executable("real")
         bundle = self.root / "bundle"

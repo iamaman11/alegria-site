@@ -354,17 +354,17 @@ jobs:
         run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
 
       # Compile the independently deployed paid-provider owner, pure Temporal
-      # Acquisition Child, raw-HTML source issuer and independently credentialed
-      # one-step request issuer
+      # Acquisition/SEO Steps/Truth Children, raw-HTML source issuer and
+      # independently credentialed one-step request issuer
       # as real executables in this already-required compiler job. Transfer
       # their exact SHA-bound bytes into the native Temporal E2E runner; no
       # second owner compilation in the E2E job.
-      - name: Compile independent DataForSEO, pure Acquisition and source issuer binaries
+      - name: Compile independent DataForSEO and three pure owner groups with source issuers
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
         working-directory: app/rust
-        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
+        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
 
       # Reuse the independently compiled owner as an exact-source artifact.
       # The pure Temporal/PG binary job must never recompile or transitively
@@ -395,6 +395,34 @@ jobs:
         with:
           name: rust-e2e-acquisition-pure-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/acquisition_pure/
+          if-no-files-found: error
+
+      - name: Pack independent pure SEO Steps owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind seo_steps_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/seo_steps_pure
+
+      - name: Publish independently compiled pure SEO Steps E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-seo-steps-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/seo_steps_pure/
+          if-no-files-found: error
+
+      - name: Pack independent pure Truth owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind truth_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/truth_pure
+
+      - name: Publish independently compiled pure Truth E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-truth-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/truth_pure/
           if-no-files-found: error
 
       # One extra typed issuer, built in the existing compiler job, never
@@ -1371,7 +1399,7 @@ jobs:
 
   # Provider-free and modern Temporal proofs start after their actual binary
   # compilers. Only the historical Qdrant shard needs the slower legacy DAG.
-  # All six source-owned E2E shards still run and remain required by the gate.
+  # All source-owned E2E shards still run and remain required by the gate.
   rust-qdrant-temporal-e2e:
     name: rust-qdrant-temporal-e2e (${{ matrix.shard }})
     needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-v3-binaries]
@@ -1418,6 +1446,16 @@ jobs:
         with:
           name: rust-e2e-one-step-request-issuer-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/one_step_request_issuer
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_seo_steps'
+        with:
+          name: rust-e2e-seo-steps-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/seo_steps_pure
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_truth'
+        with:
+          name: rust-e2e-truth-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/truth_pure
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
         run: |
           set -euo pipefail
@@ -1431,6 +1469,8 @@ jobs:
             temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3) ;;
             temporal_dataforseo) kinds=(v3 dataforseo_effects) ;;
             temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer) ;;
+            temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
+            temporal_truth) kinds=(v3 truth_pure) ;;
             *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
           esac
           for kind in "${kinds[@]}"; do
@@ -1456,7 +1496,7 @@ jobs:
             --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
 
   # Historical Qdrant replay alone needs the legacy parent. Its separate
-  # runner cannot delay the five independent modern Temporal matrix shards.
+  # runner cannot delay the independent modern Temporal matrix shards.
   rust-qdrant-temporal-legacy-e2e:
     name: rust-qdrant-temporal-legacy-e2e (${{ matrix.shard }})
     needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, rust-e2e-qdrant-effects-binaries, rust-e2e-legacy-binaries]

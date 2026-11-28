@@ -56,7 +56,7 @@ E2E_PATHS = {
 # Actual YAML step labels, deliberately not regex-based guesses about whether
 # Cargo ran. These are observable GitHub step durations, NOT per-rustc CPU time.
 COMPILER_STEPS = {
-    "architecture-and-rust": "Compile independent DataForSEO, pure Acquisition and source issuer binaries",
+    "architecture-and-rust": "Compile independent DataForSEO and three pure owner groups with source issuers",
     "rust-e2e-temporal-harness": "Compile real Temporal/full-infra owner E2E test executable",
     "rust-e2e-legacy-binaries": "Compile canonical Worker, Outbox and historical Temporal in one Cargo pass",
     "rust-e2e-qdrant-temporal-harness": "Compile distinct live Temporal/PG/Qdrant E2E test executable",

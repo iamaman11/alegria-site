@@ -390,6 +390,24 @@ ACQUISITION_NATIVE_V2_RUNTIME_BINARIES = {
     # the Acquisition shard installs it without a second Rust compilation.
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
+SEO_STEPS_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_seo_steps_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_seo_steps_pure",
+)
+SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_SEO_STEPS_PURE_OWNER_BIN": "temporal_seo_steps_pure",
+}
+TRUTH_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_truth_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_truth_pure",
+)
+TRUTH_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_TRUTH_PURE_OWNER_BIN": "temporal_truth_pure",
+}
 ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
@@ -864,6 +882,65 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "acquisition_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # Three distinct compiled owner DTOs with native ValidateOnly, single-node
+    # Temporal Children, owner V3 schema pins, negative admission and replay.
+    # This is a real disposable-Temporal proof, never a public Start grant.
+    "seo_steps_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
+            "app/rust/crates/seo_steps/src/owner_pure_operations.rs",
+            "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+            "app/rust/crates/seo_steps/src/procedural_extraction_step.rs",
+            "app/rust/crates/seo_steps/src/serp_normalize_step.rs",
+            "app/rust/crates/seo_steps/src/opportunity_build_step.rs",
+            "app/rust/crates/seo_steps/src/seo_identity.rs",
+            "app/rust/crates/seo_steps/src/seo_step_support.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_seo_steps_pure/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"seo_steps", "temporal_seo_steps_pure", "operation_protocol",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": SEO_STEPS_NATIVE_V2_PREPARE,
+        "runtime_binaries": SEO_STEPS_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "seo_steps_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
+    # Two separately selectable pure Truth operations: real parent/Child
+    # History + exact owner schema, negative DTO and native SDK replay.
+    "truth_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_truth_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_truth_pure/",
+            "app/rust/crates/truth_domain/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"truth_domain", "temporal_truth_pure", "operation_protocol",
+                        "trusted_owner_catalog", "temporal_orchestrator",
+                        "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": TRUTH_NATIVE_V2_PREPARE,
+        "runtime_binaries": TRUTH_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "truth_native_v2_", "--locked", "--", "--nocapture",
         ),
     },
     "one_step_grant_native_v1": {
@@ -1363,7 +1440,8 @@ FULL_VERIFY_E2E_SUITES = frozenset({
 E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
     "vector", "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
-    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition", "truth_certification",
+    "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+    "temporal_seo_steps", "temporal_truth", "truth_certification",
 )
 E2E_VERIFY_SHARDS = (
     "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
@@ -1377,6 +1455,7 @@ E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
 E2E_QDRANT_TEMPORAL_SHARDS = (
     "temporal_mixed_v6", "temporal_mixed_v7",
     "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
+    "temporal_seo_steps", "temporal_truth",
 )
 E2E_QDRANT_TEMPORAL_LEGACY_SHARDS = ("temporal_qdrant",)
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
@@ -1436,6 +1515,8 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("acquisition_native_v2", "acquisition_native_v2_", 2),
         ("one_step_grant_native_v1", "one_step_grant_native_v1_", 1),
     ),
+    "temporal_seo_steps": (("seo_steps_native_v2", "seo_steps_native_v2_", 1),),
+    "temporal_truth": (("truth_native_v2", "truth_native_v2_", 1),),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
     ),
