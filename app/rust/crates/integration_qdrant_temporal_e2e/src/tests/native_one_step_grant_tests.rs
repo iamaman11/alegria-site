@@ -19,6 +19,12 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         Operation, OperationDagReceiptV1, PlanHash, SiteArchitectExpectedStartV1,
         OPERATION_DAG_PARENT_QUEUE_V2, SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
     };
+    use seo_steps::operation_owner_schema_json::seo_steps_owner_schemas;
+    use seo_steps::owner_pure_operations::{
+        BuildSeoOpportunities, ExtractProceduralRules, NormalizeSerpQueries,
+    };
+    use truth_domain::operation_owner_schema_json::truth_pure_operation_owner_schemas;
+    use truth_domain::operations::{DetectContradictionsV1, JudgeCompletenessV1};
 
     #[derive(serde::Serialize)]
     struct ExactStartIntent<'a> {
@@ -149,15 +155,73 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let contract = routes.catalog().contract(&run.pinned_routes[0].operation).unwrap();
     let owner_pin = &schemas[&contract.reference];
     owner_pin.validate(contract).unwrap();
+    // The exact same granted Start bridge must also serve separately compiled
+    // pure SEO and Truth owners. Only trusted source contracts are installed;
+    // source-free experiments are not misrepresented as authenticated facts.
+    let mut pure_cases = vec![
+        seo_steps_native_v2_case(
+            ExtractProceduralRules::contract(),
+            br#"{"section_id":"section-1","raw_text":"unverified context","mentions":[{"raw_text":"80 EUR","entity_type":"fee","has_numeric":true,"is_central":true,"confidence":0.9}]}"#.to_vec(),
+            &build_id,
+        ),
+        seo_steps_native_v2_case(
+            NormalizeSerpQueries::contract(),
+            br#"{"run_id":"grant-run","queries":["spain visa fee"]}"#.to_vec(),
+            &build_id,
+        ),
+        seo_steps_native_v2_case(
+            BuildSeoOpportunities::contract(),
+            br#"{"serp_patterns":[{"serp_pattern_key":"p1","query_batch_key":"q1","scope_signature":"","query":"spain visa fee","pattern_type":"query_intent","dominant_intent":"informational","reliability_score":0.75,"evidence_ref":"q1","status":"active"}]}"#.to_vec(),
+            &build_id,
+        ),
+        truth_native_v2_case(
+            JudgeCompletenessV1::contract(),
+            br#"{"section_id":"grant-fee","raw_text":"Fee EUR 25","source_numeric_tokens":["25"],"extracted_numeric_tokens":[],"extracted_rule_keys":[]}"#.to_vec(),
+            &build_id,
+        ),
+        truth_native_v2_case(
+            DetectContradictionsV1::contract(),
+            br#"{"run_id":"grant-truth","facts":[{"subject_key":"fee","predicate_key":"amount","value_normalized":"80 EUR","source_key":"source-a","confidence":0.96},{"subject_key":"fee","predicate_key":"amount","value_normalized":"120 EUR","source_key":"source-b","confidence":0.94}]}"#.to_vec(),
+            &build_id,
+        ),
+    ];
+    for (pure_run, pure_routes) in &mut pure_cases {
+        pure_run.plan.scope.tenant_id = tenant.to_owned();
+        for external in pure_run.plan.external_artifacts.values_mut() {
+            external.scope.tenant_id = tenant.to_owned();
+        }
+        for admitted in pure_run.admitted.values_mut() {
+            admitted.scope.tenant_id = tenant.to_owned();
+        }
+        pure_run.plan.hash = PlanHash(String::new());
+        pure_run.plan = pure_run.plan.clone().seal(pure_routes.catalog()).unwrap();
+        pure_routes.validate_run_routes(pure_run).unwrap();
+    }
+    let seo_pins = seo_steps_owner_schemas().unwrap();
+    let truth_pins = truth_pure_operation_owner_schemas().unwrap();
+    let mut catalog_entries = vec![serde_json::json!({
+        "contract": contract,
+        "route": run.pinned_routes[0],
+        "parameter_schema": {"type":"object","additionalProperties":false},
+        "owner_schema": owner_pin,
+    })];
+    for (pure_run, pure_routes) in &pure_cases {
+        let route = &pure_run.pinned_routes[0];
+        let pure_contract = pure_routes.catalog().contract(&route.operation).unwrap();
+        let pin = seo_pins.get(&route.operation)
+            .or_else(|| truth_pins.get(&route.operation)).unwrap();
+        pin.validate(pure_contract).unwrap();
+        catalog_entries.push(serde_json::json!({
+            "contract": pure_contract,
+            "route": route,
+            "parameter_schema": {"type":"object","additionalProperties":false},
+            "owner_schema": pin,
+        }));
+    }
     let trusted_catalog = SiteArchitectV2CiRootCatalog::new();
     trusted_catalog.install(&serde_json::json!({
         "schema_revision": 3,
-        "entries": [{
-            "contract": contract,
-            "route": run.pinned_routes[0],
-            "parameter_schema": {"type":"object","additionalProperties":false},
-            "owner_schema": owner_pin,
-        }],
+        "entries": catalog_entries,
     }));
 
     let nonce = Uuid::new_v4().simple().to_string();
@@ -322,6 +386,20 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         .env("TEMPORAL_NAMESPACE", &temporal.namespace)
         .env_remove("DATABASE_URL")
         .spawn().expect("strict independent Acquisition ValidateOnly and owner")));
+    let _seo_owner = ChildGuard(Some(Command::new(binary("INTEGRATION_SEO_STEPS_PURE_OWNER_BIN"))
+        .env("ALEGRIA_ENABLE_SEO_STEPS_PURE_OWNER_V1", "true")
+        .env("WORKER_BUILD_ID", &build_id)
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("strict independent SEO ValidateOnly and owner")));
+    let _truth_owner = ChildGuard(Some(Command::new(binary("INTEGRATION_TRUTH_PURE_OWNER_BIN"))
+        .env("ALEGRIA_ENABLE_TRUTH_PURE_OWNER_V1", "true")
+        .env("WORKER_BUILD_ID", &build_id)
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("strict independent Truth ValidateOnly and owner")));
     let client = connect_client(&temporal.temporal_url,
         format!("ci-one-step-grant-{request_id}"), &temporal.namespace).await.unwrap();
 
@@ -509,4 +587,152 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     ).bind(request_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(after_status_state, final_state,
         "status reads cannot mutate a consumed one-shot grant or re-open Start");
+
+    // Five separately routable pure operations now cross exactly the same
+    // independently authenticated, tenant-bound SQL grant -> one-use reserve
+    // -> native Temporal Start path. This is NOT a remote ChatGPT OAuth test,
+    // source attestation, or permission for a paid provider effect.
+    for (index, (pure_run, pure_routes)) in pure_cases.iter().enumerate() {
+        let pure_id = Uuid::parse_str(&pure_run.plan.scope.run_id).unwrap();
+        let pure_parent_id = operation_dag_parent_workflow_id_v2(&pure_run.plan.scope.run_id);
+        let pure_request_id = Uuid::new_v4();
+        let pure_approval_id = Uuid::new_v4();
+        let pure_expected = expected_for(pure_run);
+        let pure_contract = pure_routes.catalog()
+            .contract(&pure_run.pinned_routes[0].operation).unwrap();
+        let pure_deadline = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 240;
+        sqlx::query(
+            "INSERT INTO pipeline.operation_dag_business_runs_v1
+             (run_id,tenant_id,context_key,plan_hash,parent_workflow_id,expires_at)
+             VALUES ($1,$2,$3,$4,$5,clock_timestamp()+interval '15 minutes')",
+        ).bind(pure_id).bind(tenant).bind(&context)
+         .bind(pure_run.plan.hash.as_str()).bind(&pure_parent_id)
+         .execute(&business_pool).await.expect("independent business root for pure Start");
+        sqlx::query(
+            "INSERT INTO pipeline.operation_dag_one_step_request_approvals_v1
+             (authorization_event_id,request_id,run_id,tenant_id,principal_id,policy_id,
+              context_key,operation_id,operation_revision,parent_workflow_id,plan_hash,
+              expected_start,limits,expires_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,
+                     clock_timestamp()+interval '5 minutes')",
+        ).bind(pure_approval_id).bind(pure_request_id).bind(pure_id).bind(tenant)
+         .bind("ci-authenticated-user").bind("ci-safe-zero-cost-v1").bind(&context)
+         .bind(pure_contract.reference.id.as_str())
+         .bind(i32::try_from(pure_contract.reference.revision).unwrap())
+         .bind(&pure_parent_id).bind(pure_run.plan.hash.as_str())
+         .bind(serde_json::to_string(&pure_expected).unwrap())
+         .bind(serde_json::to_string(&limits).unwrap())
+         .execute(&approver_pool).await.expect("distinct pure-operation user approval");
+
+        let pure_operator_catalog = mixed_v6_governance_issuer_catalog(pure_run, pure_routes);
+        let issue_intent = private.request(&format!("pure-user-approved-{index}"),
+            &serde_json::to_string(&RequestIssuerIntent {
+                schema_revision: 1,
+                request_id: pure_request_id,
+                authorization_event_id: pure_approval_id,
+                run: pure_run,
+                expected: &pure_expected,
+                context_key: &context,
+                expires_at_unix_seconds: pure_deadline as i64,
+            }).unwrap());
+        let issued = Command::new(binary("INTEGRATION_ONE_STEP_REQUEST_ISSUER_BIN"))
+            .arg("--issue-request-v1").arg(&issue_intent)
+            .env("ALEGRIA_ENABLE_ONE_STEP_REQUEST_ISSUER_V1", "true")
+            .env("ONE_STEP_REQUEST_ISSUER_DATABASE_URL_FILE", &request_dsn)
+            .env("ONE_STEP_REQUEST_ISSUER_TRUSTED_CATALOG_FILE", &pure_operator_catalog)
+            .env_remove("DATABASE_URL")
+            .output().expect("separate pure request issuer");
+        assert!(issued.status.success(), "{index}: request issuer: stdout={} stderr={}",
+            String::from_utf8_lossy(&issued.stdout),
+            String::from_utf8_lossy(&issued.stderr));
+        let issued_report: serde_json::Value = serde_json::from_slice(&issued.stdout).unwrap();
+        assert_eq!(issued_report["status"], "one_step_request_issued_not_started");
+
+        let pure_intent = private.request(&format!("pure-start-{index}"),
+            &serde_json::to_string(&GrantedStartIntent {
+                schema_revision: 1,
+                request_id: pure_request_id,
+                intent: ExactStartIntent {
+                    schema_revision: 1,
+                    run: pure_run,
+                    context_key: &context,
+                    expected: &pure_expected,
+                    expires_at_unix_seconds: pure_deadline,
+                },
+            }).unwrap());
+        let pure_signed = operation_protocol::seal_one_step_admission_for_private_fixture_v1(
+            &pure_request_id.to_string(),
+            "https://auth.example.test", "https://mcp.example.test/mcp",
+            "ci-oauth-subject", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64,
+            &Uuid::new_v4().to_string(), &signer_key,
+        );
+        let pure_proof = private.request(&format!("pure-proof-{index}"),
+            &serde_json::to_string(&pure_signed).unwrap());
+        let run_pure_start = |principal: &str, subject: &str| {
+            Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
+                .arg("--operator-start-signed-granted-single-v1")
+                .arg(&pure_proof).arg(&pure_intent)
+                .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START", "true")
+                .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START", "true")
+                .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE", &signer_key_file)
+                .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_ISSUER", "https://auth.example.test")
+                .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_RESOURCE", "https://mcp.example.test/mcp")
+                .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_SUBJECT", subject)
+                .env("SITE_ARCHITECT_SINGLE_V2_TENANT_ID", tenant)
+                .env("SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
+                .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+                .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+                .env("SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE", &pure_operator_catalog)
+                .env("SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE", &operator_dsn)
+                .env("SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID", principal)
+                .env("SITE_ARCHITECT_GRANTED_V1_POLICY_ID", "ci-safe-zero-cost-v1")
+                .env("SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY", &context)
+                .env("SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE", &limits_path)
+                .env_remove("DATABASE_URL")
+                .output().expect("one-use signed pure Start operator")
+        };
+        assert!(!run_pure_start("forged-user", "ci-oauth-subject").status.success(),
+            "{index}: cross-principal request must not authorize Temporal Start");
+        assert!(!run_pure_start("ci-authenticated-user", "forged-subject").status.success(),
+            "{index}: copied SQL grant must not authorize another signed OAuth subject");
+        assert!(client.get_workflow_handle::<UntypedWorkflow>(pure_parent_id.clone())
+            .describe(WorkflowDescribeOptions::builder().build()).await.is_err(),
+            "{index}: forged pure Start must have no server workflow");
+        let started = run_pure_start("ci-authenticated-user", "ci-oauth-subject");
+        assert!(started.status.success(), "{index}: approved pure Start: stdout={} stderr={}",
+            String::from_utf8_lossy(&started.stdout),
+            String::from_utf8_lossy(&started.stderr));
+        let accepted: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+        assert_eq!(accepted["status"],
+            "temporal_start_acknowledged_grant_pending_independent_history");
+        assert!(!run_pure_start("ci-authenticated-user", "ci-oauth-subject").status.success(),
+            "{index}: one approved pure operation may Start exactly once");
+        let pure_parent = client.get_workflow_handle::<UntypedWorkflow>(pure_parent_id);
+        let completed = timeout(Duration::from_secs(90),
+            pure_parent.get_result(WorkflowGetResultOptions::default())).await
+            .expect("pure granted Start result timed out")
+            .expect("pure granted Start owner Child failed");
+        let pure_receipt: OperationDagReceiptV1 = completed.to_value(&PayloadConverter::serde_json());
+        assert_eq!(pure_receipt.order, vec!["one_step".into()]);
+        assert_eq!(pure_receipt.owner_results.len(), 1);
+        assert_eq!(pure_receipt.produced_evidence.len(), 1);
+        assert!(serde_json::from_slice::<serde_json::Value>(
+            &pure_receipt.artifacts[&"result".into()].payload).unwrap().is_object());
+        let history = pure_parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .into_events().await.expect("real pure grant parent History");
+        for prefix in ["alegria-owner-validate-v1-", "alegria-owner-operation-v2-"] {
+            assert_eq!(history.iter().filter(|event| matches!(
+                &event.attributes,
+                Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                    if a.workflow_id.starts_with(prefix)
+            )).count(), 1, "{index}: one native {prefix} child in server History");
+        }
+        let grant_state: String = sqlx::query_scalar(
+            "SELECT state FROM pipeline.operation_dag_one_step_request_grants_v1 WHERE request_id=$1",
+        ).bind(pure_request_id).fetch_one(&pg.pool).await.unwrap();
+        assert_eq!(grant_state, "start_outcome_unknown",
+            "{index}: native Start cannot self-confirm SQL grant or owner receipt");
+    }
 }

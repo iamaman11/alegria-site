@@ -411,15 +411,19 @@ TRUTH_NATIVE_V2_RUNTIME_BINARIES = {
 ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
+    "-p", "temporal_seo_steps_pure", "-p", "temporal_truth_pure",
     "-p", "temporal_pg_effects", "-p", "acquisition_source_issuer",
     "-p", "one_step_request_issuer",
     "--bin", "temporal_orchestrator", "--bin", "temporal_acquisition_pure",
+    "--bin", "temporal_seo_steps_pure", "--bin", "temporal_truth_pure",
     "--bin", "temporal_pg_effects", "--bin", "acquisition_source_issuer",
     "--bin", "one_step_request_issuer",
 )
 ONE_STEP_GRANT_NATIVE_V1_RUNTIME_BINARIES = {
     **ACQUISITION_NATIVE_V2_RUNTIME_BINARIES,
     "INTEGRATION_ONE_STEP_REQUEST_ISSUER_BIN": "one_step_request_issuer",
+    "INTEGRATION_SEO_STEPS_PURE_OWNER_BIN": "temporal_seo_steps_pure",
+    "INTEGRATION_TRUTH_PURE_OWNER_BIN": "temporal_truth_pure",
 }
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,

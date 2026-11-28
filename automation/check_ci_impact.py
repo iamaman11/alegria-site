@@ -321,6 +321,16 @@ class ImpactFixtures(unittest.TestCase):
             self.assertIn(owner_bin, SUITE_OWNERS[name]["prepare"])
             self.assertIn(owner_bin, SUITE_OWNERS[name]["runtime_binaries"].values())
             self.assertEqual(SUITE_OWNERS[name]["command"][7], f"{name}_")
+            self.assertIn(owner_bin, SUITE_OWNERS["one_step_grant_native_v1"]["prepare"])
+            self.assertIn(owner_bin, SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"].values())
+        self.assertEqual(
+            SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"]["INTEGRATION_SEO_STEPS_PURE_OWNER_BIN"],
+            "temporal_seo_steps_pure",
+        )
+        self.assertEqual(
+            SUITE_OWNERS["one_step_grant_native_v1"]["runtime_binaries"]["INTEGRATION_TRUTH_PURE_OWNER_BIN"],
+            "temporal_truth_pure",
+        )
         self.assertEqual(
             SUITE_OWNERS["acquisition_native_v2"]["runtime_binaries"]["INTEGRATION_ACQUISITION_SOURCE_ISSUER_BIN"],
             "acquisition_source_issuer",

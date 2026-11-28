@@ -1447,12 +1447,12 @@ jobs:
           name: rust-e2e-one-step-request-issuer-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/one_step_request_issuer
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'temporal_seo_steps'
+        if: contains(fromJSON('["temporal_seo_steps","temporal_acquisition"]'), matrix.shard)
         with:
           name: rust-e2e-seo-steps-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/seo_steps_pure
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'temporal_truth'
+        if: contains(fromJSON('["temporal_truth","temporal_acquisition"]'), matrix.shard)
         with:
           name: rust-e2e-truth-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/truth_pure
@@ -1468,7 +1468,7 @@ jobs:
           case '${{ matrix.shard }}' in
             temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3) ;;
             temporal_dataforseo) kinds=(v3 dataforseo_effects) ;;
-            temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer) ;;
+            temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure) ;;
             temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
             temporal_truth) kinds=(v3 truth_pure) ;;
             *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;

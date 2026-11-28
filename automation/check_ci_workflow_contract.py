@@ -477,8 +477,8 @@ def check() -> None:
         "dataforseo-effects": "matrix.shard == 'temporal_dataforseo'",
         "acquisition-pure": "matrix.shard == 'temporal_acquisition'",
         "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
-        "seo-steps-pure": "matrix.shard == 'temporal_seo_steps'",
-        "truth-pure": "matrix.shard == 'temporal_truth'",
+        "seo-steps-pure": 'contains(fromJSON(\'["temporal_seo_steps","temporal_acquisition"]\'), matrix.shard)',
+        "truth-pure": 'contains(fromJSON(\'["temporal_truth","temporal_acquisition"]\'), matrix.shard)',
     }
     assert (
         "- uses: actions/download-artifact@v7\n"
@@ -515,7 +515,7 @@ def check() -> None:
     expected_installs = (
         "temporal_mixed_v6|temporal_mixed_v7|temporal_mixed_v2) kinds=(qdrant_effects v3)",
         "temporal_dataforseo) kinds=(v3 dataforseo_effects)",
-        "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer)",
+        "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure)",
         "temporal_seo_steps) kinds=(v3 seo_steps_pure)",
         "temporal_truth) kinds=(v3 truth_pure)",
     )
