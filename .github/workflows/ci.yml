@@ -15,6 +15,7 @@ on:
         options:
           - comprehensive
           - worker-image
+          - site-architect-images
           - dependency-refresh
           - physical-study
       expected_source_sha:
@@ -2222,10 +2223,11 @@ jobs:
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1
 
   gate:
     name: CI
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation) && github.ref == 'refs/heads/main'))
     needs:
       - impact
       - architecture-and-rust
@@ -2316,7 +2318,7 @@ jobs:
         run: python3 automation/report_ci_critical_path.py
 
       - name: Verify main merge comes from a fully successful PR CI
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation))
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO_NAME: ${{ github.repository }}
@@ -2863,6 +2865,133 @@ jobs:
         with:
           name: temporal-worker-image-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # Explicit, accepted-main-only release for the five independent native
+  # siteArchitect owners. PRs validate sources but never publish installable
+  # Docker images; Windows only verifies and loads this attested archive.
+  package-site-architect:
+    needs: gate
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'site-architect-images' &&
+      github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Refuse an unaccepted or ambiguous image source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build separate siteArchitect owner images in GitHub only
+        shell: bash
+        run: |
+          set -euo pipefail
+          owners=(pg orchestrator acquisition request-issuer source-issuer)
+          for owner in "${owners[@]}"; do
+            tag="alegria-site-architect-${owner}:${SOURCE_SHA}"
+            # All targets share one Rust builder in this runner. Export its
+            # cache only once, after the final target, not five times.
+            export_cache=()
+            if [[ "$owner" == source-issuer ]]; then
+              export_cache=(--cache-to 'type=gha,scope=site-architect-native,mode=max,compression=zstd,compression-level=1')
+            fi
+            docker buildx build --load --platform linux/amd64 \
+              --file infra/site_architect/Dockerfile.images \
+              --target "$owner" --tag "$tag" \
+              --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+              --label "by.alegria.source-head-sha=$SOURCE_SHA" \
+              --cache-from 'type=gha,scope=site-architect-native' \
+              "${export_cache[@]}" .
+            test "$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' "$tag")" = "$SOURCE_SHA"
+          done
+
+      - name: Smoke-test all five immutable runtime entrypoints without network access
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in \
+            pg:temporal_pg_effects \
+            orchestrator:temporal_orchestrator \
+            acquisition:temporal_acquisition_pure \
+            request-issuer:one_step_request_issuer \
+            source-issuer:acquisition_source_issuer; do
+            owner="${pair%%:*}"
+            binary="${pair#*:}"
+            entrypoint="$(docker image inspect --format '{{json .Config.Entrypoint}}' "alegria-site-architect-${owner}:${SOURCE_SHA}")"
+            test "$entrypoint" = "[\"/usr/local/bin/${binary}\"]"
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --entrypoint /bin/sh "alegria-site-architect-${owner}:${SOURCE_SHA}" \
+              -ec "test -x /usr/local/bin/$binary"
+          done
+
+      - name: Create exact-SHA multi-image receipt and archive
+        shell: bash
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/site-architect-image-artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          source = os.environ['SOURCE_SHA']
+          root = Path(os.environ['ARTIFACT_DIR'])
+          owners = ('pg', 'orchestrator', 'acquisition', 'request-issuer', 'source-issuer')
+          images = []
+          for owner in owners:
+              tag = f'alegria-site-architect-{owner}:{source}'
+              image_id = subprocess.check_output(
+                  ['docker', 'image', 'inspect', '--format', '{{.Id}}', tag], text=True,
+              ).strip()
+              if not image_id.startswith('sha256:') or len(image_id) != 71:
+                  raise SystemExit(f'Invalid image ID for {owner}')
+              images.append({'owner': owner, 'tag': tag, 'image_id': image_id})
+          (root / 'manifest.json').write_text(json.dumps({
+              'schema_revision': 1, 'source_sha': source, 'images': images,
+          }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+          tags=()
+          for owner in pg orchestrator acquisition request-issuer source-issuer; do
+            tags+=("alegria-site-architect-${owner}:${SOURCE_SHA}")
+          done
+          docker save "${tags[@]}" | gzip -1 > "$ARTIFACT_DIR/site-architect-images.tar.gz"
+          (cd "$ARTIFACT_DIR" && sha256sum site-architect-images.tar.gz > site-architect-images.tar.gz.sha256)
+
+      - name: Attest exact image archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/site-architect-image-artifact/site-architect-images.tar.gz
+
+      - name: Upload attested siteArchitect runtime images
+        uses: actions/upload-artifact@v7
+        with:
+          name: site-architect-images-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/site-architect-image-artifact/
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
