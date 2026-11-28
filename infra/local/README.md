@@ -70,7 +70,8 @@ pwsh -NoProfile -File $script -Action Remove
 
 `Install` uses only an explicit ten-service Compose allowlist, including the
 two Temporal initialization one-shots, rather than activating every service in
-`docker-compose.yml`. Every `up` uses `--no-build --pull never`; optional
+`docker-compose.yml`. It fetches only missing explicitly pinned vendor images
+*before* cleanup, and every `up` uses `--no-build --pull never`; optional
 analytics, Grafana, evaluation profiles and release owners cannot be compiled
 or launched accidentally. It checks the installer against current GitHub main,
 the Worker release as an ancestor of main, and both signed

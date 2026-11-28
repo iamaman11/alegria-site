@@ -60,6 +60,23 @@ function Assert-Previous-Volumes([string[]]$Before) {
         if ($volume -notin $after) { throw "Existing Docker volume was lost: $volume" }
     }
 }
+function Ensure-Pinned-Base-Images {
+    # Only these versioned vendor images may be pulled; Workers come strictly
+    # from GitHub attestations and never from a mutable registry fallback.
+    $images = @('postgres:18.7-alpine', 'edoburu/pgbouncer:v1.26.1-p0',
+        'neo4j:2026.10.2', 'qdrant/qdrant:v1.20.1',
+        'temporalio/admin-tools:1.32.2', 'temporalio/server:1.32.2')
+    foreach ($image in $images) {
+        & $docker image inspect $image --format '{{.Id}}' 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            & $docker image pull $image 2>$null | Out-Null
+            Assert-Exit "pull pinned vendor image $image"
+        }
+        & $docker image inspect $image --format '{{.Id}}' 2>$null | Out-Null
+        Assert-Exit "verify pinned vendor image $image"
+    }
+    Write-Output "BASE_IMAGES=READY COUNT=$($images.Count)"
+}
 function Verify-Running-Stack {
     foreach ($name in $running) {
         $raw = & $docker inspect $name --format '{{json .}}'
@@ -289,6 +306,8 @@ foreach ($service in @('outbox-worker', 'temporal-worker')) {
         Remove-Item -LiteralPath $folder -Recurse -Force
     }
 }
+
+Ensure-Pinned-Base-Images
 
 $before = @(All-Volumes)
 if ($otherNames.Count) {
