@@ -1436,6 +1436,10 @@ jobs:
         with:
           name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/setup-node@v7
+        if: matrix.shard == 'temporal_acquisition'
+        with:
+          node-version: "26"
       - uses: actions/download-artifact@v7
         if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
         with:

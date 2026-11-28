@@ -510,8 +510,9 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         "ci-oauth-subject", signed_at, &Uuid::new_v4().to_string(), &signer_key,
     );
     let signed_proof = private.request("signed-oauth-subject-proof", &serde_json::to_string(&signed).unwrap());
-    let invoke_as = |principal: &str, oauth_subject: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
-        .arg("--operator-start-signed-granted-single-v1").arg(&signed_proof).arg(&grant_intent)
+    let configure_start = |principal: &str, oauth_subject: &str| {
+        let mut command = Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"));
+        command
         .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START", "true")
         .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START", "true")
         .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE", &signer_key_file)
@@ -528,25 +529,78 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         .env("SITE_ARCHITECT_GRANTED_V1_POLICY_ID", "ci-safe-zero-cost-v1")
         .env("SITE_ARCHITECT_GRANTED_V1_CONTEXT_KEY", &context)
         .env("SITE_ARCHITECT_GRANTED_V1_MAX_LIMITS_FILE", &limits_path)
-        .env_remove("DATABASE_URL")
-        .output().expect("native SQL one-use grant Temporal Start bridge");
-    let denied_identity = invoke_as("ci-authenticated-user", "forged-oauth-subject");
-    assert!(!denied_identity.status.success(),
-        "correct SQL principal alone must not override independently pinned OAuth subject");
-    let denied_principal = invoke_as("forged-user", "ci-oauth-subject");
+        .env_remove("DATABASE_URL");
+        command
+    };
+    // The private ingress selects only this separately provisioned canonical UUID
+    // file. Its ancestry is the same CI-only trusted directory as other locators.
+    let ingress_dir = private.root.join("signed-ingress-intents");
+    fs::create_dir(&ingress_dir).unwrap();
+    fs::set_permissions(&ingress_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let ingress_intent = ingress_dir.join(format!("{request_id}.json"));
+    fs::copy(&grant_intent, &ingress_intent).unwrap();
+    fs::set_permissions(&ingress_intent, fs::Permissions::from_mode(0o600)).unwrap();
+    let port_listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let ingress_port = port_listener.local_addr().unwrap().port();
+    drop(port_listener);
+    let ingress_child = configure_start("ci-authenticated-user", "ci-oauth-subject")
+        .arg("--operator-serve-signed-granted-single-v1")
+        .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SIGNED_INGRESS_V1", "true")
+        .env("SITE_ARCHITECT_SIGNED_INGRESS_V1_PORT", ingress_port.to_string())
+        .env("SITE_ARCHITECT_SIGNED_INGRESS_V1_INTENT_DIR", &ingress_dir)
+        .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+        .spawn().expect("start private loopback signed ingress");
+    let mut ingress_guard = ChildGuard(Some(ingress_child));
+    let address = (std::net::Ipv4Addr::LOCALHOST, ingress_port);
+    let mut listening = false;
+    for _ in 0..100 {
+        if std::net::TcpStream::connect(address).is_ok() {
+            listening = true;
+            break;
+        }
+        assert!(ingress_guard.0.as_mut().unwrap().try_wait().unwrap().is_none(),
+            "private signed ingress exited before listening");
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert!(listening, "private signed ingress did not listen on loopback");
+    let helper = PathBuf::from(env::var("GITHUB_WORKSPACE").unwrap())
+        .join("infra/cloudflare/site-architect-mcp/test/loopback-admission.ts");
+    let post = |scenario: &str| -> serde_json::Value {
+        let output = Command::new("node")
+            .arg("--experimental-strip-types").arg(&helper)
+            .arg(ingress_port.to_string()).arg(request_id.to_string())
+            .arg(&signer_key_file).arg(scenario)
+            .output().expect("run Node private ingress fixture (Node >=24)");
+        assert!(output.status.success(), "private ingress fixture failed for {scenario}");
+        serde_json::from_slice(&output.stdout).expect("private ingress returns a bounded JSON reply")
+    };
+    for scenario in ["wrong-subject", "bad-signature", "expired"] {
+        let denied = post(scenario);
+        assert_eq!(denied["status"], "launch_blocked", "{scenario} must be denied");
+        assert_eq!(denied["code"], "signed_remote_admission_not_verified");
+        let state: String = sqlx::query_scalar(
+            "SELECT state FROM pipeline.operation_dag_one_step_request_grants_v1 WHERE request_id=$1",
+        ).bind(request_id).fetch_one(&pg.pool).await.unwrap();
+        assert_eq!(state, "unclaimed", "{scenario} must not reserve the grant");
+    }
+    let denied_principal = configure_start("forged-user", "ci-oauth-subject")
+        .arg("--operator-start-signed-granted-single-v1")
+        .arg(&signed_proof)
+        .arg(&grant_intent)
+        .output()
+        .expect("native SQL one-use grant Temporal Start bridge");
     assert!(!denied_principal.status.success(),
         "even knowing exact private intent and grant UUID does not authorize another principal");
     assert!(client.get_workflow_handle::<UntypedWorkflow>(parent_id.clone())
         .describe(WorkflowDescribeOptions::builder().build()).await.is_err(),
-        "principal spoof must not create a Temporal workflow");
-    let started = invoke_as("ci-authenticated-user", "ci-oauth-subject");
-    assert!(started.status.success(), "granted Start failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&started.stdout), String::from_utf8_lossy(&started.stderr));
-    let started_report: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
-    assert_eq!(started_report["status"],
-        "temporal_start_acknowledged_grant_pending_independent_history");
-    assert!(!invoke_as("ci-authenticated-user", "ci-oauth-subject").status.success(),
-        "one approved user request may launch exactly once");
+        "denied admissions must not create a Temporal workflow");
+    let started_report = post("valid");
+    assert_eq!(started_report["status"], "request_reserved");
+    assert_eq!(started_report["code"], "one_use_reserved_execution_unverified");
+    let duplicate = post("valid");
+    assert_eq!(duplicate["status"], "start_outcome_unknown",
+        "a repeated admission must not claim another reservation");
+    assert_eq!(duplicate["code"], "operator_start_outcome_unconfirmed");
 
     let parent = client.get_workflow_handle::<UntypedWorkflow>(parent_id);
     let result = timeout(Duration::from_secs(90),
@@ -560,6 +614,9 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     assert!(!classified.allow_structural_extraction);
     let events = parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
         .into_events().await.unwrap();
+    assert_eq!(events.iter().filter(|event| matches!(
+        &event.attributes, Some(Attributes::WorkflowExecutionStartedEventAttributes(_))
+    )).count(), 1, "one parent execution was started");
     for prefix in ["alegria-owner-validate-v1-", "alegria-owner-operation-v2-"] {
         assert_eq!(events.iter().filter(|event| matches!(
             &event.attributes,

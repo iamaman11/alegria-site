@@ -453,6 +453,12 @@ def check() -> None:
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
     assert "rust-e2e-legacy-binaries" not in qdrant_runner
+    assert (
+        '- uses: actions/setup-node@v7\n'
+        "        if: matrix.shard == 'temporal_acquisition'\n"
+        '        with:\n'
+        '          node-version: "26"'
+    ) in qdrant_runner
     legacy_qdrant_runner = runner_blocks["rust-qdrant-temporal-legacy-e2e"]
     assert (
         "needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, "

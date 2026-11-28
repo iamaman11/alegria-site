@@ -1026,6 +1026,8 @@ SUITE_OWNERS = {
             "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_one_step_grant_tests.rs",
             "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "infra/cloudflare/site-architect-mcp/src/admission.ts",
+            "infra/cloudflare/site-architect-mcp/test/loopback-admission.ts",
         },
         "prefixes": (
             "app/rust/services/one_step_request_issuer/",
