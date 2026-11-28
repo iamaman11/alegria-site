@@ -41,3 +41,42 @@ and preserve their current volumes, networks, identity binding, and secrets;
 then replace only exact pilot containers with these attested images. Do not
 remove live images or declare the MCP E2E/SQL grant accepted merely because
 an image import succeeded.
+
+## Windows B: repeatable **transport-only** pilot lifecycle
+
+Once the attested native image is imported and the operator has verified the
+dedicated Cloudflare Access app, Worker, Tunnel and VPC Service, run this from
+an **exact clean checkout of current GitHub `main`**. `-Commit` names an
+attested owner image release already in the history of `main` (not necessarily
+the current documentation commit). It must already exist in Docker.
+
+```powershell
+pwsh -NoProfile -File infra/local/windows_site_architect_transport.ps1 -Action Status
+pwsh -NoProfile -File infra/local/windows_site_architect_transport.ps1 -Action Install -Commit '<40-hex-owner-image-SHA>'
+pwsh -NoProfile -File infra/local/windows_site_architect_transport.ps1 -Action Update -Commit '<40-hex-new-owner-image-SHA>'
+pwsh -NoProfile -File infra/local/windows_site_architect_transport.ps1 -Action Remove
+```
+
+`Install` requires three existing **new** named volumes (signed key, Tunnel
+token, empty intents). When any of these are absent, supply both operator-
+approved, existing read-only source volume names using `-SourceKeyVolume` and
+`-SourceConnectorVolume`; the script copies only `admission.key` and `token`
+into separate owner-0600 protected new volumes. It never prints those bytes.
+The source volumes and database backups remain untouched. If transitioning
+from the two historical non-Compose v2 containers, `Install` additionally
+requires `-AdoptExistingTransport` and verifies confinement and empty intents
+before removing those **two exact containers only**.
+
+`Update` refuses to run while any private granted-intent file is present;
+coordinate real operator starts separately and never replay unknown outcomes.
+`Remove` removes only the Compose-owned ingress and connector **containers**;
+it does not delete any Docker volume, private key, database or backup. All
+operations use `--no-build --pull never` or read-only Docker queries. Windows
+never compiles or pulls a mutable native owner release.
+
+This Compose stack intentionally has no SQL credentials, tenant grants,
+Temporal connection or published port. Its sole purpose is exercising
+Access → Worker → VPC Service → Tunnel → localhost ingress in **fail-closed**
+mode. A healthy Tunnel or HTTP 400 on malformed proof is *not* proof of an
+accepted one-use SQL grant or a Temporal Start. The remaining four attested
+native owners are not started by this transport installer.
