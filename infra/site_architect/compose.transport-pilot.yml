@@ -1,0 +1,65 @@
+# Transport-only siteArchitect MCP pilot. NO SQL grant, Temporal Start principal,
+# or operator-owned intent is provisioned by this Compose file.
+# The source image must first be built/attested by GitHub and imported on Windows.
+services:
+  signed-ingress:
+    image: alegria-site-architect-pg:${SITE_ARCHITECT_PG_IMAGE_SHA:?GitHub-attested image SHA required}
+    container_name: alegria_site_architect_ingress_pilot_v2
+    command: ["--operator-serve-signed-granted-single-v1"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ALEGRIA_ENABLE_SITE_ARCHITECT_SIGNED_INGRESS_V1: "true"
+      SITE_ARCHITECT_SIGNED_INGRESS_V1_PORT: "19543"
+      SITE_ARCHITECT_SIGNED_INGRESS_V1_INTENT_DIR: /run/intents
+      SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE: /run/secret/admission.key
+    volumes:
+      - type: volume
+        source: signed-private
+        target: /run/secret
+        read_only: true
+      - type: volume
+        source: private-intents
+        target: /run/intents
+        read_only: true
+    networks: [pilot-private]
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.2
+    container_name: alegria_site_architect_cloudflared_pilot_v2
+    command: ["tunnel", "--no-autoupdate", "run", "--token-file", "/run/secret/token"]
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    # The Cloudflare VPC Service routes to 127.0.0.1:19543. Only the
+    # cloudflared process can reach that loopback listener.
+    network_mode: "service:signed-ingress"
+    depends_on:
+      signed-ingress:
+        condition: service_started
+    volumes:
+      - type: volume
+        source: connector-private
+        target: /run/secret
+        read_only: true
+
+volumes:
+  signed-private:
+    external: true
+    name: alegria_site_architect_signed_private_pilot_v2
+  connector-private:
+    external: true
+    name: alegria_site_architect_connector_private_pilot_v2
+  private-intents:
+    external: true
+    name: alegria_site_architect_intents_pilot_v2
+
+networks:
+  pilot-private:
+    external: true
+    name: alegria_site_architect_private_pilot_v2
