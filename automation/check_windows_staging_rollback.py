@@ -39,8 +39,9 @@ def check(script: str) -> None:
         "& gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir",
         "$_.workflowName -eq 'ci' -and $_.headSha -eq $Commit",
         "$jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs",
-        "$_.name -eq 'package' -and $_.conclusion -eq 'success'",
-        "throw \"Worker image NO-GO: no successful package job in ci",
+        "$_.name -eq $packageJob -and $_.conclusion -eq 'success'",
+        "'package-outbox'",
+        "throw \"Worker image NO-GO: no successful $packageJob job in ci",
         "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
         "& gh attestation verify $artifact.Archive -R $repo",
         "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
@@ -49,7 +50,6 @@ def check(script: str) -> None:
         "& $docker image load --input $artifact.Archive",
         "if ($loadedId -cne $artifact.ImageId)",
         "& $docker image tag $artifact.ImageId $latestTag",
-        "& $docker @newArgs build --quiet $Service",
         "function Invoke-Compose-Recreate-Start",
         "& $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service",
         "$startInfo.ArgumentList.Add('start')",
@@ -94,19 +94,16 @@ def check(script: str) -> None:
     rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
     assert recovery < compare < preserve < rollback_image < guard < candidate_selection < recreate
     artifact_branch = script[candidate_selection:script.index("$newImage = ((& $docker image inspect $latestTag")]
-    before_outbox, outbox = artifact_branch.split("} else {", 1)
-    assert "if ($Service -eq 'temporal-worker')" in before_outbox
-    assert "& $docker @newArgs build --quiet $Service" not in before_outbox, (
-        "Temporal candidate must load a tested CI image, not compile on Windows"
+    assert "& $docker @newArgs build --quiet $Service" not in artifact_branch, (
+        "Neither Worker candidate may compile on Windows"
     )
-    assert "& $docker @newArgs build --quiet $Service" in outbox, (
-        "Outbox must retain its existing build until its artifact is certified"
-    )
-    assert before_outbox.index("Read-Staging-Verified-Worker-Image") < before_outbox.index(
+    assert "-Service $Service" in artifact_branch, "Worker archive owner must be explicit"
+    assert "'alegria-outbox:ci'" in artifact_branch, "Outbox must use its signed CI image"
+    assert artifact_branch.index("Read-Staging-Verified-Worker-Image") < artifact_branch.index(
         "& gh attestation verify $artifact.Archive -R $repo"
-    ) < before_outbox.index("Assert-Exit 'verify signed GitHub Worker provenance'") < before_outbox.index(
+    ) < artifact_branch.index("Assert-Exit 'verify signed GitHub Worker provenance'") < artifact_branch.index(
         "& $docker image load --input $artifact.Archive"
-    ) < before_outbox.index("& $docker image tag $artifact.ImageId $latestTag")
+    ) < artifact_branch.index("& $docker image tag $artifact.ImageId $latestTag")
     assert "& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter" in script
     assert " @newArgs run --rm --no-deps" not in script, (
         "terminal-run reconciliation must reuse the running worker, not a temporary Compose run"
@@ -191,7 +188,7 @@ def main() -> None:
         "$startProcess.WaitForExit(20000)",
         "WHERE status NOT IN ('done','failed');",
         "$jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs",
-        "$_.name -eq 'package' -and $_.conclusion -eq 'success'",
+        "$_.name -eq $packageJob -and $_.conclusion -eq 'success'",
         "--signer-workflow \"$repo/.github/workflows/ci.yml\"",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
     ):
