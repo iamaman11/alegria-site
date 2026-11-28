@@ -586,6 +586,11 @@ def check() -> None:
     assert '"rust-e2e-qdrant-temporal-harness"' in gate
     assert '"rust-e2e-qdrant-effects-binaries"' in gate
     assert 'matrix_owners = {owner: set(shards) for owner, shards in E2E_RUNNER_PARTITIONS.items()}' in gate
+    # GitHub reports an unexpanded matrix placeholder for a skipped job.
+    # Permit only that exact display name and only when the job was skipped;
+    # keep the literal split to avoid evaluating a matrix in the gate job.
+    assert "{owner + ' ($' + '{{ matrix.shard }})'}" in gate
+    assert "require(set(expanded.values()) == {'skipped'}," in gate
     assert "did not pass all selected E2E shards" in gate
     assert "      - name: Checkout exact CI plan owner registry\n" in gate
     checkout = gate.split("      - name: Checkout exact CI plan owner registry\n", 1)[1].split("      - name:", 1)[0]
