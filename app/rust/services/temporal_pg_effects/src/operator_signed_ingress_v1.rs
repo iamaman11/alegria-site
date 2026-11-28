@@ -79,10 +79,9 @@ fn checked_intent_dir(value: &str) -> Result<PathBuf> {
     let path = PathBuf::from(value);
     ensure!(
         path.is_absolute()
-            && path.components().all(|component| !matches!(
-                component,
-                Component::ParentDir | Component::CurDir
-            )),
+            && path
+                .components()
+                .all(|component| !matches!(component, Component::ParentDir | Component::CurDir)),
         "signed ingress intent directory must be absolute and unambiguous"
     );
     #[cfg(unix)]
@@ -262,7 +261,10 @@ mod tests {
             .join(format!(".ci-site-architect-ingress-{}", Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert_eq!(checked_intent_dir(directory.to_str().unwrap()).unwrap(), directory);
+        assert_eq!(
+            checked_intent_dir(directory.to_str().unwrap()).unwrap(),
+            directory
+        );
 
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(checked_intent_dir(directory.to_str().unwrap()).is_err());

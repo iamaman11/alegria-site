@@ -50,8 +50,8 @@ mod operator_dag_governance;
 mod operator_dag_governance_v2;
 mod operator_dag_read_v2;
 mod operator_owner_v1;
-mod operator_single_step_start_v2;
 mod operator_signed_ingress_v1;
+mod operator_single_step_start_v2;
 mod operator_v4;
 mod operator_vector_projection_v1;
 mod operator_vector_projection_v2;
@@ -797,7 +797,10 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-serve-signed-granted-single-v1") {
-            anyhow::ensure!(args.next().is_none(), "unexpected private signed ingress arguments");
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected private signed ingress arguments"
+            );
             operator_signed_ingress_v1::serve_private_ingress().await?;
             return Ok(());
         }

@@ -21,9 +21,8 @@ use operation_protocol::{
     verify_signed_one_step_admission_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
     OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
     OperationDagRunV6, OperationId, OperationRef, PlanHash, SignedOneStepAdmissionV1,
-    SiteLabExpectedStartV1,
-    TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
-    DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
+    SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
+    TrustedRouteCatalog, DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
     OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
 };
 use serde::{Deserialize, Serialize};
@@ -1415,8 +1414,8 @@ fn authorize_signed_one_step_request_bytes(
     )?;
     let key = decode_admission_signing_key_v1(&key_bytes)
         .context("invalid private admission verification key")?;
-    let signed: SignedOneStepAdmissionV1 = serde_json::from_slice(signed_bytes)
-        .context("invalid signed ingress envelope")?;
+    let signed: SignedOneStepAdmissionV1 =
+        serde_json::from_slice(signed_bytes).context("invalid signed ingress envelope")?;
     let request_id = uuid::Uuid::parse_str(&signed.request_id)?;
     ensure!(
         !request_id.is_nil() && request_id.to_string() == signed.request_id,
