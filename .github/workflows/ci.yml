@@ -1978,6 +1978,8 @@ jobs:
           npm test --prefix infra/cloudflare/site-architect-mcp
       - name: Build remote MCP resource Worker without deployment
         run: npm run build --prefix infra/cloudflare/site-architect-mcp
+      - name: Verify both MCP transports in the bundled Worker
+        run: npm run test:worker --prefix infra/cloudflare/site-architect-mcp
       - name: Offline Cloudflare publication boundary tests
         run: python3 automation/smoke_seo_cloudflare_deploy.py
       - name: Actual cf CLI build and asset preservation (no deployment)
