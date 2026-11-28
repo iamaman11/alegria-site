@@ -471,6 +471,37 @@ The only intended Workflow invocation is an explicitly authorized
 `PgTruthReviewReconcileV3Workflow` command on its separate queue. Avoid
 sharing that Task Queue with any worker lacking the exact registered Type.
 
+## Private signed siteArchitect ingress (opt-in, not deployed)
+
+The same `temporal_pg_effects` binary can serve **one** private HTTP endpoint,
+`POST /v1/one-step`, without starting another scheduler or sharing the MCP
+Worker's privileges. It is disabled unless explicitly enabled:
+
+```sh
+ALEGRIA_ENABLE_SITE_ARCHITECT_SIGNED_INGRESS_V1=true \
+SITE_ARCHITECT_SIGNED_INGRESS_V1_PORT=9527 \
+SITE_ARCHITECT_SIGNED_INGRESS_V1_INTENT_DIR=/run/private/site-architect/intents \
+./temporal_pg_effects --operator-serve-signed-granted-single-v1
+```
+
+The operator also requires its existing separately provisioned private HMAC
+key, one pinned Access/OAuth subject and issuer, trusted catalog, tenant,
+nonprivileged SQL principal/one-use grant and loopback Temporal endpoint.
+Every intent is an independently approved, canonical `UUID.json` file with
+private Unix mode `0400/0600`; the request contains only a **2048-byte or
+smaller** HMAC proof. The operator verifies the signature and installed
+subject before opening the intent, then uses the existing SQL reservation and
+Temporal Start path. A failed/ambiguous Start is never automatically replayed.
+
+The listener binds **only `127.0.0.1` inside its own Linux network namespace**.
+No Docker host port is published. A later Cloudflare Tunnel connector must
+share that namespace to reach this loopback listener. The current native
+Start guard separately requires `http://127.0.0.1:<port>/` for Temporal; a
+Docker service hostname does not satisfy it. Resolve and physically verify
+both local paths before connecting a live Cloudflare VPC Service. No Tunnel,
+VPC Service, private intent volume or real signed-in user is provisioned by
+this code-only mode.
+
 ## Acceptance gaps
 
 - Live PostgreSQL role/admission/atomic-receipt and cross-queue Temporal E2E

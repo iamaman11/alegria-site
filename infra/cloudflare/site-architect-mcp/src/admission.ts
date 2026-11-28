@@ -7,6 +7,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SAFE_ID = /^[\w.:-]{1,256}$/;
 const SIGNING_KEY_HEX = /^[0-9a-f]{64}$/;
 const EXACT_SCOPE = "site_architect.run_one";
+const PRIVATE_ADMISSION_URL = "http://admission.internal/v1/one-step";
 const ATTESTATION_TTL_SECONDS = 30;
 const MAX_ADMISSION_REPLY_BYTES = 2048;
 
@@ -105,21 +106,6 @@ export function validVerifiedSubject(subject: VerifiedSubject): boolean {
   }
 }
 
-// This is an operator-installed URL, never an MCP argument. Workers VPC pins
-// the actual private host and port independently of the request URL. The
-// hostname here supplies TLS SNI and must match the private ingress cert.
-export function validPrivateAdmissionUrl(value: unknown): value is string {
-  if (typeof value !== "string" || value.length > 512) return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !!url.hostname
-      && !url.username && !url.password && !url.search && !url.hash
-      && url.pathname === "/v1/one-step" && url.href === value;
-  } catch {
-    return false;
-  }
-}
-
 // An admission response must be a small, sealed DTO. Unknown/error responses
 // are always ambiguous once a request was sent: never automatically replay.
 export function parseAdmissionReply(raw: unknown, requestId: string): StartReply {
@@ -163,7 +149,6 @@ export async function admitOneStep(
   subject: VerifiedSubject | undefined,
   requestId: string,
   signingKeyHex: string | undefined,
-  privateAdmissionUrl?: string,
 ): Promise<StartReply> {
   if (!validRequestId(requestId)) {
     return reply(requestId, "launch_blocked", "invalid_request_id");
@@ -177,12 +162,10 @@ export async function admitOneStep(
   if (!signingKeyHex || !SIGNING_KEY_HEX.test(signingKeyHex)) {
     return reply(requestId, "launch_blocked", "private_admission_signing_key_not_configured");
   }
-  if (!validPrivateAdmissionUrl(privateAdmissionUrl)) {
-    return reply(requestId, "launch_blocked", "private_admission_url_not_configured");
-  }
-  // The installed VPC Service binding pins the private host and port; the
-  // operator-installed URL supplies the expected HTTPS Host/SNI only. Neither
-  // is a caller-controlled global fetch URL or a public HTTP proxy.
+  // The installed VPC Service binding pins the private host and port. Its
+  // fixed request URL is only an internal Host header, never a global fetch
+  // destination or a public proxy. The tunnel encrypts the remote leg; a
+  // local cloudflared must share loopback with the native HTTP ingress.
   // The native ingress must independently bind issuer+subject to SQL policy and consume
   // an existing one-use grant before the existing native Temporal operator.
   let body: string;
@@ -194,7 +177,7 @@ export async function admitOneStep(
     return reply(requestId, "launch_blocked", "admission_signature_unavailable");
   }
   try {
-    const response = await service.fetch(new Request(privateAdmissionUrl, {
+    const response = await service.fetch(new Request(PRIVATE_ADMISSION_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,

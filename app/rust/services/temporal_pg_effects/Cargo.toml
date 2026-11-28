@@ -29,3 +29,4 @@ tracing-subscriber = { workspace = true }
 futures-util = "0.3"
 futures = { workspace = true }
 libc = "0.2"
+axum = { version = "0.8.8", default-features = false, features = ["http1", "tokio", "json"] }

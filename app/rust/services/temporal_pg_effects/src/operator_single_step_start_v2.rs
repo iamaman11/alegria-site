@@ -20,7 +20,8 @@ use operation_protocol::{
     preflight_unadmitted_single_operation_v2_start, verify_external_source_record_v1,
     verify_signed_one_step_admission_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
     OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
-    OperationDagRunV6, OperationId, OperationRef, PlanHash, SiteLabExpectedStartV1,
+    OperationDagRunV6, OperationId, OperationRef, PlanHash, SignedOneStepAdmissionV1,
+    SiteLabExpectedStartV1,
     TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1, TrustedRouteCatalog,
     DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
     OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
@@ -1382,6 +1383,25 @@ fn authorize_signed_one_step_request(
     signed_path: &Path,
     private_intent_path: &Path,
 ) -> Result<AuthorizedSignedIntent> {
+    let signed_bytes = operator_dag_governance::read_private_operator_file(
+        signed_path,
+        "OAuth MCP authenticated admission proof",
+    )?;
+    authorize_signed_one_step_request_bytes(&signed_bytes, private_intent_path)
+}
+
+// The private HTTP ingress passes bounded signed wire bytes directly, without
+// creating a second writable file or repeating any authorization logic.
+// Parse the UUID only as an opaque locator, verify its signature first, then
+// read and snapshot the separately provisioned operator-owned intent.
+fn authorize_signed_one_step_request_bytes(
+    signed_bytes: &[u8],
+    private_intent_path: &Path,
+) -> Result<AuthorizedSignedIntent> {
+    ensure!(
+        !signed_bytes.is_empty() && signed_bytes.len() <= 2048,
+        "signed ingress proof exceeds the fixed wire bound"
+    );
     let issuer = env::var(SIGNED_ADMISSION_ISSUER_ENV).context("missing installed OAuth issuer")?;
     let audience =
         env::var(SIGNED_ADMISSION_RESOURCE_ENV).context("missing installed MCP resource")?;
@@ -1395,6 +1415,27 @@ fn authorize_signed_one_step_request(
     )?;
     let key = decode_admission_signing_key_v1(&key_bytes)
         .context("invalid private admission verification key")?;
+    let signed: SignedOneStepAdmissionV1 = serde_json::from_slice(signed_bytes)
+        .context("invalid signed ingress envelope")?;
+    let request_id = uuid::Uuid::parse_str(&signed.request_id)?;
+    ensure!(
+        !request_id.is_nil() && request_id.to_string() == signed.request_id,
+        "signed ingress request ID is not a canonical nonnil UUID"
+    );
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("operator clock invalid")?
+        .as_secs() as i64;
+    verify_signed_one_step_admission_v1(
+        signed_bytes,
+        &key,
+        &issuer,
+        &audience,
+        &subject,
+        &signed.request_id,
+        now,
+    )
+    .context("remote MCP ingress signature or identity invalid")?;
     let intent_bytes = operator_dag_governance::read_private_operator_file(
         private_intent_path,
         "separately stored one-use granted private intent",
@@ -1405,25 +1446,27 @@ fn authorize_signed_one_step_request(
         serde_json::to_vec(&intent)? == intent_bytes && intent.schema_revision == 1,
         "noncanonical private granted Start intent"
     );
-    let signed_bytes = operator_dag_governance::read_private_operator_file(
-        signed_path,
-        "OAuth MCP authenticated admission proof",
-    )?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("operator clock invalid")?
-        .as_secs() as i64;
-    verify_signed_one_step_admission_v1(
-        &signed_bytes,
-        &key,
-        &issuer,
-        &audience,
-        &subject,
-        &intent.request_id,
-        now,
-    )
-    .context("remote MCP ingress signature, identity or one-use request invalid")?;
+    ensure!(
+        intent.request_id == signed.request_id,
+        "signed ingress request differs from private granted intent"
+    );
     Ok(AuthorizedSignedIntent(intent_bytes))
+}
+
+/// Returns `Err` only for a refusal *before any SQL/Temporal effect*, `Ok(true)`
+/// for an acknowledged bounded Start request, and `Ok(false)` whenever the
+/// existing operator cannot confirm the outcome. Never replay the request.
+pub(super) async fn admit_signed_one_step_bytes(
+    signed_bytes: &[u8],
+    private_intent_path: &Path,
+) -> Result<bool> {
+    let authorized = authorize_signed_one_step_request_bytes(signed_bytes, private_intent_path)?;
+    Ok(start_private_request_from_source(
+        PrivateStartSource::AuthorizedSigned(&authorized),
+        StartMode::IndependentlyGranted,
+    )
+    .await
+    .is_ok())
 }
 
 async fn start_private_request_in_mode(path: &Path, mode: StartMode) -> Result<()> {

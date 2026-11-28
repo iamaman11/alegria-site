@@ -8,10 +8,9 @@ const resourceUrl = process.env.SITE_ARCHITECT_MCP_RESOURCE_URL;
 const accessIssuerUrl = process.env.SITE_ARCHITECT_ACCESS_ISSUER_URL;
 const accessAud = process.env.SITE_ARCHITECT_ACCESS_AUD;
 const admissionVpcServiceId = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID;
-const admissionUrl = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_URL;
 
-if (publicRelease && (!resourceUrl || !accessIssuerUrl || !accessAud || !admissionVpcServiceId || !admissionUrl)) {
-  throw new Error("Public MCP requires exact resource URL, Access issuer and AUD, private VPC Service and HTTPS admission URL");
+if (publicRelease && (!resourceUrl || !accessIssuerUrl || !accessAud || !admissionVpcServiceId)) {
+  throw new Error("Public MCP requires exact resource URL, Access issuer and AUD, and private VPC Service");
 }
 if (publicRelease && (!resourceUrl?.startsWith("https://") || !accessIssuerUrl?.startsWith("https://"))) {
   throw new Error("Public MCP Access issuer and resource must use HTTPS");
@@ -32,7 +31,6 @@ export default defineConfig({
       ACCESS_AUD: accessAud ? bindings.text(accessAud) : undefined,
       ACCESS_ISSUER_URL: accessIssuerUrl ? bindings.text(accessIssuerUrl) : undefined,
       MCP_SERVER_URL: resourceUrl ? bindings.text(resourceUrl) : undefined,
-      PRIVATE_ADMISSION_URL: admissionUrl ? bindings.text(admissionUrl) : undefined,
       ONE_STEP_ADMISSION: admissionVpcServiceId
         ? bindings.vpcService({ id: admissionVpcServiceId })
         : undefined,

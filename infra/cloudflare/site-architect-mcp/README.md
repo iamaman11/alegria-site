@@ -34,11 +34,13 @@ canonical repository is `iamaman11/alegria-site`, Draft PR #95; `main` and
   reuses the existing one-use SQL grant and Temporal operator. The native
   verifier uses a separate, private copy of the 32-byte key; the Access
   subject is pinned by the operator, never selected from request JSON.
-- The configured VPC binding fixes the private destination host and port;
-  `PRIVATE_ADMISSION_URL` supplies the exact HTTPS `/v1/one-step` request URL
-  and TLS SNI, and must match the private ingress certificate. No MCP tool
-  argument controls either. The private HTTP ingress on the native operator
-  host is **not implemented here**. That ingress must
+- The VPC binding fixes the private destination host and port. The request URL
+  is a constant `http://admission.internal/v1/one-step` used only as an internal
+  Host header, never for routing or public fetch. Cloudflare encrypts the
+  Worker-to-Tunnel leg; the private `cloudflared` connector must share the
+  same loopback network namespace as the native HTTP ingress, keeping the
+  final plaintext hop on localhost. No MCP argument controls a destination.
+  The private HTTP ingress is a separate native operator mode and must
   validate its trusted private caller and securely deliver the signed proof
   to the correct single-subject operator, where SQL checks the configured
   tenant/principal/ACL against the exact one-use grant, source,
@@ -75,7 +77,6 @@ operator must explicitly set:
 | `SITE_ARCHITECT_ACCESS_ISSUER_URL` | Operator-pinned HTTPS Cloudflare Access issuer; signed into the native proof as a fixed identity namespace |
 | `SITE_ARCHITECT_ACCESS_AUD` | Exact audience of the dedicated Managed OAuth Access application; checked against verified `ctx.access.aud` |
 | `SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID` | Existing private VPC Service ID configured for the native ingress via Cloudflare Tunnel; required for public release |
-| `SITE_ARCHITECT_PRIVATE_ADMISSION_URL` | Exact HTTPS URL ending `/v1/one-step` with hostname matching the private ingress TLS certificate; not a caller-selected endpoint |
 
 The Worker requires **two secrets**: `ACCESS_ALLOWED_EMAIL` (the exact
 verified pilot email address, never committed) and `ADMISSION_SIGNING_KEY_HEX`
