@@ -178,7 +178,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 
-    def test_v2_single_step_operator_json_requires_strict_typed_private_ingress(self) -> None:
+    def test_v2_operator_json_requires_strict_typed_private_ingress(self) -> None:
         # The narrow per-file exceptions are justified only while Start and
         # Read use their own strict DTO, operator-owned SQL identity, and
         # immutable Temporal History. They are not general-purpose JSON APIs.
@@ -195,7 +195,10 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
         self.assertIn("WorkflowIdReusePolicy::RejectDuplicate", start)
         self.assertIn("run_unavailable_or_untrusted", reader)
         self.assertIn("owner_receipt_attestation: \"not_independently_verified\"", reader)
-        self.assertIn("attest_one_owner_child(", reader)
+        self.assertIn(".attest_completed_dag(", reader)
+        self.assertIn("OperationDagMachine::new_v2_with_owner_validation(", reader)
+        self.assertIn(".advance_owner_result(", reader)
+        self.assertIn("fetch_exact_history(", reader)
 
     def test_extracted_owner_json_grants_are_exact_files(self) -> None:
         self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {

@@ -1024,7 +1024,7 @@ mod tests {
         ] {
             assert!(!wire.contains(forbidden), "refusal leaked {forbidden}");
         }
-        assert!(wire.len() <= MAX_SOCKET_RESPONSE_BYTES);
+        assert!(wire.len() < DAG_READ_MAX_REPLY_BYTES);
     }
 
     #[cfg(unix)]
