@@ -114,16 +114,20 @@ if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { throw 'Private EnvF
 $EnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
 if (-not (Get-Command gh -ErrorAction SilentlyContinue) -or
     -not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'GitHub CLI and git are required' }
-$gitSha = (& git -C $root rev-parse HEAD | Out-String).Trim()
+$installerSha = (& git -C $root rev-parse HEAD | Out-String).Trim()
 Assert-Exit 'source checkout SHA'
-if ($gitSha -cne $Commit) { throw 'Installer checkout must match exact accepted SHA' }
 $modified = & git -C $root status --porcelain -- 'infra/local/windows_stack.ps1' `
     'infra/local/windows_staging.ps1' 'infra/local/windows_staging_image.ps1'
 Assert-Exit 'installer source status'
 if (($modified | Out-String).Trim()) { throw 'Installer sources have local modifications' }
 $remoteSha = (& gh api "repos/$repo/commits/main" --jq .sha | Out-String).Trim()
 Assert-Exit 'canonical main SHA'
-if ($remoteSha -cne $Commit) { throw 'Only current canonical main may be installed' }
+if ($remoteSha -cne $installerSha) { throw 'Installer must run from current canonical main' }
+# Operator-only merges must not require a fresh Rust image build. A previously
+# packaged Worker release is valid while it remains in main's ancestry. The
+# release artifact is still verified against its own exact source SHA.
+& git -C $root merge-base --is-ancestor $Commit $installerSha
+if ($LASTEXITCODE -ne 0) { throw 'Worker release SHA is not an ancestor of canonical main' }
 
 # File variables take precedence only when no same-named process environment
 # variable is set. Remove inherited shadows; keep the exact deployment ID.

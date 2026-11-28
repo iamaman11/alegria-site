@@ -43,22 +43,26 @@ The five siteArchitect native-owner release images are imported independently
 with `windows_site_architect_images.ps1`; importing them is not permission to
 start protected pilot effects or alter Cloudflare policies.
 
-Use a clean `git` checkout of the accepted **main SHA** on `B:`. For example:
+Use a clean `git` checkout of the **current main** on `B:`. Supply the SHA
+of the most recent *certified Worker image release* to `-Commit`; it may be an
+ancestor of main when later commits only change operator scripts or docs.
+Thus lifecycle-only changes do not trigger another Rust image build. For example:
 
 ```powershell
-$sha = '<40-character-main-SHA>'
-$script = 'B:\Alegria\runtime\alegria-site-' + $sha + '\infra\local\windows_stack.ps1'
+$source = '<40-character-current-main-SHA>'
+$workerRelease = '<40-character-certified-worker-release-SHA>'
+$script = 'B:\Alegria\runtime\alegria-site-' + $source + '\infra\local\windows_stack.ps1'
 
 # Inspect without changes.
 pwsh -NoProfile -File $script -Action Status
 
 # One-time clean installation with isolated, new Docker volumes. Existing
 # Alegria containers are removed, but all old volumes and DB dumps survive.
-pwsh -NoProfile -File $script -Action Install -Commit $sha `
+pwsh -NoProfile -File $script -Action Install -Commit $workerRelease `
   -ReplaceOldContainers -BackupDirectory 'B:\Alegria\secrets\docker-reinstall-20261128'
 
 # Future updates (no volume recreation; outbox first, then Temporal Worker).
-pwsh -NoProfile -File $script -Action Update -Commit $sha
+pwsh -NoProfile -File $script -Action Update -Commit $workerRelease
 
 # Remove only this project's containers and networks; all volumes survive.
 pwsh -NoProfile -File $script -Action Remove
@@ -68,7 +72,8 @@ pwsh -NoProfile -File $script -Action Remove
 two Temporal initialization one-shots, rather than activating every service in
 `docker-compose.yml`. Every `up` uses `--no-build --pull never`; optional
 analytics, Grafana, evaluation profiles and release owners cannot be compiled
-or launched accidentally. It checks exact GitHub/main SHA and both signed
+or launched accidentally. It checks the installer against current GitHub main,
+the Worker release as an ancestor of main, and both signed
 Worker releases, binds host ports to loopback, preserves an inventory of old
 volumes, and verifies the resulting eight runtime containers. If the old
 project's volumes or project name already exist, use `Update` or a **new**
