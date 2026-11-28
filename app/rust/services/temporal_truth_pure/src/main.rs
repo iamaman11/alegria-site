@@ -12,10 +12,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use truth_domain::operation_owner_schema_json::{
-    execute_truth_pure, truth_pure_operation_owner_schemas, validate_truth_pure_input,
-};
-use truth_domain::operations::{DetectContradictionsV1, JudgeCompletenessV1};
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
@@ -31,6 +27,10 @@ use temporalio_sdk::{
     ApplicationFailure, Runtime, Worker, WorkerOptions, WorkflowContext, WorkflowContextView,
     WorkflowResult, WorkflowTermination,
 };
+use truth_domain::operation_owner_schema_json::{
+    execute_truth_pure, truth_pure_operation_owner_schemas, validate_truth_pure_input,
+};
+use truth_domain::operations::{DetectContradictionsV1, JudgeCompletenessV1};
 use url::Url;
 
 const OWNER_QUEUE_V1: &str = "alegria-truth-pure-owner-v1";
@@ -39,9 +39,7 @@ static TRUSTED_TRUTH: OnceLock<TrustedRouteCatalog> = OnceLock::new();
 
 fn invalid_input(reason: impl std::fmt::Display) -> WorkflowTermination {
     WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
-        std::io::Error::other(format!(
-            "Truth pure owner denied typed input: {reason}"
-        )),
+        std::io::Error::other(format!("Truth pure owner denied typed input: {reason}")),
     ))
 }
 
@@ -206,10 +204,7 @@ fn trusted_owner_catalog(build_id: &str) -> Result<TrustedRouteCatalog> {
         "WORKER_BUILD_ID must be 40-hex Git SHA"
     );
     let schemas = truth_pure_operation_owner_schemas()?;
-    ensure!(
-        schemas.len() == 2,
-        "both Truth owner schemas are required"
-    );
+    ensure!(schemas.len() == 2, "both Truth owner schemas are required");
     let mut trusted = TrustedRouteCatalog::default();
     for operation in [
         JudgeCompletenessV1::contract().reference,
@@ -282,10 +277,7 @@ fn install_catalog() -> Result<()> {
 
 async fn connect_client(endpoint: &str, namespace: &str) -> Result<Client> {
     let options = ConnectionOptions::new(Url::parse(endpoint)?)
-        .identity(format!(
-            "alegria-truth-pure-owner:{}",
-            std::process::id()
-        ))
+        .identity(format!("alegria-truth-pure-owner:{}", std::process::id()))
         .build();
     let connection = Connection::connect(options).await?;
     Client::new(connection, ClientOptions::new(namespace).build())
@@ -352,10 +344,7 @@ async fn main() -> Result<()> {
             "unknown Truth owner command"
         );
         let path = args.next().context("missing Truth History path")?;
-        ensure!(
-            args.next().is_none(),
-            "unexpected Truth replay argument"
-        );
+        ensure!(args.next().is_none(), "unexpected Truth replay argument");
         replay_history(Path::new(&path)).await?;
         println!("CI_TEMPORAL_TRUTH_PURE_OWNER_REPLAY=PASS");
         return Ok(());

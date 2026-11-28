@@ -53,19 +53,23 @@ pub fn persist_captured_html_v1(
     }
     let result = &capture.checked_transport;
     let digest = blake3::hash(&capture.html_bytes).to_hex().to_string();
-    if digest != result.content_hash
-        || capture.html_bytes.len() as u64 != result.decoded_body_bytes
+    if digest != result.content_hash || capture.html_bytes.len() as u64 != result.decoded_body_bytes
     {
-        return Err(invalid_data("captured bytes do not match checked transport result"));
+        return Err(invalid_data(
+            "captured bytes do not match checked transport result",
+        ));
     }
     if result.robots_hashes_by_url.len() != capture.robots_by_url.len()
         || result.robots_hashes_by_url.iter().any(|(url, hash)| {
-            capture.robots_by_url.get(url).is_none_or(|observation| {
-                observation.digest() != *hash
-            })
+            capture
+                .robots_by_url
+                .get(url)
+                .is_none_or(|observation| observation.digest() != *hash)
         })
     {
-        return Err(invalid_data("robots observation hashes do not match checked policy"));
+        return Err(invalid_data(
+            "robots observation hashes do not match checked policy",
+        ));
     }
     let robots_bytes = serde_json::to_vec(&capture.robots_by_url)
         .map_err(|_| invalid_data("robots evidence serialization failed"))?;
@@ -127,9 +131,7 @@ fn persist_immutable_bytes(
         uuid::Uuid::new_v4()
     ));
     let mut staged = create_private_file(&random_stage)?;
-    let staged_result = staged
-        .write_all(bytes)
-        .and_then(|()| staged.sync_all());
+    let staged_result = staged.write_all(bytes).and_then(|()| staged.sync_all());
     drop(staged);
     if let Err(error) = staged_result {
         let _ = fs::remove_file(&random_stage);
@@ -159,7 +161,9 @@ fn verify_existing(target: &Path, digest: &str, body_bytes: usize) -> io::Result
     let mut bytes = Vec::with_capacity(body_bytes);
     file.take(body_bytes as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() != body_bytes || blake3::hash(&bytes).to_hex().as_str() != digest {
-        return Err(invalid_data("immutable snapshot content differs from digest"));
+        return Err(invalid_data(
+            "immutable snapshot content differs from digest",
+        ));
     }
     Ok(())
 }
@@ -203,7 +207,11 @@ fn create_private_directory(path: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn create_private_file(path: &Path) -> io::Result<File> {
     use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
 }
 
 #[cfg(not(unix))]
@@ -241,7 +249,9 @@ mod tests {
         let first = persist_captured_html_v1(&temp, "tenant-a", &page).unwrap();
         let second = persist_captured_html_v1(&temp, "tenant-a", &page).unwrap();
         assert_eq!(first, second);
-        assert!(first.relative_snapshot_key.contains("web-page-snapshots-v1/"));
+        assert!(first
+            .relative_snapshot_key
+            .contains("web-page-snapshots-v1/"));
         assert!(!first.relative_snapshot_key.contains("tenant-a"));
         let absolute = temp.join(&first.relative_snapshot_key);
         assert_eq!(fs::read(&absolute).unwrap(), page.html_bytes);
@@ -270,7 +280,9 @@ mod tests {
             body: b"User-agent: *\nDisallow: /private\n".to_vec(),
         };
         let url = "https://www.example.com/".to_owned();
-        page.checked_transport.robots_hashes_by_url.insert(url.clone(), robots.digest());
+        page.checked_transport
+            .robots_hashes_by_url
+            .insert(url.clone(), robots.digest());
         page.robots_by_url.insert(url, robots);
         let first = persist_captured_html_v1(&temp, "tenant-a", &page).unwrap();
         let evidence: serde_json::Value =
@@ -281,7 +293,10 @@ mod tests {
         assert_eq!(evidence["robots_by_url"].as_object().unwrap().len(), 1);
 
         let other_tenant = persist_captured_html_v1(&temp, "tenant-b", &page).unwrap();
-        assert_ne!(first.relative_snapshot_key, other_tenant.relative_snapshot_key);
+        assert_ne!(
+            first.relative_snapshot_key,
+            other_tenant.relative_snapshot_key
+        );
 
         page.robots_by_url.clear();
         assert!(persist_captured_html_v1(&temp, "tenant-a", &page).is_err());

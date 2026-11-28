@@ -196,7 +196,9 @@ fn provider_task(bytes: &[u8], cap: usize) -> Result<Value> {
         parsed["status_code"].as_i64() == Some(20000),
         "provider envelope rejected"
     );
-    let tasks = parsed["tasks"].as_array().context("DataForSEO tasks missing")?;
+    let tasks = parsed["tasks"]
+        .as_array()
+        .context("DataForSEO tasks missing")?;
     ensure!(
         tasks.len() == 1,
         "DataForSEO response is not exactly one task"
@@ -298,10 +300,7 @@ pub(super) fn parse_get_response(
     task_id: &str,
     input: &DataForSeoGoogleOrganicSearchInputV1,
 ) -> Result<TaskRead> {
-    ensure!(
-        valid_task_id(task_id),
-        "invalid paid task id for task_get"
-    );
+    ensure!(valid_task_id(task_id), "invalid paid task id for task_get");
     let task = provider_task(bytes, MAX_GET_BYTES)?;
     ensure!(
         task["id"].as_str() == Some(task_id),
@@ -352,7 +351,9 @@ pub(super) fn validated_output(
         source_status: DataForSeoSourceStatusV1::SerpDiscoveryOnly,
         provider_task_id: post.task_id.clone(),
         provider_response_hash: blake3::hash(&get.raw_bytes).to_hex().to_string(),
-        input_hash: blake3::hash(&serde_json::to_vec(input)?).to_hex().to_string(),
+        input_hash: blake3::hash(&serde_json::to_vec(input)?)
+            .to_hex()
+            .to_string(),
         provider_reported_cost_usd_micros: Some(cost),
         organic_results: get.organic_hits.clone(),
     };
@@ -520,14 +521,12 @@ mod tests {
     fn pending_is_explicit_and_cannot_be_claimed_as_result() {
         let queued = br#"{"status_code":20000,"tasks":[{"status_code":40602,"id":"11151548-1307-0066-0000-aecf8c56ea58","result":null}]}"#;
         assert!(matches!(
-            parse_get_response(queued, "11151548-1307-0066-0000-aecf8c56ea58", &query())
-                .unwrap(),
+            parse_get_response(queued, "11151548-1307-0066-0000-aecf8c56ea58", &query()).unwrap(),
             TaskRead::Pending
         ));
         let broken = br#"{"status_code":20000,"tasks":[{"status_code":40401,"id":"11151548-1307-0066-0000-aecf8c56ea58","result":null}]}"#;
         assert!(
-            parse_get_response(broken, "11151548-1307-0066-0000-aecf8c56ea58", &query())
-                .is_err()
+            parse_get_response(broken, "11151548-1307-0066-0000-aecf8c56ea58", &query()).is_err()
         );
     }
 

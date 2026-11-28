@@ -12,18 +12,18 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use seo_steps::operation_owner_schema_json::{
-    seo_steps_owner_schemas, execute_seo_steps_pure, validate_seo_steps_pure_input,
-};
-use seo_steps::owner_pure_operations::{
-    owner_pure_contracts, BuildSeoOpportunities, ExtractProceduralRules, NormalizeSerpQueries,
-};
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
     Operation, OperationContract, OperationRef, OwnerInvocationV1, OwnerResultV1,
     OwnerValidationRequestV1, OwnerValidationResultV1, PinnedOwnerRouteV1, PortId,
     TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+};
+use seo_steps::operation_owner_schema_json::{
+    execute_seo_steps_pure, seo_steps_owner_schemas, validate_seo_steps_pure_input,
+};
+use seo_steps::owner_pure_operations::{
+    owner_pure_contracts, BuildSeoOpportunities, ExtractProceduralRules, NormalizeSerpQueries,
 };
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{workflow, workflow_methods};
@@ -41,9 +41,7 @@ static TRUSTED_SEO_STEPS: OnceLock<TrustedRouteCatalog> = OnceLock::new();
 
 fn invalid_input(reason: impl std::fmt::Display) -> WorkflowTermination {
     WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
-        std::io::Error::other(format!(
-            "SEO steps pure owner denied typed input: {reason}"
-        )),
+        std::io::Error::other(format!("SEO steps pure owner denied typed input: {reason}")),
     ))
 }
 
@@ -440,8 +438,11 @@ mod tests {
             wrong_command.command_bytes = br#"{"provider_url":"https://example.org"}"#.to_vec();
             assert!(verify_owner_validation(&wrong_command).is_err());
             let mut unknown_field = request.clone();
-            unknown_field.external_inputs.get_mut(&PortId::from("input")).unwrap().payload =
-                br#"{"unrecognized":"payload"}"#.to_vec();
+            unknown_field
+                .external_inputs
+                .get_mut(&PortId::from("input"))
+                .unwrap()
+                .payload = br#"{"unrecognized":"payload"}"#.to_vec();
             assert!(verify_owner_validation(&unknown_field).is_err());
             let mut produced = request;
             produced.external_inputs.clear();
@@ -494,8 +495,8 @@ mod tests {
             execution_key: String::new(),
         };
         let command_bytes = b"{}".to_vec();
-        let dispatch_bytes = canonical_owner_dispatch_input_bytes(&bound_inputs, &command_bytes)
-            .unwrap();
+        let dispatch_bytes =
+            canonical_owner_dispatch_input_bytes(&bound_inputs, &command_bytes).unwrap();
         checked_dispatch.input_hash = owner_content_hash(&dispatch_bytes);
         checked_dispatch.execution_key =
             checked_execution_key(&checked_dispatch, &checked_dispatch.input_hash).unwrap();
@@ -520,11 +521,15 @@ mod tests {
             let repeated = verify_owner_invocation(&invocation).unwrap();
             assert_eq!(first.receipt_bytes, repeated.receipt_bytes);
             assert_eq!(first.outputs.len(), 1);
-            assert_eq!(first.outputs[&PortId::from("output")].payload,
-                repeated.outputs[&PortId::from("output")].payload);
+            assert_eq!(
+                first.outputs[&PortId::from("output")].payload,
+                repeated.outputs[&PortId::from("output")].payload
+            );
             assert!(serde_json::from_slice::<serde_json::Value>(
                 &first.outputs[&PortId::from("output")].payload
-            ).unwrap().is_object());
+            )
+            .unwrap()
+            .is_object());
 
             let mut changed = invocation.clone();
             changed.command_bytes = br#"{"unsafe":true}"#.to_vec();
@@ -548,24 +553,36 @@ mod tests {
         for (operation, _) in sample_operations() {
             let contract = contract(&operation).unwrap();
             assert_eq!(
-                installed.catalog().contract(&operation).unwrap().owner.as_str(),
+                installed
+                    .catalog()
+                    .contract(&operation)
+                    .unwrap()
+                    .owner
+                    .as_str(),
                 "seo_steps"
             );
-            let entry = entries.iter().find(|entry| {
-                entry["contract"]["reference"]["id"] == operation.id.as_str()
-            }).unwrap();
+            let entry = entries
+                .iter()
+                .find(|entry| entry["contract"]["reference"]["id"] == operation.id.as_str())
+                .unwrap();
             assert_eq!(entry["contract"], serde_json::to_value(&contract).unwrap());
             assert_eq!(entry["route"]["build_id"], build_id.as_str());
             assert_eq!(entry["route"]["task_queue"], OWNER_QUEUE_V1);
-            assert_eq!(entry["route"]["workflow_type"], OWNER_OPERATION_CHILD_TYPE_V1);
+            assert_eq!(
+                entry["route"]["workflow_type"],
+                OWNER_OPERATION_CHILD_TYPE_V1
+            );
             assert_eq!(
                 entry["owner_schema"],
                 serde_json::to_value(&seo_steps_owner_schemas().unwrap()[&operation]).unwrap()
             );
         }
-        assert!(installed.catalog().contract(&OperationRef {
-            id: "seo_steps.untrusted_network_call".into(),
-            revision: 1,
-        }).is_none());
+        assert!(installed
+            .catalog()
+            .contract(&OperationRef {
+                id: "seo_steps.untrusted_network_call".into(),
+                revision: 1,
+            })
+            .is_none());
     }
 }

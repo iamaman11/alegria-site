@@ -9,16 +9,16 @@ use std::convert::Infallible;
 
 use operation_protocol::{
     ArtifactSchema, ArtifactTypeId, Operation, OperationRef, OwnerDtoDescriptorFormatV3,
-    OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3,
-    PinnedOwnerOperationSchemaV3, PlanError, PortId, DAG_MAX_INPUT_BYTES,
-    DAG_MAX_RESULT_BYTES, OWNER_SCHEMA_ATTESTATION_REVISION_V3,
+    OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3, PinnedOwnerOperationSchemaV3,
+    PlanError, PortId, DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES,
+    OWNER_SCHEMA_ATTESTATION_REVISION_V3,
 };
 use schemars::{generate::SchemaSettings, JsonSchema};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::owner_pure_operations::{
-    BuildSeoOpportunities, ExtractProceduralRules, NormalizeSerpQueries, OwnerPureOperation,
-    OpportunityBuildFailureV1, SerpNormalizeFailureV1,
+    BuildSeoOpportunities, ExtractProceduralRules, NormalizeSerpQueries, OpportunityBuildFailureV1,
+    OwnerPureOperation, SerpNormalizeFailureV1,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +30,10 @@ pub enum SeoStepsPureWireError {
     OutputTooLarge,
     /// A real owner-defined, versioned Failure DTO; never a successful
     /// placeholder or a transient provider retry.
-    DomainFailure { operation: OperationRef, failure_json: Vec<u8> },
+    DomainFailure {
+        operation: OperationRef,
+        failure_json: Vec<u8>,
+    },
 }
 
 pub fn validate_seo_steps_pure_input(
@@ -221,15 +224,25 @@ mod tests {
             .find(|contract| &contract.reference == operation)
             .unwrap();
             entry.validate(&contract).unwrap();
-            for dto in entry.schema.inputs.values().chain(entry.schema.outputs.values()) {
+            for dto in entry
+                .schema
+                .inputs
+                .values()
+                .chain(entry.schema.outputs.values())
+            {
                 let json: Value = serde_json::from_slice(&dto.descriptor_bytes).unwrap();
-                assert_eq!(json["$schema"], "https://json-schema.org/draft/2020-12/schema");
+                assert_eq!(
+                    json["$schema"],
+                    "https://json-schema.org/draft/2020-12/schema"
+                );
                 assert_eq!(json["type"], "object");
             }
         }
         assert_eq!(
             schemas[&ExtractProceduralRules::contract().reference]
-                .schema.failure.descriptor_bytes,
+                .schema
+                .failure
+                .descriptor_bytes,
             b"false"
         );
         for operation in [
@@ -239,7 +252,10 @@ mod tests {
             let schema: Value =
                 serde_json::from_slice(&schemas[&operation].schema.failure.descriptor_bytes)
                     .unwrap();
-            assert_eq!(schema["$schema"], "https://json-schema.org/draft/2020-12/schema");
+            assert_eq!(
+                schema["$schema"],
+                "https://json-schema.org/draft/2020-12/schema"
+            );
             assert_ne!(schema, Value::Bool(false));
         }
     }
@@ -263,7 +279,10 @@ mod tests {
         );
         let bad = br#"{"run_id":" ","queries":[]}"#;
         match execute_seo_steps_pure(&op, bad).unwrap_err() {
-            SeoStepsPureWireError::DomainFailure { operation, failure_json } => {
+            SeoStepsPureWireError::DomainFailure {
+                operation,
+                failure_json,
+            } => {
                 assert_eq!(operation, op);
                 let failure: crate::owner_pure_operations::SerpNormalizeFailureV1 =
                     serde_json::from_slice(&failure_json).unwrap();

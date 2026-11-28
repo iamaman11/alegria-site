@@ -20,9 +20,9 @@ use reqwest::header::{
 use serde::{Deserialize, Serialize};
 use url::Url;
 use web_fetch_contracts::runtime_policy::{
-    drive_owner_web_fetch_v1, is_public_egress_ip_v1, OperatorFetchPolicyV1,
-    PinnedWebFetchHopV1, RuntimeWebFetchError, WebFetchOwnerTransportV1,
-    WebFetchTransportProofV1, WebFetchTransportResponseV1, WebFetchTransportResultV1,
+    drive_owner_web_fetch_v1, is_public_egress_ip_v1, OperatorFetchPolicyV1, PinnedWebFetchHopV1,
+    RuntimeWebFetchError, WebFetchOwnerTransportV1, WebFetchTransportProofV1,
+    WebFetchTransportResponseV1, WebFetchTransportResultV1,
 };
 use web_fetch_contracts::WebFetchRequestV1;
 
@@ -63,9 +63,8 @@ pub fn capture_admitted_public_page_v1(
     request: &WebFetchRequestV1,
     operator: &OperatorFetchPolicyV1,
 ) -> Result<NativePageCaptureV1, RuntimeWebFetchError> {
-    let mut native = NativeHttpsTransportV1::new(Duration::from_secs(u64::from(
-        request.timeout_seconds,
-    )));
+    let mut native =
+        NativeHttpsTransportV1::new(Duration::from_secs(u64::from(request.timeout_seconds)));
     let checked_transport = drive_owner_web_fetch_v1(request, operator, &mut native)?;
     let html_bytes = native
         .final_html_bytes
@@ -77,9 +76,15 @@ pub fn capture_admitted_public_page_v1(
         return Err(RuntimeWebFetchError::InvalidContentHash);
     }
     if native.robots_by_url.len() != checked_transport.robots_hashes_by_url.len()
-        || checked_transport.robots_hashes_by_url.iter().any(|(url, hash)| {
-            native.robots_by_url.get(url).is_none_or(|observation| observation.digest() != *hash)
-        })
+        || checked_transport
+            .robots_hashes_by_url
+            .iter()
+            .any(|(url, hash)| {
+                native
+                    .robots_by_url
+                    .get(url)
+                    .is_none_or(|observation| observation.digest() != *hash)
+            })
     {
         return Err(RuntimeWebFetchError::RobotsNotAllowed);
     }
@@ -227,8 +232,8 @@ impl WebFetchOwnerTransportV1 for NativeHttpsTransportV1 {
         if limit == 0 {
             return Err(RuntimeWebFetchError::RuntimeBudgetExceeded);
         }
-        let mut robots_url = Url::parse(&hop.url)
-            .map_err(|_| RuntimeWebFetchError::TransportFailed)?;
+        let mut robots_url =
+            Url::parse(&hop.url).map_err(|_| RuntimeWebFetchError::TransportFailed)?;
         robots_url.set_path("/robots.txt");
         robots_url.set_query(None);
         let client = self.client_for(hop, self.time_left(remaining_deadline_ms)?)?;
@@ -245,13 +250,19 @@ impl WebFetchOwnerTransportV1 for NativeHttpsTransportV1 {
         // In particular 401/403, 429, redirects, and 5xx are NOT treated as
         // permission to crawl or followed without an independent hop check.
         let (allowed, evidence) = if status == reqwest::StatusCode::NOT_FOUND {
-            (true, RobotsResponseEvidenceV1 { status_code: 404, body: Vec::new() })
+            (
+                true,
+                RobotsResponseEvidenceV1 {
+                    status_code: 404,
+                    body: Vec::new(),
+                },
+            )
         } else if status.is_success() {
             let bytes = self.read_bounded(response, limit)?;
-            let raw_text = std::str::from_utf8(&bytes)
-                .map_err(|_| RuntimeWebFetchError::RobotsNotAllowed)?;
-            let path_url = Url::parse(&hop.url)
-                .map_err(|_| RuntimeWebFetchError::TransportFailed)?;
+            let raw_text =
+                std::str::from_utf8(&bytes).map_err(|_| RuntimeWebFetchError::RobotsNotAllowed)?;
+            let path_url =
+                Url::parse(&hop.url).map_err(|_| RuntimeWebFetchError::TransportFailed)?;
             let mut request_target = path_url.path().to_owned();
             if let Some(query) = path_url.query() {
                 request_target.push('?');
@@ -259,7 +270,10 @@ impl WebFetchOwnerTransportV1 for NativeHttpsTransportV1 {
             }
             (
                 robots_allows_v1(raw_text, BOT_AGENT, &request_target)?,
-                RobotsResponseEvidenceV1 { status_code: status.as_u16(), body: bytes },
+                RobotsResponseEvidenceV1 {
+                    status_code: status.as_u16(),
+                    body: bytes,
+                },
             )
         } else {
             return Err(RuntimeWebFetchError::RobotsNotAllowed);
@@ -396,10 +410,15 @@ pub fn robots_allows_v1(
                     current_rules.push((key == "allow", value.to_owned()));
                 }
             }
-            _ => {},
+            _ => {}
         }
     }
-    finish(&mut grouped_rules, &mut group_agents, &mut current_rules, &mut in_rules);
+    finish(
+        &mut grouped_rules,
+        &mut group_agents,
+        &mut current_rules,
+        &mut in_rules,
+    );
 
     let longest_specific = grouped_rules
         .iter()
@@ -443,7 +462,11 @@ fn robots_prefix_pattern_matches_v1(
         return Err(RuntimeWebFetchError::RobotsNotAllowed);
     }
     let anchored = pattern.ends_with('$');
-    let without_end = if anchored { &pattern[..pattern.len() - 1] } else { pattern };
+    let without_end = if anchored {
+        &pattern[..pattern.len() - 1]
+    } else {
+        pattern
+    };
     if without_end.contains('$') {
         return Err(RuntimeWebFetchError::RobotsNotAllowed);
     }

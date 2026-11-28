@@ -182,9 +182,11 @@ mod wire_tests {
         let first = execute_truth_pure(&completeness, input).unwrap();
         let second = execute_truth_pure(&completeness, input).unwrap();
         assert_eq!(first, second);
-        assert!(serde_json::from_slice::<serde_json::Value>(&first).unwrap()["needs_hitl"]
-            .as_bool()
-            .unwrap());
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&first).unwrap()["needs_hitl"]
+                .as_bool()
+                .unwrap()
+        );
 
         let contradictions = DetectContradictionsV1::contract().reference;
         let input = br#"{"run_id":"run-1","facts":[]}"#;
