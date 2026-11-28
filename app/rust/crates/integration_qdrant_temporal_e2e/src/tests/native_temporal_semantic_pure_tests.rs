@@ -401,6 +401,41 @@ async fn semantic_pure_native_v2_entity_spans_and_canonicalize_produced() {
                 &event.attributes,
                 Some(Attributes::ChildWorkflowExecutionFailedEventAttributes(_))
             )));
+            let acquisition_validation = events
+                .iter()
+                .find_map(|event| match &event.attributes {
+                    Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                        if a.workflow_id.starts_with("alegria-owner-validate-v1-")
+                            && a.task_queue
+                                .as_ref()
+                                .is_some_and(|q| q.name == "alegria-acquisition-pure-owner-v1") =>
+                    {
+                        Some(a.workflow_id.clone())
+                    }
+                    _ => None,
+                })
+                .expect("acquisition validation child");
+            let rejected_history = client
+                .get_workflow_handle::<UntypedWorkflow>(acquisition_validation)
+                .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events()
+                .await
+                .unwrap();
+            let expected_reason = if index == 3 {
+                "PageDisallowsExtraction"
+            } else {
+                "BlockDisallowsExtraction"
+            };
+            assert!(rejected_history
+                .iter()
+                .any(|event| match &event.attributes {
+                    Some(Attributes::WorkflowExecutionFailedEventAttributes(attributes)) =>
+                        attributes
+                            .failure
+                            .as_ref()
+                            .is_some_and(|failure| failure.message.contains(expected_reason)),
+                    _ => false,
+                }));
             continue;
         }
         let completed = completed.expect("semantic native DAG failed");

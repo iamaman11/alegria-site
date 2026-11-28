@@ -233,6 +233,13 @@ SDK replay captured server History на собственном exact-SHA бин�
 сбрасывает `allow_extraction` у **всех** блоков. Композиция, в которой
 положительный ответ ACQ-02 обходил бы page-level gate, недопустима.
 
+В PR #96 `acquisition.prepare_entity_span_input@1` объединяет эти проверки
+для одного переданного блока. Его выход и вход `semantic.entity_spans@1`
+используют общий Rust-контракт `semantic.entity_span_input@1`. Далее
+`semantic.canonicalize_mentions@1` принимает результат извлечения. Нативный
+сценарий V2 сверяет обе связи по истории Temporal и читает три шага по
+одному `run_id`. [Порты и настройки воркеров](OPS_SITE_ARCHITECT_OPERATOR_V1.md#связка-acquisition-и-семантики)
+
 ### Новая проверяемая структурная граница (после исходного baseline)
 
 Новый owner-local код `seo_application::operation_adapter::owner_dto_schema`
