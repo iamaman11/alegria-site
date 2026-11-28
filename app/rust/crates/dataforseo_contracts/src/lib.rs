@@ -671,7 +671,9 @@ mod tests {
         forged.organic_results[0].domain_norm = "forged-other-source.test".into();
         assert!(validate_discovery_shape_only(&forged, &input).is_err());
         forged = valid.clone();
-        forged.organic_results.push(forged.organic_results[0].clone());
+        forged
+            .organic_results
+            .push(forged.organic_results[0].clone());
         assert!(
             validate_discovery_shape_only(&forged, &input).is_err(),
             "duplicate organic ranks must be rejected at the typed output boundary"

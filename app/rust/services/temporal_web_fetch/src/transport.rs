@@ -467,17 +467,20 @@ fn normalize_robots_octets_v1(input: &str) -> Result<String, RuntimeWebFetchErro
     let mut offset = 0;
     while offset < bytes.len() {
         if bytes[offset] == b'%' {
-            let digits = bytes.get(offset + 1..offset + 3)
+            let digits = bytes
+                .get(offset + 1..offset + 3)
                 .ok_or(RuntimeWebFetchError::RobotsNotAllowed)?;
             let upper = digits[0].to_ascii_uppercase();
             let lower = digits[1].to_ascii_uppercase();
             if !upper.is_ascii_hexdigit() || !lower.is_ascii_hexdigit() {
                 return Err(RuntimeWebFetchError::RobotsNotAllowed);
             }
-            let hex = |byte: u8| if byte.is_ascii_digit() {
-                byte - b'0'
-            } else {
-                byte - b'A' + 10
+            let hex = |byte: u8| {
+                if byte.is_ascii_digit() {
+                    byte - b'0'
+                } else {
+                    byte - b'A' + 10
+                }
             };
             let decoded = hex(upper) * 16 + hex(lower);
             if decoded.is_ascii_alphanumeric() || b"-._~".contains(&decoded) {
@@ -646,8 +649,10 @@ mod tests {
         assert!(robots_allows_v1(robots, BOT_AGENT, "/file-name.txt").unwrap());
         let robots = "User-agent: *\nDisallow: /private\n";
         for malformed in ["/priva%", "/priva%2", "/priva%GG"] {
-            assert_eq!(robots_allows_v1(robots, BOT_AGENT, malformed),
-                Err(RuntimeWebFetchError::RobotsNotAllowed));
+            assert_eq!(
+                robots_allows_v1(robots, BOT_AGENT, malformed),
+                Err(RuntimeWebFetchError::RobotsNotAllowed)
+            );
         }
     }
 }

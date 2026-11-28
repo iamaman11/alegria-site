@@ -341,20 +341,29 @@ mod tests {
     fn untrusted_archive_root_or_intermediate_symlink_never_receives_source_bytes() {
         use std::os::unix::fs::symlink;
         let temp = std::env::temp_dir().join(format!("web-fetch-archive-{}", uuid::Uuid::new_v4()));
-        let elsewhere = std::env::temp_dir().join(format!("web-fetch-elsewhere-{}", uuid::Uuid::new_v4()));
+        let elsewhere =
+            std::env::temp_dir().join(format!("web-fetch-elsewhere-{}", uuid::Uuid::new_v4()));
         create_private_directory(&temp).unwrap();
         create_private_directory(&elsewhere).unwrap();
         let page = capture(b"<html>cannot escape private root</html>");
 
         let root_alias = temp.with_extension("alias");
         symlink(&temp, &root_alias).unwrap();
-        assert_eq!(persist_captured_html_v1(&root_alias, "tenant-a", &page)
-            .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            persist_captured_html_v1(&root_alias, "tenant-a", &page)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
 
         let intermediate = temp.join(ARCHIVE_DIRECTORY);
         symlink(&elsewhere, &intermediate).unwrap();
-        assert_eq!(persist_captured_html_v1(&temp, "tenant-a", &page)
-            .unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            persist_captured_html_v1(&temp, "tenant-a", &page)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
 
         fs::remove_file(root_alias).unwrap();
