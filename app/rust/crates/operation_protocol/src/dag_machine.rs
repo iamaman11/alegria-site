@@ -643,9 +643,9 @@ mod tests {
         OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
     };
 
-    fn site_lab_expected_start(run: &OperationDagRunV6) -> crate::SiteLabExpectedStartV1 {
-        crate::SiteLabExpectedStartV1 {
-            schema_revision: crate::SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    fn site_architect_expected_start(run: &OperationDagRunV6) -> crate::SiteArchitectExpectedStartV1 {
+        crate::SiteArchitectExpectedStartV1 {
+            schema_revision: crate::SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
             command_hashes: run
                 .owner_commands
@@ -671,10 +671,10 @@ mod tests {
     }
 
     #[test]
-    fn site_lab_start_preflight_is_only_a_hash_only_unadmitted_result() {
+    fn site_architect_start_preflight_is_only_a_hash_only_unadmitted_result() {
         let (run, routes) = setup();
-        let expected = site_lab_expected_start(&run);
-        let report = crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+        let expected = site_architect_expected_start(&run);
+        let report = crate::preflight_unadmitted_site_architect_v2_start(&run, &routes, &expected)
             .expect("existing V2 machine accepts the unchanged snapshot");
         assert_eq!(report.status, "preflight_only_not_admitted");
         assert_eq!(report.execution, "not_started");
@@ -686,9 +686,9 @@ mod tests {
     }
 
     #[test]
-    fn site_lab_preflight_rejects_changed_owner_bytes_and_unpinned_command_set() {
+    fn site_architect_preflight_rejects_changed_owner_bytes_and_unpinned_command_set() {
         let (run, routes) = setup();
-        let expected = site_lab_expected_start(&run);
+        let expected = site_architect_expected_start(&run);
         let mut changed = run.clone();
         changed
             .owner_commands
@@ -697,8 +697,8 @@ mod tests {
             .command_bytes
             .push(b'!');
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&changed, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::CommandDigestMismatch(instance))
+            crate::preflight_unadmitted_site_architect_v2_start(&changed, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::CommandDigestMismatch(instance))
                 if instance.as_str() == "consumer"
         ));
 
@@ -707,8 +707,8 @@ mod tests {
             .command_hashes
             .remove(&OperationInstanceId::from("producer"));
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &incomplete),
-            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+            crate::preflight_unadmitted_site_architect_v2_start(&run, &routes, &incomplete),
+            Err(crate::SiteArchitectStartPreflightError::InvalidExpectation)
         ));
         let mut wrong_hash = expected;
         wrong_hash.command_hashes.insert(
@@ -716,34 +716,34 @@ mod tests {
             "not-canonical".to_owned(),
         );
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &wrong_hash),
-            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+            crate::preflight_unadmitted_site_architect_v2_start(&run, &routes, &wrong_hash),
+            Err(crate::SiteArchitectStartPreflightError::InvalidExpectation)
         ));
 
-        let mut wrong_plan = site_lab_expected_start(&run);
+        let mut wrong_plan = site_architect_expected_start(&run);
         wrong_plan.plan_hash = PlanHash::from("different-plan");
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&run, &routes, &wrong_plan),
-            Err(crate::SiteLabStartPreflightError::InvalidExpectation)
+            crate::preflight_unadmitted_site_architect_v2_start(&run, &routes, &wrong_plan),
+            Err(crate::SiteArchitectStartPreflightError::InvalidExpectation)
         ));
     }
 
     #[test]
-    fn site_lab_preflight_reuses_the_native_validator_for_plan_routes_and_sources() {
+    fn site_architect_preflight_reuses_the_native_validator_for_plan_routes_and_sources() {
         let (run, routes) = setup();
-        let expected = site_lab_expected_start(&run);
+        let expected = site_architect_expected_start(&run);
         let mut tampered_plan = run.clone();
         tampered_plan.plan.nodes[0].outputs.clear();
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&tampered_plan, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preflight_unadmitted_site_architect_v2_start(&tampered_plan, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
 
         let mut tampered_route = run.clone();
         tampered_route.pinned_routes[0].task_queue = "untrusted-queue".to_owned();
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(&tampered_route, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preflight_unadmitted_site_architect_v2_start(&tampered_route, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
 
         let mut source_run = run;
@@ -772,8 +772,8 @@ mod tests {
                 payload: b"same-looking-bytes-not-admitted".to_vec(),
             },
         );
-        let source_expectation = site_lab_expected_start(&source_run);
-        let original = crate::preflight_unadmitted_site_lab_v2_start(
+        let source_expectation = site_architect_expected_start(&source_run);
+        let original = crate::preflight_unadmitted_site_architect_v2_start(
             &source_run,
             &routes,
             &source_expectation,
@@ -789,12 +789,12 @@ mod tests {
             .payload
             .push(b'!');
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(
+            crate::preflight_unadmitted_site_architect_v2_start(
                 &changed_payload,
                 &routes,
                 &source_expectation
             ),
-            Err(crate::SiteLabStartPreflightError::SourceDigestMismatch(artifact))
+            Err(crate::SiteArchitectStartPreflightError::SourceDigestMismatch(artifact))
                 if artifact.as_str() == "external-document"
         ));
 
@@ -804,24 +804,24 @@ mod tests {
             .unwrap()
             .provenance = "wrong-source-revision".to_owned();
         assert!(matches!(
-            crate::preflight_unadmitted_site_lab_v2_start(
+            crate::preflight_unadmitted_site_architect_v2_start(
                 &source_run,
                 &routes,
                 &source_expectation
             ),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
     }
 
     #[test]
-    fn site_lab_start_preview_shows_typed_owner_steps_without_command_or_source_bytes() {
+    fn site_architect_start_preview_shows_typed_owner_steps_without_command_or_source_bytes() {
         let (run, routes) = setup();
-        let expected = site_lab_expected_start(&run);
-        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+        let expected = site_architect_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_architect_v2_start(&run, &routes, &expected)
             .expect("trusted unchanged V2 DAG must have a safe read-only preview");
         assert_eq!(
             preview.schema_revision,
-            crate::SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1
+            crate::SITE_ARCHITECT_START_PREVIEW_SCHEMA_REVISION_V1
         );
         assert_eq!(preview.preflight.execution, "not_started");
         assert_eq!(preview.preflight.owner_admission, "not_issued");
@@ -851,7 +851,7 @@ mod tests {
         let consumer = &preview.steps[1];
         assert!(matches!(
             consumer.inputs.get(&PortId::from("source")),
-            Some(crate::SiteLabPreviewInputV1::Produced {
+            Some(crate::SiteArchitectPreviewInputV1::Produced {
                 producer,
                 producer_port,
                 artifact,
@@ -870,9 +870,9 @@ mod tests {
     }
 
     #[test]
-    fn site_lab_start_preview_rejects_untrusted_owner_and_route_mutations() {
+    fn site_architect_start_preview_rejects_untrusted_owner_and_route_mutations() {
         let (run, routes) = setup();
-        let expected = site_lab_expected_start(&run);
+        let expected = site_architect_expected_start(&run);
         let mut changed_owner = run.clone();
         changed_owner
             .owner_commands
@@ -880,25 +880,25 @@ mod tests {
             .unwrap()
             .owner = OperationOwnerId::from("other-owner");
         assert!(matches!(
-            crate::preview_unadmitted_site_lab_v2_start(&changed_owner, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preview_unadmitted_site_architect_v2_start(&changed_owner, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
         let mut changed_route = run.clone();
         changed_route.pinned_routes[0].owner = OperationOwnerId::from("other-owner");
         assert!(matches!(
-            crate::preview_unadmitted_site_lab_v2_start(&changed_route, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preview_unadmitted_site_architect_v2_start(&changed_route, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
         let mut changed_deployment = run.clone();
         changed_deployment.pinned_routes[0].build_id = "untrusted-build".into();
         assert!(matches!(
-            crate::preview_unadmitted_site_lab_v2_start(&changed_deployment, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preview_unadmitted_site_architect_v2_start(&changed_deployment, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
     }
 
     #[test]
-    fn site_lab_start_preview_binds_external_byte_hash_but_never_asserts_source_truth() {
+    fn site_architect_start_preview_binds_external_byte_hash_but_never_asserts_source_truth() {
         let (mut run, routes) = setup();
         let source_id = ArtifactId::from("external-document");
         run.plan.external_artifacts.insert(
@@ -925,8 +925,8 @@ mod tests {
                 payload: b"secret-source-payload".to_vec(),
             },
         );
-        let expected = site_lab_expected_start(&run);
-        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+        let expected = site_architect_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_architect_v2_start(&run, &routes, &expected)
             .expect("bound source is structurally valid, not independently admitted");
         assert_eq!(preview.preflight.source_authentication, "not_checked");
         // Replacing Produced with External removes the causal edge, so the
@@ -939,7 +939,7 @@ mod tests {
             .expect("the checked plan contains the consumer");
         assert!(matches!(
             consumer.inputs.get(&PortId::from("source")),
-            Some(crate::SiteLabPreviewInputV1::External {
+            Some(crate::SiteArchitectPreviewInputV1::External {
                 artifact,
                 schema: source_schema,
                 payload_hash,
@@ -954,8 +954,8 @@ mod tests {
         let mut replaced_bytes = run.clone();
         replaced_bytes.admitted.get_mut(&source_id).unwrap().payload = b"attacker-source".to_vec();
         assert!(matches!(
-            crate::preview_unadmitted_site_lab_v2_start(&replaced_bytes, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::SourceDigestMismatch(id)) if id == source_id
+            crate::preview_unadmitted_site_architect_v2_start(&replaced_bytes, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::SourceDigestMismatch(id)) if id == source_id
         ));
 
         let mut different_origin = run;
@@ -965,13 +965,13 @@ mod tests {
             .unwrap()
             .provenance = "claim-another-source".into();
         assert!(matches!(
-            crate::preview_unadmitted_site_lab_v2_start(&different_origin, &routes, &expected),
-            Err(crate::SiteLabStartPreflightError::InvalidRun(_))
+            crate::preview_unadmitted_site_architect_v2_start(&different_origin, &routes, &expected),
+            Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
     }
 
     #[test]
-    fn site_lab_preview_of_effectful_contract_is_never_effect_admission() {
+    fn site_architect_preview_of_effectful_contract_is_never_effect_admission() {
         let (mut run, _) = setup();
         let mut routes = TrustedRouteCatalog::default();
         let effect = EffectId::from("provider.read.external");
@@ -1011,8 +1011,8 @@ mod tests {
                     .map(|command| &command.operation),
             )
             .unwrap();
-        let expected = site_lab_expected_start(&run);
-        let preview = crate::preview_unadmitted_site_lab_v2_start(&run, &routes, &expected)
+        let expected = site_architect_expected_start(&run);
+        let preview = crate::preview_unadmitted_site_architect_v2_start(&run, &routes, &expected)
             .expect("preview may describe an effect without authorizing it");
         assert_eq!(preview.steps[1].idempotency, IdempotencyPolicy::Idempotent);
         assert!(preview.steps[1].permitted_effects.contains(&effect));

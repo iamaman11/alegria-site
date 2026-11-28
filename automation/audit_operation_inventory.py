@@ -22,7 +22,7 @@ WORKFLOWS = ROOT / "app/rust/services/temporal/src/workflows"
 EXECUTION = ROOT / "app/rust/crates/seo_application/src/execution.rs"
 RECIPE = ROOT / "app/rust/crates/seo_application/src/execution/recipe.rs"
 PURE_OPS = ROOT / "app/rust/crates/seo_domain/src/extraction/operations.rs"
-PURE_CATALOG = ROOT / "app/rust/crates/seo_application/src/site_lab/parameters_json.rs"
+PURE_CATALOG = ROOT / "app/rust/crates/seo_application/src/site_architect/parameters_json.rs"
 PURE_RUNNER = ROOT / "app/rust/crates/seo_application/src/operation_adapter.rs"
 ACQUISITION_OWNER_OPS = ROOT / "app/rust/crates/acquisition/src/operations.rs"
 MATRIX = ROOT / "docs/ISSUE94_OPERATION_DECISION_MATRIX.md"
@@ -363,7 +363,7 @@ def audited_pure_contracts() -> tuple[dict[str, dict], list[str]]:
         installed = bool(re.search(rf"\b{re.escape(name)}::contract\(\)\.reference", catalog))
         registered = bool(re.search(rf"\bregister_pure::<{re.escape(name)}>\(\)", runner))
         if not installed:
-            errors.append(f"pure owner {name} missing trusted Site Lab catalog registration")
+            errors.append(f"pure owner {name} missing trusted siteArchitect catalog registration")
         if not registered:
             errors.append(f"pure owner {name} missing independent pure runner registration")
         implementations[name].update({
@@ -451,7 +451,7 @@ def candidate_readiness(
                 else "owner_input_output_failure_source_verified" if typed_owner_only
                 else "not_verified"
             ),
-            "installed_site_lab_contract": (
+            "installed_site_architect_contract": (
                 "pure_catalog_registration_source_verified"
                 if typed_source and contract["catalog_registration_source"]
                 else "not_verified"

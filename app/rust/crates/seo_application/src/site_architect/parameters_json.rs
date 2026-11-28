@@ -1,4 +1,4 @@
-//! Trusted JSON authoring wire adapter for the existing Site Lab operation catalog.
+//! Trusted JSON authoring wire adapter for the existing siteArchitect operation catalog.
 //!
 //! A recipe supplies JSON values, never Rust type names or Task Queues. An
 //! installed owner binds those values to its concrete serde DTO or registers
@@ -64,7 +64,7 @@ impl From<Value> for RecipeParameters {
 /// One logical trusted operation catalog, with optional owner-owned parameter
 /// contracts. Registering an operation schema does NOT register an executable
 /// owner route or prove that provider credentials are available.
-pub struct SiteLabCatalog {
+pub struct SiteArchitectCatalog {
     contracts: ContractCatalog,
     parameters: BTreeMap<OperationRef, ParameterDescriptor>,
 }
@@ -107,7 +107,7 @@ pub struct CheckedParameters {
 #[serde(deny_unknown_fields)]
 pub struct NoParameters {}
 
-impl SiteLabCatalog {
+impl SiteArchitectCatalog {
     pub fn new(contracts: ContractCatalog) -> Self {
         Self {
             contracts,
@@ -260,10 +260,10 @@ impl SiteLabCatalog {
 /// command parameters. Their *artifact inputs* retain their concrete DTOs.
 /// Do not assume every future pure semantic operation has no parameters: its
 /// independently registered owner must explicitly publish its own schema.
-pub fn installed_semantic_lab_catalog(
+pub fn installed_semantic_operation_catalog(
     contracts: ContractCatalog,
-) -> Result<SiteLabCatalog, ParameterError> {
-    let mut installed = SiteLabCatalog::new(contracts);
+) -> Result<SiteArchitectCatalog, ParameterError> {
+    let mut installed = SiteArchitectCatalog::new(contracts);
     let known_operations = [
         LayerRoute::contract().reference,
         EntitySpans::contract().reference,

@@ -4,7 +4,7 @@ use crate::source_relevance::PageMode;
 use operation_protocol::ContractCatalog;
 
 fn execute_one_typed<O: PureAcquisitionOperation>(wire: &str) -> O::Output {
-    // Standalone owner-level typed evaluation. The external Site Lab
+    // Standalone owner-level typed evaluation. The external siteArchitect
     // runtime does not currently register acquisition operations.
     let input: O::Input = serde_json::from_str(wire).unwrap();
     let result = O::evaluate(&input);

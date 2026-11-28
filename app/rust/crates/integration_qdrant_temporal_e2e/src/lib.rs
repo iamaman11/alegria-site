@@ -106,5 +106,5 @@ mod tests {
     include!("tests/native_temporal_dataforseo_tests.rs");
     include!("tests/native_temporal_acquisition_tests.rs");
     include!("tests/native_one_step_grant_tests.rs");
-    include!("tests/trusted_site_lab_owner_catalog_tests.rs");
+    include!("tests/trusted_site_architect_owner_catalog_tests.rs");
 }

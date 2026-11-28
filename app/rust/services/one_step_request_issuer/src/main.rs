@@ -62,7 +62,7 @@ struct IndependentlyApprovedRequestV1 {
     operation_revision: u32,
     parent_workflow_id: String,
     plan_hash: String,
-    expected: operation_protocol::SiteLabExpectedStartV1,
+    expected: operation_protocol::SiteArchitectExpectedStartV1,
     limits: OneStepResourceLimitsV1,
     maximum_limits: OneStepResourceLimitsV1,
     approved_at_unix_seconds: i64,

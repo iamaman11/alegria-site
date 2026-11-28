@@ -168,19 +168,19 @@ NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs",
 })
 
-# Site Lab accepts untrusted *authoring* JSON, not runtime owner commands.
+# siteArchitect accepts untrusted *authoring* JSON, not runtime owner commands.
 # This one adapter decodes owner-authored parameter DTOs and hashes their
 # canonical bytes without performing an effect. Its exact test fixture file
 # exercises strict types and schema pins; no blanket seo_application waiver.
-SITE_LAB_AUTHORING_JSON_BOUNDARIES = frozenset({
-    "app/rust/crates/seo_application/src/site_lab/parameters_json.rs",
-    "app/rust/crates/seo_application/src/site_lab/tests.rs",
+SITE_ARCHITECT_AUTHORING_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/seo_application/src/site_architect/parameters_json.rs",
+    "app/rust/crates/seo_application/src/site_architect/tests.rs",
     # Only this exact fixture test constructs parameter values; the production
     # per-operation inspector uses the existing typed catalog and DTO gate.
-    "app/rust/crates/seo_application/src/site_lab/operation_inspection/tests.rs",
+    "app/rust/crates/seo_application/src/site_architect/operation_inspection/tests.rs",
 })
 
-# Exact Serde wire normalizer shared by Site Lab parameter authoring and the
+# Exact Serde wire normalizer shared by siteArchitect parameter authoring and the
 # pure DAG executor. It only rejects ambiguous or silently changed fields;
 # domain Operation DTOs, the provider-neutral protocol, and future sibling
 # modules do not inherit permission to interpret raw JSON.
@@ -254,8 +254,8 @@ PURE_OWNER_LOCAL_JSON_BOUNDARIES = frozenset({
 # A single opt-in cross-owner integration fixture constructs protected catalog
 # JSON and typed Temporal plan wire values for a real PG/Qdrant contract test.
 # No production owner, DAG runner, or sibling E2E file inherits this exception.
-SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES = frozenset({
-    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_lab_owner_catalog_tests.rs",
+SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_architect_owner_catalog_tests.rs",
 })
 
 # The new native DataForSEO owner has two *exact* typed wire boundaries:
@@ -289,13 +289,13 @@ def is_allowed_json_boundary(path: Path) -> bool:
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
                | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES
-               | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_LAB_AUTHORING_JSON_BOUNDARIES
+               | NATIVE_OWNER_V2_JSON_BOUNDARIES | SITE_ARCHITECT_AUTHORING_JSON_BOUNDARIES
                | TYPED_OPERATION_JSON_BOUNDARIES
                | ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES
                | ACQUISITION_OWNER_JSON_TEST_BOUNDARIES
                | ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES
                | PURE_OWNER_LOCAL_JSON_BOUNDARIES
-               | SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES
+               | SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES
                | DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):

@@ -78,14 +78,14 @@ pub use signed_mcp_admission_v1::{
     VerifiedSignedOneStepAdmissionV1,
 };
 
-mod site_lab_preflight;
-pub use site_lab_preflight::{
-    preflight_unadmitted_single_operation_v2_start, preflight_unadmitted_site_lab_v2_start,
-    preview_unadmitted_single_operation_v2_start, preview_unadmitted_site_lab_v2_start,
-    SiteLabExpectedStartV1, SiteLabPreviewInputV1, SiteLabPreviewOutputV1, SiteLabPreviewStepV1,
-    SiteLabSingleOperationPreflightError, SiteLabStartPreflightError, SiteLabUnadmittedPreflightV1,
-    SiteLabUnadmittedStartPreviewV1, SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
-    SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1,
+mod site_architect_preflight;
+pub use site_architect_preflight::{
+    preflight_unadmitted_single_operation_v2_start, preflight_unadmitted_site_architect_v2_start,
+    preview_unadmitted_single_operation_v2_start, preview_unadmitted_site_architect_v2_start,
+    SiteArchitectExpectedStartV1, SiteArchitectPreviewInputV1, SiteArchitectPreviewOutputV1, SiteArchitectPreviewStepV1,
+    SiteArchitectSingleOperationPreflightError, SiteArchitectStartPreflightError, SiteArchitectUnadmittedPreflightV1,
+    SiteArchitectUnadmittedStartPreviewV1, SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    SITE_ARCHITECT_START_PREVIEW_SCHEMA_REVISION_V1,
 };
 
 /// Strongly typed identities prevent accidentally exchanging a node, port,

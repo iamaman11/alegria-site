@@ -1,10 +1,10 @@
-/// Exercise the SAME operator-owned catalog boundary that Site Lab uses for
+/// Exercise the SAME operator-owned catalog boundary that siteArchitect uses for
 /// authoring. These are real PostgreSQL/Qdrant contracts and shared artifact
 /// types, not mock provider operations or permission to execute either owner.
 /// No Temporal, PostgreSQL, or Qdrant container is started by this test.
-struct SiteLabV2CiRootCatalog(std::path::PathBuf);
+struct SiteArchitectV2CiRootCatalog(std::path::PathBuf);
 
-impl SiteLabV2CiRootCatalog {
+impl SiteArchitectV2CiRootCatalog {
     fn new() -> Self {
         assert_eq!(env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
         assert_eq!(
@@ -14,13 +14,13 @@ impl SiteLabV2CiRootCatalog {
         // Unique, exact filename in the established immutable catalog root;
         // no caller-supplied path or mutable DAG input becomes trust authority.
         Self(PathBuf::from(format!(
-            "/etc/alegria/site-lab-provider-contracts-{}.json",
+            "/etc/alegria/site-architect-provider-contracts-{}.json",
             Uuid::new_v4()
         )))
     }
 
     fn install(&self, document: &serde_json::Value) {
-        let source = secret("ci-site-lab-provider-contracts", &document.to_string());
+        let source = secret("ci-site-architect-provider-contracts", &document.to_string());
         let installed = Command::new("sudo")
             .args(["-n", "install", "-o", "root", "-g", "root", "-m", "0644"])
             .arg(&source)
@@ -35,7 +35,7 @@ impl SiteLabV2CiRootCatalog {
     }
 }
 
-impl Drop for SiteLabV2CiRootCatalog {
+impl Drop for SiteArchitectV2CiRootCatalog {
     fn drop(&mut self) {
         // This guard owns only its uniquely named disposable CI fixture.
         let removed = Command::new("sudo")
@@ -43,14 +43,14 @@ impl Drop for SiteLabV2CiRootCatalog {
             .arg(&self.0)
             .status();
         if !matches!(removed, Ok(status) if status.success()) {
-            eprintln!("CI could not remove its isolated Site Lab trust-catalog fixture");
+            eprintln!("CI could not remove its isolated siteArchitect trust-catalog fixture");
         }
     }
 }
 
 #[test]
 #[serial]
-fn mixed_v2_native_site_lab_catalog_pins_real_pg_qdrant_without_owner_admission() {
+fn mixed_v2_native_site_architect_catalog_pins_real_pg_qdrant_without_owner_admission() {
     use operation_protocol::{
         Operation, OperationContract, PinnedOwnerRouteV1, PortId, OWNER_OPERATION_CHILD_TYPE_V1,
     };
@@ -114,11 +114,11 @@ fn mixed_v2_native_site_lab_catalog_pins_real_pg_qdrant_without_owner_admission(
         })
     });
     let manifest = json!({"schema_revision":2,"entries":entries});
-    let trusted_file = SiteLabV2CiRootCatalog::new();
+    let trusted_file = SiteArchitectV2CiRootCatalog::new();
 
     // A caller-writable copy of even a correct signed-shape document remains
     // untrusted, regardless of its contract hashes or schema revisions.
-    let untrusted = secret("untrusted-site-lab-owner-manifest", &manifest.to_string());
+    let untrusted = secret("untrusted-site-architect-owner-manifest", &manifest.to_string());
     assert!(trusted_owner_catalog::load_trusted_owner_bundle(&untrusted).is_err());
     fs::remove_file(&untrusted).unwrap();
 

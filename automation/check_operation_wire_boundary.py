@@ -39,7 +39,7 @@ SOURCES = {
     "trusted_owner_catalog": "app/rust/crates/trusted_owner_catalog/src/lib.rs",
     "owner_generated_dto_schema": "app/rust/crates/seo_application/src/operation_adapter/owner_dto_schema.rs",
     "typed_pure_adapter": "app/rust/crates/seo_application/src/operation_adapter.rs",
-    "site_lab_authoring": "app/rust/crates/seo_application/src/site_lab/parameters_json.rs",
+    "site_architect_authoring": "app/rust/crates/seo_application/src/site_architect/parameters_json.rs",
     "typed_json_boundary": "app/rust/crates/seo_application/src/typed_json.rs",
     "temporal_pure_workflows": "app/rust/services/temporal_orchestrator/src/workflow.rs",
     "temporal_pure_launcher": "app/rust/services/temporal_orchestrator/src/main.rs",
@@ -272,20 +272,20 @@ def check_sources(sources: dict[str, str]) -> list[str]:
             "pure adapter rejects unknown or discarded owner fields", failures)
     if "serde_json::Value" in adapter:
         failures.append("pure owner executor cannot interpret arbitrary JSON Value")
-    if "crate::site_lab::" in adapter:
-        failures.append("runtime owner adapter cannot depend on Site Lab authoring UI")
+    if "crate::site_architect::" in adapter:
+        failures.append("runtime owner adapter cannot depend on siteArchitect authoring UI")
 
-    authoring = sources["site_lab_authoring"]
+    authoring = sources["site_architect_authoring"]
     require(authoring, r"struct\s+RecipeParameters\(Value\)",
-            "Site Lab JSON is authoring-only, not a domain operation DTO", failures)
+            "siteArchitect JSON is authoring-only, not a domain operation DTO", failures)
     require(authoring, r"preserves_authored_fields\(value,\s*&normalized\)",
-            "Site Lab rejects silent parameter loss", failures)
+            "siteArchitect rejects silent parameter loss", failures)
     require(authoring, r"UniqueJsonValue::deserialize\(deserializer\)",
-            "Site Lab rejects duplicate raw parameter keys", failures)
+            "siteArchitect rejects duplicate raw parameter keys", failures)
     require(authoring, r"let\s+decoded:\s*T\s*=\s*serde_json::from_value",
-            "Site Lab locally validates owner concrete DTO", failures)
+            "siteArchitect locally validates owner concrete DTO", failures)
     require(authoring, r"fn\s+register_local<T>",
-            "Site Lab local owner typed registration", failures)
+            "siteArchitect local owner typed registration", failures)
 
     boundary = sources["typed_json_boundary"]
     require(boundary, r"fn\s+preserves_authored_fields\(",

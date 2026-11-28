@@ -1,4 +1,4 @@
-//! Read-only Site Lab preflight for an immutable V2 Temporal DAG start.
+//! Read-only siteArchitect preflight for an immutable V2 Temporal DAG start.
 //!
 //! This checks that the operator's *previously captured* command and source
 //! digests still match the exact bytes in a proposed run. It intentionally delegates
@@ -19,15 +19,15 @@ use crate::{
     PinnedOwnerRouteV1, PlanHash, PortId, TrustedRouteCatalog,
 };
 
-pub const SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1: u16 = 1;
-pub const SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1: u16 = 1;
+pub const SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1: u16 = 1;
+pub const SITE_ARCHITECT_START_PREVIEW_SCHEMA_REVISION_V1: u16 = 1;
 
 /// Digests captured *before* composing a Temporal Start, by the trusted
 /// operation owner's command codec. The user cannot forge owner validation
 /// or execution permission merely by supplying these untrusted values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SiteLabExpectedStartV1 {
+pub struct SiteArchitectExpectedStartV1 {
     pub schema_revision: u16,
     pub plan_hash: PlanHash,
     pub command_hashes: BTreeMap<OperationInstanceId, String>,
@@ -39,7 +39,7 @@ pub struct SiteLabExpectedStartV1 {
 /// Machine-readable, non-authorizing result. Does not expose command bytes,
 /// credentials, provider payloads, or the actual source content.
 #[derive(Debug, Clone, Serialize)]
-pub struct SiteLabUnadmittedPreflightV1 {
+pub struct SiteArchitectUnadmittedPreflightV1 {
     pub status: &'static str,
     pub plan_hash: PlanHash,
     pub command_hashes: BTreeMap<OperationInstanceId, String>,
@@ -54,15 +54,15 @@ pub struct SiteLabUnadmittedPreflightV1 {
 /// preflight. It never carries owner command bytes, source payload bytes,
 /// credentials, source provenance text, or an executable permission token.
 #[derive(Debug, Clone, Serialize)]
-pub struct SiteLabUnadmittedStartPreviewV1 {
+pub struct SiteArchitectUnadmittedStartPreviewV1 {
     pub schema_revision: u16,
-    pub preflight: SiteLabUnadmittedPreflightV1,
+    pub preflight: SiteArchitectUnadmittedPreflightV1,
     pub execution_order: Vec<OperationInstanceId>,
-    pub steps: Vec<SiteLabPreviewStepV1>,
+    pub steps: Vec<SiteArchitectPreviewStepV1>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SiteLabPreviewStepV1 {
+pub struct SiteArchitectPreviewStepV1 {
     pub instance: OperationInstanceId,
     pub operation: OperationRef,
     pub owner: OperationOwnerId,
@@ -71,8 +71,8 @@ pub struct SiteLabPreviewStepV1 {
     /// snapshot, not a user-selected arbitrary workflow or task queue.
     pub owner_route: PinnedOwnerRouteV1,
     pub command_payload_hash: String,
-    pub inputs: BTreeMap<PortId, SiteLabPreviewInputV1>,
-    pub outputs: BTreeMap<PortId, SiteLabPreviewOutputV1>,
+    pub inputs: BTreeMap<PortId, SiteArchitectPreviewInputV1>,
+    pub outputs: BTreeMap<PortId, SiteArchitectPreviewOutputV1>,
     pub after: BTreeSet<OperationInstanceId>,
     pub permitted_effects: BTreeSet<EffectId>,
     pub idempotency: IdempotencyPolicy,
@@ -82,7 +82,7 @@ pub struct SiteLabPreviewStepV1 {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
-pub enum SiteLabPreviewInputV1 {
+pub enum SiteArchitectPreviewInputV1 {
     External {
         artifact: ArtifactId,
         schema: ArtifactSchema,
@@ -98,20 +98,20 @@ pub enum SiteLabPreviewInputV1 {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SiteLabPreviewOutputV1 {
+pub struct SiteArchitectPreviewOutputV1 {
     pub artifact: ArtifactId,
     pub schema: ArtifactSchema,
 }
 
 #[derive(Debug, Error)]
-pub enum SiteLabStartPreflightError {
-    #[error("V2 Site Lab expected command set or plan hash is invalid")]
+pub enum SiteArchitectStartPreflightError {
+    #[error("V2 siteArchitect expected command set or plan hash is invalid")]
     InvalidExpectation,
-    #[error("V2 Site Lab command digest differs from checked run for {0:?}")]
+    #[error("V2 siteArchitect command digest differs from checked run for {0:?}")]
     CommandDigestMismatch(OperationInstanceId),
-    #[error("V2 Site Lab source payload digest differs from checked run for {0:?}")]
+    #[error("V2 siteArchitect source payload digest differs from checked run for {0:?}")]
     SourceDigestMismatch(ArtifactId),
-    #[error("V2 Site Lab run was rejected by its existing native DAG validator")]
+    #[error("V2 siteArchitect run was rejected by its existing native DAG validator")]
     InvalidRun(#[from] GenericDagError),
 }
 
@@ -119,18 +119,18 @@ pub enum SiteLabStartPreflightError {
 /// exactly one operation. It must never fork an alternative direct-to-provider
 /// executor, nor manufacture business/source authority from user input.
 #[derive(Debug, Error)]
-pub enum SiteLabSingleOperationPreflightError {
+pub enum SiteArchitectSingleOperationPreflightError {
     #[error("single-operation inspection requires exactly one V2 DAG node, found {count}")]
     StepCount { count: usize },
     #[error(transparent)]
-    NativePreflight(#[from] SiteLabStartPreflightError),
+    NativePreflight(#[from] SiteArchitectStartPreflightError),
 }
 
 fn check_single_operation_shape(
     run: &OperationDagRunV6,
-) -> Result<(), SiteLabSingleOperationPreflightError> {
+) -> Result<(), SiteArchitectSingleOperationPreflightError> {
     if run.plan.nodes.len() != 1 {
-        return Err(SiteLabSingleOperationPreflightError::StepCount {
+        return Err(SiteArchitectSingleOperationPreflightError::StepCount {
             count: run.plan.nodes.len(),
         });
     }
@@ -148,10 +148,10 @@ fn check_single_operation_shape(
 pub fn preflight_unadmitted_single_operation_v2_start(
     run: &OperationDagRunV6,
     installed_routes: &TrustedRouteCatalog,
-    expected: &SiteLabExpectedStartV1,
-) -> Result<SiteLabUnadmittedPreflightV1, SiteLabSingleOperationPreflightError> {
+    expected: &SiteArchitectExpectedStartV1,
+) -> Result<SiteArchitectUnadmittedPreflightV1, SiteArchitectSingleOperationPreflightError> {
     check_single_operation_shape(run)?;
-    preflight_unadmitted_site_lab_v2_start(run, installed_routes, expected).map_err(Into::into)
+    preflight_unadmitted_site_architect_v2_start(run, installed_routes, expected).map_err(Into::into)
 }
 
 /// Show one tool's exact typed inputs, outputs, trusted route, effects and
@@ -160,28 +160,28 @@ pub fn preflight_unadmitted_single_operation_v2_start(
 pub fn preview_unadmitted_single_operation_v2_start(
     run: &OperationDagRunV6,
     installed_routes: &TrustedRouteCatalog,
-    expected: &SiteLabExpectedStartV1,
-) -> Result<SiteLabUnadmittedStartPreviewV1, SiteLabSingleOperationPreflightError> {
+    expected: &SiteArchitectExpectedStartV1,
+) -> Result<SiteArchitectUnadmittedStartPreviewV1, SiteArchitectSingleOperationPreflightError> {
     check_single_operation_shape(run)?;
-    preview_unadmitted_site_lab_v2_start(run, installed_routes, expected).map_err(Into::into)
+    preview_unadmitted_site_architect_v2_start(run, installed_routes, expected).map_err(Into::into)
 }
 
 /// Fail closed if any command/source payload bytes, source declaration, owner route, operation
 /// contract, plan pin or expected digest changed between typed authoring and
 /// the proposed V2 Start. The existing machine still requires every owner's
 /// independent ValidateOnly Child *after* the actual Start before effects.
-pub fn preflight_unadmitted_site_lab_v2_start(
+pub fn preflight_unadmitted_site_architect_v2_start(
     run: &OperationDagRunV6,
     installed_routes: &TrustedRouteCatalog,
-    expected: &SiteLabExpectedStartV1,
-) -> Result<SiteLabUnadmittedPreflightV1, SiteLabStartPreflightError> {
+    expected: &SiteArchitectExpectedStartV1,
+) -> Result<SiteArchitectUnadmittedPreflightV1, SiteArchitectStartPreflightError> {
     let node_ids = run
         .plan
         .nodes
         .iter()
         .map(|node| node.instance.clone())
         .collect::<BTreeSet<_>>();
-    if expected.schema_revision != SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1
+    if expected.schema_revision != SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1
         || expected.plan_hash != run.plan.hash
         || node_ids.len() != run.plan.nodes.len()
         || expected.command_hashes.keys().collect::<BTreeSet<_>>()
@@ -200,7 +200,7 @@ pub fn preflight_unadmitted_site_lab_v2_start(
             .values()
             .any(|digest| !is_canonical_blake3_hash(digest))
     {
-        return Err(SiteLabStartPreflightError::InvalidExpectation);
+        return Err(SiteArchitectStartPreflightError::InvalidExpectation);
     }
 
     // Reuse the one authoritative DAG V2 Start preflight for all native
@@ -217,9 +217,9 @@ pub fn preflight_unadmitted_site_lab_v2_start(
         let actual = run
             .owner_commands
             .get(instance)
-            .ok_or(SiteLabStartPreflightError::InvalidExpectation)?;
+            .ok_or(SiteArchitectStartPreflightError::InvalidExpectation)?;
         if owner_content_hash(&actual.command_bytes) != *expected_digest {
-            return Err(SiteLabStartPreflightError::CommandDigestMismatch(
+            return Err(SiteArchitectStartPreflightError::CommandDigestMismatch(
                 instance.clone(),
             ));
         }
@@ -229,15 +229,15 @@ pub fn preflight_unadmitted_site_lab_v2_start(
         let source = run
             .admitted
             .get(artifact_id)
-            .ok_or(SiteLabStartPreflightError::InvalidExpectation)?;
+            .ok_or(SiteArchitectStartPreflightError::InvalidExpectation)?;
         if owner_content_hash(&source.payload) != *expected_digest {
-            return Err(SiteLabStartPreflightError::SourceDigestMismatch(
+            return Err(SiteArchitectStartPreflightError::SourceDigestMismatch(
                 artifact_id.clone(),
             ));
         }
     }
 
-    Ok(SiteLabUnadmittedPreflightV1 {
+    Ok(SiteArchitectUnadmittedPreflightV1 {
         status: "preflight_only_not_admitted",
         plan_hash: run.plan.hash.clone(),
         command_hashes: expected.command_hashes.clone(),
@@ -257,12 +257,12 @@ pub fn preflight_unadmitted_site_lab_v2_start(
 /// The only validator is the existing V2 machine above. The extra plan
 /// validation obtains its native deterministic execution order; it does not
 /// attempt to reinterpret contracts, bindings, or provider-specific bytes.
-pub fn preview_unadmitted_site_lab_v2_start(
+pub fn preview_unadmitted_site_architect_v2_start(
     run: &OperationDagRunV6,
     installed_routes: &TrustedRouteCatalog,
-    expected: &SiteLabExpectedStartV1,
-) -> Result<SiteLabUnadmittedStartPreviewV1, SiteLabStartPreflightError> {
-    let preflight = preflight_unadmitted_site_lab_v2_start(run, installed_routes, expected)?;
+    expected: &SiteArchitectExpectedStartV1,
+) -> Result<SiteArchitectUnadmittedStartPreviewV1, SiteArchitectStartPreflightError> {
+    let preflight = preflight_unadmitted_site_architect_v2_start(run, installed_routes, expected)?;
     let validated = run
         .plan
         .validate(installed_routes.catalog())
@@ -298,7 +298,7 @@ pub fn preview_unadmitted_site_lab_v2_start(
                     .expect("native V2 preflight checked input port schemas")
                     .clone();
                 let view = match binding {
-                    ArtifactBinding::External { artifact } => SiteLabPreviewInputV1::External {
+                    ArtifactBinding::External { artifact } => SiteArchitectPreviewInputV1::External {
                         artifact: artifact.clone(),
                         schema,
                         payload_hash: expected
@@ -311,7 +311,7 @@ pub fn preview_unadmitted_site_lab_v2_start(
                         producer,
                         port: producer_port,
                         artifact,
-                    } => SiteLabPreviewInputV1::Produced {
+                    } => SiteArchitectPreviewInputV1::Produced {
                         producer: producer.clone(),
                         producer_port: producer_port.clone(),
                         artifact: artifact.clone(),
@@ -327,7 +327,7 @@ pub fn preview_unadmitted_site_lab_v2_start(
             .map(|(port, artifact)| {
                 (
                     port.clone(),
-                    SiteLabPreviewOutputV1 {
+                    SiteArchitectPreviewOutputV1 {
                         artifact: artifact.clone(),
                         schema: contract
                             .outputs
@@ -338,7 +338,7 @@ pub fn preview_unadmitted_site_lab_v2_start(
                 )
             })
             .collect();
-        steps.push(SiteLabPreviewStepV1 {
+        steps.push(SiteArchitectPreviewStepV1 {
             instance: instance.clone(),
             operation: node.operation.clone(),
             owner: contract.owner.clone(),
@@ -360,8 +360,8 @@ pub fn preview_unadmitted_site_lab_v2_start(
             effect_dispatch: "not_started",
         });
     }
-    Ok(SiteLabUnadmittedStartPreviewV1 {
-        schema_revision: SITE_LAB_START_PREVIEW_SCHEMA_REVISION_V1,
+    Ok(SiteArchitectUnadmittedStartPreviewV1 {
+        schema_revision: SITE_ARCHITECT_START_PREVIEW_SCHEMA_REVISION_V1,
         preflight,
         execution_order,
         steps,
@@ -382,7 +382,7 @@ mod single_operation_tests {
     ) -> (
         OperationDagRunV6,
         TrustedRouteCatalog,
-        SiteLabExpectedStartV1,
+        SiteArchitectExpectedStartV1,
     ) {
         let scope = RunScope {
             tenant_id: "tenant-a".into(),
@@ -493,8 +493,8 @@ mod single_operation_tests {
             )]),
             pinned_routes: routes.trusted_snapshot_for([&contract.reference]).unwrap(),
         };
-        let expected = SiteLabExpectedStartV1 {
-            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        let expected = SiteArchitectExpectedStartV1 {
+            schema_revision: SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
             command_hashes: BTreeMap::from([(instance, owner_content_hash(&command_bytes))]),
             source_payload_hashes: BTreeMap::from([(
@@ -534,13 +534,13 @@ mod single_operation_tests {
         run.plan.nodes.clear();
         assert!(matches!(
             preflight_unadmitted_single_operation_v2_start(&run, &routes, &expected),
-            Err(SiteLabSingleOperationPreflightError::StepCount { count: 0 })
+            Err(SiteArchitectSingleOperationPreflightError::StepCount { count: 0 })
         ));
         let (mut run, routes, expected) = fixture(false);
         run.plan.nodes.push(run.plan.nodes[0].clone());
         assert!(matches!(
             preview_unadmitted_single_operation_v2_start(&run, &routes, &expected),
-            Err(SiteLabSingleOperationPreflightError::StepCount { count: 2 })
+            Err(SiteArchitectSingleOperationPreflightError::StepCount { count: 2 })
         ));
     }
 
@@ -556,8 +556,8 @@ mod single_operation_tests {
             .push(b'!');
         assert!(matches!(
             preflight_unadmitted_single_operation_v2_start(&changed_command, &routes, &expected),
-            Err(SiteLabSingleOperationPreflightError::NativePreflight(
-                SiteLabStartPreflightError::CommandDigestMismatch(_)
+            Err(SiteArchitectSingleOperationPreflightError::NativePreflight(
+                SiteArchitectStartPreflightError::CommandDigestMismatch(_)
             ))
         ));
 
@@ -570,8 +570,8 @@ mod single_operation_tests {
             .push(b'!');
         assert!(matches!(
             preview_unadmitted_single_operation_v2_start(&changed_source, &routes, &expected),
-            Err(SiteLabSingleOperationPreflightError::NativePreflight(
-                SiteLabStartPreflightError::SourceDigestMismatch(_)
+            Err(SiteArchitectSingleOperationPreflightError::NativePreflight(
+                SiteArchitectStartPreflightError::SourceDigestMismatch(_)
             ))
         ));
 
@@ -579,8 +579,8 @@ mod single_operation_tests {
         forged_route.pinned_routes[0].task_queue = "attacker-queue".into();
         assert!(matches!(
             preflight_unadmitted_single_operation_v2_start(&forged_route, &routes, &expected),
-            Err(SiteLabSingleOperationPreflightError::NativePreflight(
-                SiteLabStartPreflightError::InvalidRun(_)
+            Err(SiteArchitectSingleOperationPreflightError::NativePreflight(
+                SiteArchitectStartPreflightError::InvalidRun(_)
             ))
         ));
 
@@ -588,28 +588,28 @@ mod single_operation_tests {
         forged_expectation.plan_hash = PlanHash::from("forged-plan-hash");
         assert!(matches!(
             preflight_unadmitted_single_operation_v2_start(&run, &routes, &forged_expectation),
-            Err(SiteLabSingleOperationPreflightError::NativePreflight(
-                SiteLabStartPreflightError::InvalidExpectation
+            Err(SiteArchitectSingleOperationPreflightError::NativePreflight(
+                SiteArchitectStartPreflightError::InvalidExpectation
             ))
         ));
 
         let unknown_routes = TrustedRouteCatalog::default();
-        let locally_computed_expectation = site_lab_expected_start(&run);
+        let locally_computed_expectation = site_architect_expected_start(&run);
         assert!(matches!(
             preview_unadmitted_single_operation_v2_start(
                 &run,
                 &unknown_routes,
                 &locally_computed_expectation,
             ),
-            Err(SiteLabSingleOperationPreflightError::NativePreflight(
-                SiteLabStartPreflightError::InvalidRun(_)
+            Err(SiteArchitectSingleOperationPreflightError::NativePreflight(
+                SiteArchitectStartPreflightError::InvalidRun(_)
             ))
         ));
     }
 
-    fn site_lab_expected_start(run: &OperationDagRunV6) -> SiteLabExpectedStartV1 {
-        SiteLabExpectedStartV1 {
-            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    fn site_architect_expected_start(run: &OperationDagRunV6) -> SiteArchitectExpectedStartV1 {
+        SiteArchitectExpectedStartV1 {
+            schema_revision: SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
             command_hashes: run
                 .owner_commands

@@ -3,7 +3,7 @@
 //! identifiers only select a separately preapproved tenant SQL event.
 
 use anyhow::{ensure, Context, Result};
-use operation_protocol::{OperationDagRunV6, SiteLabExpectedStartV1};
+use operation_protocol::{OperationDagRunV6, SiteArchitectExpectedStartV1};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -14,7 +14,7 @@ pub(crate) struct OneStepIssuanceIntentV1 {
     pub request_id: Uuid,
     pub authorization_event_id: Uuid,
     pub run: OperationDagRunV6,
-    pub expected: SiteLabExpectedStartV1,
+    pub expected: SiteArchitectExpectedStartV1,
     pub context_key: String,
     pub expires_at_unix_seconds: i64,
 }

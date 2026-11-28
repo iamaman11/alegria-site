@@ -31,8 +31,8 @@ pub use operation_inspection::{
     inspect_operation, CheckedOperationParameters, OperationInspection,
 };
 pub use parameters_json::{
-    installed_semantic_lab_catalog, NoParameters, ParameterDescription, ParameterError,
-    RecipeParameters, SiteLabCatalog,
+    installed_semantic_operation_catalog, NoParameters, ParameterDescription, ParameterError,
+    RecipeParameters, SiteArchitectCatalog,
 };
 pub use readiness::{
     summarize_local_execution_readiness, OperationExecutionReadinessV1, OperationGateV1,
@@ -241,7 +241,7 @@ pub struct ToolDescription {
 /// Every registered owner contract is discoverable without adding a new
 /// provider-specific case to the CLI or the DAG kernel. The caller must pass
 /// a *trusted* catalog; never register contracts from a user recipe.
-pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, SiteLabError> {
+pub fn describe_tools(catalog: &SiteArchitectCatalog) -> Result<Vec<ToolDescription>, SiteArchitectError> {
     catalog
         .catalog()
         .contracts()
@@ -277,7 +277,7 @@ pub fn describe_tools(catalog: &SiteLabCatalog) -> Result<Vec<ToolDescription>, 
 }
 
 #[derive(Debug, Error)]
-pub enum SiteLabError {
+pub enum SiteArchitectError {
     #[error(
         "unsupported recipe revision {0}; supported revisions are 1 (without parameters) and 2"
     )]
@@ -304,7 +304,7 @@ pub enum SiteLabError {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SiteLabProblem {
+pub struct SiteArchitectProblem {
     pub status: &'static str,
     pub code: &'static str,
     pub message: String,
@@ -314,8 +314,8 @@ pub struct SiteLabProblem {
     pub step: Option<OperationInstanceId>,
 }
 
-impl SiteLabError {
-    pub fn problem(&self) -> SiteLabProblem {
+impl SiteArchitectError {
+    pub fn problem(&self) -> SiteArchitectProblem {
         let (code, next_action) = match self {
             Self::UnsupportedRevision(_) => (
                 "recipe_revision_unsupported",
@@ -391,7 +391,7 @@ impl SiteLabError {
                 "Inspect the exact offending step, port or contract and correct the recipe.",
             ),
         };
-        SiteLabProblem {
+        SiteArchitectProblem {
             status: "invalid",
             code,
             message: self.to_string(),
@@ -488,13 +488,13 @@ fn depends_on_step(
 /// The existing `preview_recipe` remains the single authoritative check.
 pub fn suggest_compatible_inputs(
     recipe: &SiteRecipe,
-    catalog: &SiteLabCatalog,
-) -> Result<RecipeConnectionPreview, SiteLabError> {
+    catalog: &SiteArchitectCatalog,
+) -> Result<RecipeConnectionPreview, SiteArchitectError> {
     if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION {
-        return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
     }
     if recipe.steps.len() > DAG_MAX_NODES {
-        return Err(SiteLabError::TooManySteps(recipe.steps.len()));
+        return Err(SiteArchitectError::TooManySteps(recipe.steps.len()));
     }
     let contracts = catalog.catalog();
     let mut steps: Vec<_> = recipe.steps.iter().collect();
@@ -503,7 +503,7 @@ pub fn suggest_compatible_inputs(
     for step in &steps {
         let contract = contracts
             .contract(&step.operation)
-            .ok_or_else(|| SiteLabError::UnavailableOperation(step.operation.clone()))?;
+            .ok_or_else(|| SiteArchitectError::UnavailableOperation(step.operation.clone()))?;
         for (port, schema) in &contract.inputs {
             let mut candidates = Vec::new();
             for (artifact, source) in &recipe.sources {
@@ -516,7 +516,7 @@ pub fn suggest_compatible_inputs(
             for producer in &steps {
                 let producer_contract =
                     contracts.contract(&producer.operation).ok_or_else(|| {
-                        SiteLabError::UnavailableOperation(producer.operation.clone())
+                        SiteArchitectError::UnavailableOperation(producer.operation.clone())
                     })?;
                 if depends_on_step(recipe, &producer.id, &step.id, &mut BTreeSet::new()) {
                     continue;
@@ -556,22 +556,22 @@ fn output_artifact_id(step: &OperationInstanceId, port: &PortId) -> ArtifactId {
 pub fn compile_recipe(
     recipe: &SiteRecipe,
     catalog: &ContractCatalog,
-) -> Result<ExecutionPlan, SiteLabError> {
+) -> Result<ExecutionPlan, SiteArchitectError> {
     if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION
         && recipe.schema_revision != LEGACY_SITE_RECIPE_SCHEMA_REVISION
     {
-        return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
     }
     if recipe.schema_revision == LEGACY_SITE_RECIPE_SCHEMA_REVISION
         && recipe.steps.iter().any(|step| !step.parameters.is_empty())
     {
-        return Err(SiteLabError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
     }
     if recipe.steps.is_empty() {
-        return Err(SiteLabError::EmptyRecipe);
+        return Err(SiteArchitectError::EmptyRecipe);
     }
     if recipe.steps.len() > DAG_MAX_NODES {
-        return Err(SiteLabError::TooManySteps(recipe.steps.len()));
+        return Err(SiteArchitectError::TooManySteps(recipe.steps.len()));
     }
 
     let mut nodes = Vec::with_capacity(recipe.steps.len());
@@ -579,7 +579,7 @@ pub fn compile_recipe(
     for step in &recipe.steps {
         let contract = catalog
             .contract(&step.operation)
-            .ok_or_else(|| SiteLabError::UnavailableOperation(step.operation.clone()))?;
+            .ok_or_else(|| SiteArchitectError::UnavailableOperation(step.operation.clone()))?;
         // This only constructs a manifest. Even a valid effect declaration
         // cannot grant owner admission, a signed operator route or execution.
         declared_effects.extend(contract.effects.iter().cloned());
@@ -647,8 +647,8 @@ pub fn compile_recipe(
 
 pub fn preview_recipe(
     recipe: &SiteRecipe,
-    catalog: &SiteLabCatalog,
-) -> Result<RecipePreview, SiteLabError> {
+    catalog: &SiteArchitectCatalog,
+) -> Result<RecipePreview, SiteArchitectError> {
     let plan = compile_recipe(recipe, catalog.catalog())?;
     let checked = plan.validate(catalog.catalog())?;
     let mut parameter_hashes = BTreeMap::new();
@@ -656,7 +656,7 @@ pub fn preview_recipe(
     for step in &recipe.steps {
         let checked = catalog
             .validate(&step.operation, &step.parameters)
-            .map_err(|source| SiteLabError::StepParameters {
+            .map_err(|source| SiteArchitectError::StepParameters {
                 step: step.id.clone(),
                 operation: step.operation.clone(),
                 source,
@@ -672,7 +672,7 @@ pub fn preview_recipe(
     // parameter schema change must change the experiment identity.
     let recipe_hash = owner_content_hash(
         &serde_json::to_vec(&(&plan.hash, &parameter_hashes))
-            .map_err(|_| SiteLabError::ParameterEncoding)?,
+            .map_err(|_| SiteArchitectError::ParameterEncoding)?,
     );
     let steps_requiring_owner_admission = plan
         .nodes
@@ -708,8 +708,8 @@ pub fn preview_recipe(
 pub fn diff_recipes(
     first: &SiteRecipe,
     second: &SiteRecipe,
-    catalog: &SiteLabCatalog,
-) -> Result<RecipeDifference, SiteLabError> {
+    catalog: &SiteArchitectCatalog,
+) -> Result<RecipeDifference, SiteArchitectError> {
     let first_preview = preview_recipe(first, catalog)?;
     let second_preview = preview_recipe(second, catalog)?;
     Ok(RecipeDifference {

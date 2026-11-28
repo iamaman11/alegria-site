@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     operation_dag_parent_workflow_id_v2, preflight_unadmitted_single_operation_v2_start,
-    OperationDagRunV6, OperationRef, SiteLabExpectedStartV1, SiteLabSingleOperationPreflightError,
+    OperationDagRunV6, OperationRef, SiteArchitectExpectedStartV1, SiteArchitectSingleOperationPreflightError,
     TrustedRouteCatalog, DAG_MAX_INPUT_BYTES,
 };
 
@@ -71,7 +71,7 @@ pub struct TrustedOneStepRequestGrantV1 {
     pub canonical_run_id: String,
     pub operation: OperationRef,
     pub parent_workflow_id: String,
-    pub expected: SiteLabExpectedStartV1,
+    pub expected: SiteArchitectExpectedStartV1,
     pub limits: OneStepResourceLimitsV1,
     pub issued_at_unix_seconds: i64,
     pub expires_at_unix_seconds: i64,
@@ -124,7 +124,7 @@ pub enum OneStepRequestGrantErrorV1 {
     #[error("one-step request exceeds independently authorized resource limits")]
     BudgetExceeded,
     #[error("one-step sealed bytes, plan or trusted route do not match")]
-    SealedPlanMismatch(#[source] SiteLabSingleOperationPreflightError),
+    SealedPlanMismatch(#[source] SiteArchitectSingleOperationPreflightError),
 }
 
 pub(super) fn canonical_non_nil_uuid(value: &str) -> bool {
@@ -276,7 +276,7 @@ mod tests {
         OperationContract, OperationId, OperationInstanceId, OperationNode, OperationOwnerId,
         OwnerCommandWireV1, PinnedOwnerRouteV1, PlanHash, PortId, RunScope,
         OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
-        SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
     };
 
     const NOW: i64 = 1_900_000_100;
@@ -390,8 +390,8 @@ mod tests {
             )]),
             pinned_routes: routes.trusted_snapshot_for([&operation]).unwrap(),
         };
-        let expected = SiteLabExpectedStartV1 {
-            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        let expected = SiteArchitectExpectedStartV1 {
+            schema_revision: SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
             command_hashes: BTreeMap::from([(instance, owner_content_hash(&command_bytes))]),
             source_payload_hashes: BTreeMap::from([(source, owner_content_hash(&source_bytes))]),

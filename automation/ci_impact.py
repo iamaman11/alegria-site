@@ -1426,7 +1426,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_mixed_v2": (
         # One live Temporal/PG/Qdrant V2 proof plus one isolated test of
-        # the exact trusted Site Lab provider catalog on real owner contracts.
+        # the exact trusted siteArchitect provider catalog on real owner contracts.
         ("temporal_mixed_v2_native", "mixed_v2_native_", 2),
     ),
     "temporal_dataforseo": (

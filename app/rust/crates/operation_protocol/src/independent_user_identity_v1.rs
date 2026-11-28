@@ -247,7 +247,7 @@ mod tests {
     use super::*;
     use crate::{
         OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OperationId, OperationRef,
-        PlanHash, SiteLabExpectedStartV1,
+        PlanHash, SiteArchitectExpectedStartV1,
     };
     use std::collections::BTreeMap;
 
@@ -315,7 +315,7 @@ mod tests {
                 revision: 1,
             },
             parent_workflow_id: "independent-parent".into(),
-            expected: SiteLabExpectedStartV1 {
+            expected: SiteArchitectExpectedStartV1 {
                 schema_revision: 1,
                 plan_hash: PlanHash("a".repeat(64)),
                 command_hashes: BTreeMap::new(),

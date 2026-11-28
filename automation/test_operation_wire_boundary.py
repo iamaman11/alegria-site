@@ -278,9 +278,9 @@ class OperationWireBoundaryTests(unittest.TestCase):
         )
         self.assertIn("pure adapter decodes exactly owner Input", failures)
 
-    def test_site_lab_cannot_silently_drop_provider_parameters(self) -> None:
-        failures = self.mutated("site_lab_authoring", "preserves_authored_fields(value, &normalized)", "true")
-        self.assertIn("Site Lab rejects silent parameter loss", failures)
+    def test_site_architect_cannot_silently_drop_provider_parameters(self) -> None:
+        failures = self.mutated("site_architect_authoring", "preserves_authored_fields(value, &normalized)", "true")
+        self.assertIn("siteArchitect rejects silent parameter loss", failures)
 
     def test_pure_adapter_cannot_skip_strict_raw_input_check(self) -> None:
         failures = self.mutated("typed_pure_adapter", "typed_json::parse_unique_json_bytes(bytes)", "serde_json::from_slice(bytes)")

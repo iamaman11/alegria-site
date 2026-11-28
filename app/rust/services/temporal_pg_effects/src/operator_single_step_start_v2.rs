@@ -21,7 +21,7 @@ use operation_protocol::{
     verify_signed_one_step_admission_v1, ArtifactId, IndependentlyAuthenticatedOneStepPolicyV1,
     OneStepRequestIssuanceStateV1, OneStepResourceLimitsV1, OpaqueOneStepRequestLocatorV1,
     OperationDagRunV6, OperationId, OperationRef, PlanHash, SignedOneStepAdmissionV1,
-    SiteLabExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
+    SiteArchitectExpectedStartV1, TrustedExternalSourceRecordV1, TrustedOneStepRequestGrantV1,
     TrustedRouteCatalog, DAG_MAX_INPUT_BYTES, EXTERNAL_SOURCE_ADMISSION_SCHEMA_REVISION_V1,
     OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2,
 };
@@ -39,12 +39,12 @@ use sqlx::{PgPool, Row};
 use super::operator_v4::{fetch_exact_history, first_started_payload};
 use super::{operator_dag_governance, operator_dag_read_v2};
 
-const ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START";
-const TENANT_ENV: &str = "SITE_LAB_SINGLE_V2_TENANT_ID";
-const TEMPORAL_URL_ENV: &str = "SITE_LAB_SINGLE_V2_TEMPORAL_URL";
-const TEMPORAL_NAMESPACE_ENV: &str = "SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE";
-const CATALOG_ENV: &str = "SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE";
-const ROOT_READER_DSN_ENV: &str = "SITE_LAB_SINGLE_V2_DATABASE_URL_FILE";
+const ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START";
+const TENANT_ENV: &str = "SITE_ARCHITECT_SINGLE_V2_TENANT_ID";
+const TEMPORAL_URL_ENV: &str = "SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL";
+const TEMPORAL_NAMESPACE_ENV: &str = "SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE";
+const CATALOG_ENV: &str = "SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE";
+const ROOT_READER_DSN_ENV: &str = "SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE";
 const GRANTED_ENABLE_ENV: &str = "ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START";
 const GRANTED_DSN_FILE_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE";
 const GRANTED_PRINCIPAL_ENV: &str = "SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID";
@@ -182,7 +182,7 @@ fn start_failure_report<'a>(
 ) -> SingleStartFailureReport<'a> {
     SingleStartFailureReport {
         schema_revision: 1,
-        operation: "site_lab_start_single_v2",
+        operation: "site_architect_start_single_v2",
         status: stage.status(),
         code: stage.code(),
         canonical_run_id,
@@ -199,7 +199,7 @@ struct SingleOperationStartIntentV1 {
     schema_revision: u16,
     run: OperationDagRunV6,
     context_key: String,
-    expected: SiteLabExpectedStartV1,
+    expected: SiteArchitectExpectedStartV1,
     expires_at_unix_seconds: u64,
 }
 
@@ -543,7 +543,7 @@ async fn independently_check_one_shot_grant(
         },
         parent_workflow_id: row.try_get("parent_workflow_id")?,
         expected: row
-            .try_get::<sqlx::types::Json<SiteLabExpectedStartV1>, _>("expected_start")?
+            .try_get::<sqlx::types::Json<SiteArchitectExpectedStartV1>, _>("expected_start")?
             .0,
         limits: row
             .try_get::<sqlx::types::Json<OneStepResourceLimitsV1>, _>("limits")?
@@ -1612,7 +1612,7 @@ async fn try_start_from_private_request(
         Duration::from_secs(15),
         Connection::connect(
             ConnectionOptions::new(config.url)
-                .identity(format!("alegria-site-lab-single-v2-{}", std::process::id()))
+                .identity(format!("alegria-site-architect-single-v2-{}", std::process::id()))
                 .build(),
         ),
     )
@@ -1737,7 +1737,7 @@ async fn try_start_from_private_request(
             "operation":if mode == StartMode::IndependentlyGranted {
                 "site_architect_start_granted_single_v1"
             } else {
-                "site_lab_start_single_v2"
+                "site_architect_start_single_v2"
             },
             "status":if mode == StartMode::IndependentlyGranted {
                 "temporal_start_acknowledged_grant_pending_independent_history"
@@ -2105,7 +2105,7 @@ mod tests {
 
     #[test]
     fn granted_operator_envelope_cannot_smuggle_identity_or_temporal_route() {
-        let expected = SiteLabExpectedStartV1 {
+        let expected = SiteArchitectExpectedStartV1 {
             schema_revision: 1,
             plan_hash: PlanHash("a".repeat(64)),
             command_hashes: BTreeMap::new(),
@@ -2279,7 +2279,7 @@ mod tests {
         for path in [
             "operator-intent.json",
             "/tmp/../x.json",
-            "/tmp/absent-site-lab-intent.json",
+            "/tmp/absent-site-architect-intent.json",
         ] {
             assert!(operator_dag_governance::read_private_operator_file(
                 Path::new(path),

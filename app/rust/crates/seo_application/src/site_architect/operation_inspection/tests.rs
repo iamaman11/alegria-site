@@ -9,10 +9,10 @@ use serde_json::json;
 
 use super::*;
 use crate::operation_adapter::semantic_extraction_registry;
-use crate::site_lab::{installed_semantic_lab_catalog, OperationGateV1};
+use crate::site_architect::{installed_semantic_operation_catalog, OperationGateV1};
 
-fn registry() -> SiteLabCatalog {
-    installed_semantic_lab_catalog(
+fn registry() -> SiteArchitectCatalog {
+    installed_semantic_operation_catalog(
         semantic_extraction_registry()
             .expect("semantic catalog must be installed")
             .catalog()
@@ -28,7 +28,7 @@ fn remote_operation() -> OperationRef {
     }
 }
 
-fn register_remote_contract(catalog: &mut SiteLabCatalog) {
+fn register_remote_contract(catalog: &mut SiteArchitectCatalog) {
     catalog
         .register_contract(OperationContract {
             reference: remote_operation(),

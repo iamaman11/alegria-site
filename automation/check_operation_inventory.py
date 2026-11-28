@@ -65,13 +65,13 @@ class OperationInventoryTests(unittest.TestCase):
             self.assertEqual(evidence["complete_candidate_acceptance"], "unresolved")
             if row["id"] in runnable_subset_ids:
                 self.assertEqual(evidence["typed_domain_contract"], "pure_input_output_failure_source_verified")
-                self.assertEqual(evidence["installed_site_lab_contract"], "pure_catalog_registration_source_verified")
+                self.assertEqual(evidence["installed_site_architect_contract"], "pure_catalog_registration_source_verified")
                 self.assertEqual(evidence["single_operation_executor"], "pure_runner_registration_source_verified")
                 self.assertEqual(evidence["typed_owner_contract"]["failure_type"], "Infallible")
                 self.assertEqual(len(evidence["source_evidence_paths"]), 3)
             elif row["id"] in owner_only_ids:
                 self.assertEqual(evidence["typed_domain_contract"], "owner_input_output_failure_source_verified")
-                self.assertEqual(evidence["installed_site_lab_contract"], "not_verified")
+                self.assertEqual(evidence["installed_site_architect_contract"], "not_verified")
                 self.assertEqual(evidence["single_operation_executor"], "not_verified")
                 self.assertEqual(evidence["typed_owner_contract"]["failure_type"], "Infallible")
             else:

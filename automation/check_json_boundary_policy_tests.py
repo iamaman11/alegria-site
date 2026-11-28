@@ -16,7 +16,7 @@ from check_json_boundary_policy import (
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     PG_V3_OPERATOR_JSON_BOUNDARIES,
     PURE_OWNER_LOCAL_JSON_BOUNDARIES,
-    SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES,
+    SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES,
     TYPED_OPERATION_JSON_BOUNDARIES,
     V3_TYPED_EFFECT_JSON_BOUNDARIES,
     ROOT,
@@ -103,13 +103,13 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 
-    def test_site_lab_trusted_owner_e2e_json_is_one_exact_test_file(self) -> None:
-        self.assertEqual(SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES, {
-            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_lab_owner_catalog_tests.rs",
+    def test_site_architect_trusted_owner_e2e_json_is_one_exact_test_file(self) -> None:
+        self.assertEqual(SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES, {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/trusted_site_architect_owner_catalog_tests.rs",
         })
-        for relative in SITE_LAB_TRUSTED_OWNER_E2E_JSON_BOUNDARIES:
+        for relative in SITE_ARCHITECT_TRUSTED_OWNER_E2E_JSON_BOUNDARIES:
             self.assertTrue(is_allowed_json_boundary(ROOT / relative))
-        self.assertFalse(is_allowed_json_boundary(ROOT / "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/new_site_lab_json_test.rs"))
+        self.assertFalse(is_allowed_json_boundary(ROOT / "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/new_site_architect_json_test.rs"))
 
     def test_native_v6_json_exceptions_are_only_eight_typed_wire_boundaries(self) -> None:
         self.assertEqual(NATIVE_OWNER_V6_JSON_BOUNDARIES, {

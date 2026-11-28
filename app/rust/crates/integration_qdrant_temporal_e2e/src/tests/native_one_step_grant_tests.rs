@@ -16,8 +16,8 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     };
     use operation_protocol::{
         operation_dag_parent_workflow_id_v2, owner_content_hash, OneStepResourceLimitsV1,
-        Operation, OperationDagReceiptV1, PlanHash, SiteLabExpectedStartV1,
-        OPERATION_DAG_PARENT_QUEUE_V2, SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        Operation, OperationDagReceiptV1, PlanHash, SiteArchitectExpectedStartV1,
+        OPERATION_DAG_PARENT_QUEUE_V2, SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
     };
 
     #[derive(serde::Serialize)]
@@ -25,7 +25,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         schema_revision: u16,
         run: &'a operation_protocol::OperationDagRunV6,
         context_key: &'a str,
-        expected: &'a SiteLabExpectedStartV1,
+        expected: &'a SiteArchitectExpectedStartV1,
         expires_at_unix_seconds: u64,
     }
     #[derive(serde::Serialize)]
@@ -42,7 +42,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         request_id: Uuid,
         authorization_event_id: Uuid,
         run: &'a operation_protocol::OperationDagRunV6,
-        expected: &'a SiteLabExpectedStartV1,
+        expected: &'a SiteArchitectExpectedStartV1,
         context_key: &'a str,
         expires_at_unix_seconds: i64,
     }
@@ -57,8 +57,8 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
         schema_revision: u16,
         request_id: Uuid,
     }
-    let expected_for = |run: &operation_protocol::OperationDagRunV6| SiteLabExpectedStartV1 {
-        schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    let expected_for = |run: &operation_protocol::OperationDagRunV6| SiteArchitectExpectedStartV1 {
+        schema_revision: SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
         plan_hash: run.plan.hash.clone(),
         command_hashes: run.owner_commands.iter().map(|(id, wire)| {
             (id.clone(), owner_content_hash(&wire.command_bytes))
@@ -149,7 +149,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let contract = routes.catalog().contract(&run.pinned_routes[0].operation).unwrap();
     let owner_pin = &schemas[&contract.reference];
     owner_pin.validate(contract).unwrap();
-    let trusted_catalog = SiteLabV2CiRootCatalog::new();
+    let trusted_catalog = SiteArchitectV2CiRootCatalog::new();
     trusted_catalog.install(&serde_json::json!({
         "schema_revision": 3,
         "entries": [{
@@ -391,7 +391,7 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let read_grant_as = |principal: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
         .arg("--operator-read-granted-single-v1").arg(&status_locator)
         .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_STATUS", "true")
-        .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
+        .env("SITE_ARCHITECT_SINGLE_V2_TENANT_ID", tenant)
         .env("SITE_ARCHITECT_GRANTED_V1_STATUS_DATABASE_URL_FILE", &status_dsn)
         .env("SITE_ARCHITECT_GRANTED_V1_RESERVER_LOGIN", &operator_role)
         .env("SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID", principal)
@@ -434,17 +434,17 @@ async fn one_step_grant_native_v1_approved_acquisition_start_and_replay_refusal(
     let signed_proof = private.request("signed-oauth-subject-proof", &serde_json::to_string(&signed).unwrap());
     let invoke_as = |principal: &str, oauth_subject: &str| Command::new(binary("INTEGRATION_PG_EFFECT_WORKER_BIN"))
         .arg("--operator-start-signed-granted-single-v1").arg(&signed_proof).arg(&grant_intent)
-        .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
+        .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START", "true")
         .env("ALEGRIA_ENABLE_SITE_ARCHITECT_GRANTED_V1_START", "true")
         .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_KEY_FILE", &signer_key_file)
         .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_ISSUER", "https://auth.example.test")
         .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_RESOURCE", "https://mcp.example.test/mcp")
         .env("SITE_ARCHITECT_SIGNED_ADMISSION_V1_SUBJECT", oauth_subject)
-        .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
-        .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
-        .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
-        .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-        .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &operator_catalog)
+        .env("SITE_ARCHITECT_SINGLE_V2_TENANT_ID", tenant)
+        .env("SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
+        .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+        .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env("SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE", &operator_catalog)
         .env("SITE_ARCHITECT_GRANTED_V1_DATABASE_URL_FILE", &operator_dsn)
         .env("SITE_ARCHITECT_GRANTED_V1_PRINCIPAL_ID", principal)
         .env("SITE_ARCHITECT_GRANTED_V1_POLICY_ID", "ci-safe-zero-cost-v1")

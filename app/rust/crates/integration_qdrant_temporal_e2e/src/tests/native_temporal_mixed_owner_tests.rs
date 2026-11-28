@@ -2456,11 +2456,11 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         schema_revision: u16,
         run: &'a operation_protocol::OperationDagRunV6,
         context_key: &'a str,
-        expected: &'a operation_protocol::SiteLabExpectedStartV1,
+        expected: &'a operation_protocol::SiteArchitectExpectedStartV1,
         expires_at_unix_seconds: u64,
     }
-    let one_expected = operation_protocol::SiteLabExpectedStartV1 {
-        schema_revision: operation_protocol::SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    let one_expected = operation_protocol::SiteArchitectExpectedStartV1 {
+        schema_revision: operation_protocol::SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
         plan_hash: single_run.plan.hash.clone(),
         command_hashes: single_run.owner_commands.iter().map(|(instance, wire)| (
             instance.clone(), operation_protocol::owner_content_hash(&wire.command_bytes),
@@ -2490,12 +2490,12 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         Command::new(&pg_bin)
             .arg("--operator-start-single-v2")
             .arg(locator)
-            .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
-            .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
-            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &one_start_reader_dsn)
-            .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
-            .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
+            .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START", "true")
+            .env("SITE_ARCHITECT_SINGLE_V2_TENANT_ID", tenant)
+            .env("SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE", &one_start_reader_dsn)
+            .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
             .env_remove("DATABASE_URL")
             .output().expect("run native one-step Temporal Start operator")
     };

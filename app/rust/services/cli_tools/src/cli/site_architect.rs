@@ -1,15 +1,15 @@
 use std::io::Read;
 
 use seo_application::operation_adapter::semantic_extraction_registry;
-use seo_application::site_lab::{
+use seo_application::site_architect::{
     compare_executions, describe_tools, diff_recipes, inspect_execution, inspect_operation,
-    installed_semantic_lab_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
-    OperationRef, RecipeParameters, SiteLabCatalog, SiteRecipe,
+    installed_semantic_operation_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
+    OperationRef, RecipeParameters, SiteArchitectCatalog, SiteRecipe,
 };
 
-const SITE_LAB_SAVED_MAX_BYTES: u64 = 512 * 1024;
+const SITE_ARCHITECT_SAVED_MAX_BYTES: u64 = 512 * 1024;
 
-const SITE_LAB_RECIPE_MAX_BYTES: u64 = 256 * 1024;
+const SITE_ARCHITECT_RECIPE_MAX_BYTES: u64 = 256 * 1024;
 
 fn site_architect_problem(code: &str, message: &str, next_action: &str) -> Value {
     json!({
@@ -56,14 +56,14 @@ fn site_architect_read_recipe(path: &str) -> std::result::Result<SiteRecipe, Val
             "Check recipe file access or pass '-' to read a single JSON payload from stdin.",
         )
     })?;
-    let bytes = site_architect_bounded_bytes(reader, SITE_LAB_RECIPE_MAX_BYTES).map_err(|error| {
+    let bytes = site_architect_bounded_bytes(reader, SITE_ARCHITECT_RECIPE_MAX_BYTES).map_err(|error| {
         site_architect_problem(
             "recipe_read_failed",
             &format!("Cannot read recipe input: {error}"),
             "Make the recipe readable and retry.",
         )
     })?;
-    if bytes.len() as u64 > SITE_LAB_RECIPE_MAX_BYTES {
+    if bytes.len() as u64 > SITE_ARCHITECT_RECIPE_MAX_BYTES {
         return Err(site_architect_problem(
             "recipe_too_large",
             "Recipe exceeds the 256 KiB input limit.",
@@ -89,14 +89,14 @@ fn site_architect_read_parameters(path: &str) -> std::result::Result<RecipeParam
             "Provide a readable JSON object or '-' for bounded stdin.",
         )
     })?;
-    let bytes = site_architect_bounded_bytes(reader, SITE_LAB_RECIPE_MAX_BYTES).map_err(|_| {
+    let bytes = site_architect_bounded_bytes(reader, SITE_ARCHITECT_RECIPE_MAX_BYTES).map_err(|_| {
         site_architect_problem(
             "parameters_read_failed",
             "Cannot read operation settings.",
             "Check file access and retry.",
         )
     })?;
-    if bytes.len() as u64 > SITE_LAB_RECIPE_MAX_BYTES {
+    if bytes.len() as u64 > SITE_ARCHITECT_RECIPE_MAX_BYTES {
         return Err(site_architect_problem(
             "parameters_too_large",
             "Operation settings exceed the 256 KiB authoring limit.",
@@ -122,7 +122,7 @@ fn site_architect_read_parameters(path: &str) -> std::result::Result<RecipeParam
 
 /// Do not reflect provider settings, unknown operation IDs, source locators,
 /// or user-controlled error strings into ChatGPT/CLI diagnostics.
-fn site_architect_safe_operation_problem(error: &seo_application::site_lab::SiteLabError) -> Value {
+fn site_architect_safe_operation_problem(error: &seo_application::site_architect::SiteArchitectError) -> Value {
     let problem = error.problem();
     site_architect_problem(
         problem.code,
@@ -134,7 +134,7 @@ fn site_architect_safe_operation_problem(error: &seo_application::site_lab::Site
 /// Authored step names and source locators are untrusted. Keep typed error
 /// codes and the exact offending *ordinary* step identifier, but never echo
 /// provider parameters, URLs or arbitrary strings from PlanError::Display.
-fn site_architect_safe_recipe_problem(error: &seo_application::site_lab::SiteLabError) -> Value {
+fn site_architect_safe_recipe_problem(error: &seo_application::site_architect::SiteArchitectError) -> Value {
     let problem = error.problem();
     let mut output = site_architect_problem(
         problem.code,
@@ -157,7 +157,7 @@ fn site_architect_safe_recipe_problem(error: &seo_application::site_lab::SiteLab
 }
 
 fn site_architect_operation_inspection(
-    catalog: &SiteLabCatalog,
+    catalog: &SiteArchitectCatalog,
     operation: &OperationRef,
     parameters: Option<&RecipeParameters>,
 ) -> std::result::Result<Value, Value> {
@@ -173,10 +173,10 @@ fn site_architect_operation_inspection(
 /// explicit even if every owner has a valid schema. Do not hard-code the 52
 /// product-matrix entries as if they were installed executable operations.
 fn site_architect_launch_readiness(
-    operations: &[seo_application::site_lab::ToolDescription],
+    operations: &[seo_application::site_architect::ToolDescription],
 ) -> Value {
     let verified_catalog =
-        seo_application::site_lab::summarize_local_execution_readiness(operations);
+        seo_application::site_architect::summarize_local_execution_readiness(operations);
     json!({
         "status":"catalog_and_authoring_only",
         "typed_operation_readiness":&verified_catalog,
@@ -220,7 +220,7 @@ fn site_architect_launch_readiness(
 /// ValidateOnly and SQL admission are absent.
 fn site_architect_one_step_preview(
     recipe: &SiteRecipe,
-    catalog: &SiteLabCatalog,
+    catalog: &SiteArchitectCatalog,
 ) -> std::result::Result<Value, Value> {
     if recipe.steps.len() != 1 {
         return Err(site_architect_problem(
@@ -264,14 +264,14 @@ fn site_architect_read_saved<T: serde::de::DeserializeOwned>(
             "Pass a readable saved file or '-' for one bounded stdin input.",
         )
     })?;
-    let bytes = site_architect_bounded_bytes(reader, SITE_LAB_SAVED_MAX_BYTES).map_err(|_| {
+    let bytes = site_architect_bounded_bytes(reader, SITE_ARCHITECT_SAVED_MAX_BYTES).map_err(|_| {
         site_architect_problem(
             "saved_read_failed",
             "Cannot read the saved file.",
             "Check file permissions and retry.",
         )
     })?;
-    if bytes.len() as u64 > SITE_LAB_SAVED_MAX_BYTES {
+    if bytes.len() as u64 > SITE_ARCHITECT_SAVED_MAX_BYTES {
         return Err(site_architect_problem(
             "saved_file_too_large",
             "Saved input exceeds the existing 512 KiB DAG envelope budget.",
@@ -300,11 +300,11 @@ fn site_architect_read_execution(
 /// Match the native Temporal worker's operator-owned trust root, never a
 /// path/manifest supplied by MCP tool arguments or a recipe. An installed
 /// remote owner remains subject to independent ValidateOnly and admission.
-fn site_architect_installed_catalog() -> Result<SiteLabCatalog> {
+fn site_architect_installed_catalog() -> Result<SiteArchitectCatalog> {
     // The registry is compiled from actual, trusted owner operations. User
     // recipes cannot inject contracts, owner routes, credentials or task queues.
     let registry = semantic_extraction_registry().context("register siteArchitect operations")?;
-    let mut installed = installed_semantic_lab_catalog(registry.catalog().clone())
+    let mut installed = installed_semantic_operation_catalog(registry.catalog().clone())
         .context("register trusted siteArchitect parameter contracts")?;
     if let Some(path) = std::env::var_os("TEMPORAL_OPERATION_DAG_CATALOG_PATH") {
         let bundle = trusted_owner_catalog::load_trusted_owner_bundle(std::path::Path::new(&path))
@@ -521,7 +521,7 @@ mod site_architect_cli_tests {
     use super::*;
 
     #[test]
-    fn native_lab_commands_are_parseable_without_runtime_configuration() {
+    fn native_architect_commands_are_parseable_without_runtime_configuration() {
         for args in [
             vec!["cli_tools", "site-architect", "tools"],
             vec![
@@ -570,8 +570,8 @@ mod site_architect_cli_tests {
             assert!(matches!(parsed.command, Command::SiteArchitect { .. }));
         }
         for args in [
-            vec!["cli_tools", "site-lab", "tools"],
-            vec!["cli_tools", "mcp-site-lab"],
+            vec!["cli_tools", "unknown-command", "tools"],
+            vec!["cli_tools", "mcp-unknown"],
         ] {
             assert!(Cli::try_parse_from(args).is_err());
         }
@@ -617,16 +617,16 @@ mod site_architect_cli_tests {
         assert!(site_architect_reused_stdin(&["-", "-", "c.json"]));
         assert_eq!(site_architect_stdin_conflict()["code"], "stdin_reused");
 
-        let max = SITE_LAB_RECIPE_MAX_BYTES as usize;
+        let max = SITE_ARCHITECT_RECIPE_MAX_BYTES as usize;
         let exact = site_architect_bounded_bytes(
             std::io::Cursor::new(vec![b'x'; max]),
-            SITE_LAB_RECIPE_MAX_BYTES,
+            SITE_ARCHITECT_RECIPE_MAX_BYTES,
         )
         .unwrap();
         assert_eq!(exact.len(), max);
         let oversized = site_architect_bounded_bytes(
             std::io::Cursor::new(vec![b'x'; max + 10]),
-            SITE_LAB_RECIPE_MAX_BYTES,
+            SITE_ARCHITECT_RECIPE_MAX_BYTES,
         )
         .unwrap();
         assert_eq!(oversized.len(), max + 1);

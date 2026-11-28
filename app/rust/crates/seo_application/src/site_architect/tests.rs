@@ -134,7 +134,7 @@ fn removing_a_producer_does_not_rewire_or_fake_a_valid_graph() {
     .unwrap();
     assert!(matches!(
         preview_recipe(&draft, &catalog()),
-        Err(SiteLabError::InvalidPlan(_))
+        Err(SiteArchitectError::InvalidPlan(_))
     ));
 }
 
@@ -196,8 +196,8 @@ fn suggestions_exclude_back_edges_that_would_make_a_cycle() {
     assert!(preview_recipe(&draft, &catalog()).is_err());
 }
 
-fn catalog() -> SiteLabCatalog {
-    installed_semantic_lab_catalog(
+fn catalog() -> SiteArchitectCatalog {
+    installed_semantic_operation_catalog(
         semantic_extraction_registry()
             .expect("real semantic operations are registered")
             .catalog()
@@ -398,7 +398,7 @@ fn duplicate_instances_and_generated_output_collisions_fail_closed() {
     duplicate.steps.push(duplicate.steps[0].clone());
     assert!(matches!(
         preview_recipe(&duplicate, &registry).unwrap_err(),
-        SiteLabError::InvalidPlan(PlanError::DuplicateInstance(_))
+        SiteArchitectError::InvalidPlan(PlanError::DuplicateInstance(_))
     ));
 
     let mut collision = recipe();
@@ -408,7 +408,7 @@ fn duplicate_instances_and_generated_output_collisions_fail_closed() {
     );
     assert!(matches!(
         preview_recipe(&collision, &registry).unwrap_err(),
-        SiteLabError::InvalidPlan(PlanError::AmbiguousArtifact(_))
+        SiteArchitectError::InvalidPlan(PlanError::AmbiguousArtifact(_))
     ));
 }
 

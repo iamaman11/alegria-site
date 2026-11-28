@@ -3,18 +3,18 @@
 // operator status bridge. No provider calls, Temporal Start, arbitrary file
 // reads, dynamic manifest loading or second DAG runner are reachable here.
 
-const SITE_LAB_MCP_PROTOCOL: &str = "2025-11-25";
+const SITE_ARCHITECT_MCP_PROTOCOL: &str = "2025-11-25";
 // Two sealed plans and two V2 receipts may each reach the existing 512 KiB
 // DAG boundary; allow envelope overhead, without accepting unbounded input.
-const SITE_LAB_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
+const SITE_ARCHITECT_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
 // Recipe authoring is much smaller than the transport envelope needed for
 // comparing two already bounded saved V2 receipts. Enforce the distinction
 // on the server, not just in the advertised MCP JSON Schema.
-const SITE_LAB_MCP_AUTHORING_MAX_BYTES: usize = 2 * SITE_LAB_RECIPE_MAX_BYTES as usize + 4096;
-const SITE_LAB_MCP_MAX_RECIPE_EDITS: usize = 128;
-const SITE_LAB_MCP_MAX_SCOPE_ID_BYTES: usize = 128;
-const SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES: u64 = 4096;
-const SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES: usize = 256;
+const SITE_ARCHITECT_MCP_AUTHORING_MAX_BYTES: usize = 2 * SITE_ARCHITECT_RECIPE_MAX_BYTES as usize + 4096;
+const SITE_ARCHITECT_MCP_MAX_RECIPE_EDITS: usize = 128;
+const SITE_ARCHITECT_MCP_MAX_SCOPE_ID_BYTES: usize = 128;
+const SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES: u64 = 4096;
+const SITE_ARCHITECT_MCP_OPERATOR_REQUEST_MAX_BYTES: usize = 256;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -77,36 +77,36 @@ struct McpNewRecipe {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpOneRecipe {
-    recipe: seo_application::site_lab::SiteRecipe,
+    recipe: seo_application::site_architect::SiteRecipe,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpOneOperation {
-    operation: seo_application::site_lab::OperationRef,
+    operation: seo_application::site_architect::OperationRef,
     #[serde(default)]
-    parameters: Option<seo_application::site_lab::RecipeParameters>,
+    parameters: Option<seo_application::site_architect::RecipeParameters>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpEditRecipe {
-    recipe: seo_application::site_lab::SiteRecipe,
-    changes: Vec<seo_application::site_lab::RecipeChange>,
+    recipe: seo_application::site_architect::SiteRecipe,
+    changes: Vec<seo_application::site_architect::RecipeChange>,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpTwoRecipes {
-    first: seo_application::site_lab::SiteRecipe,
-    second: seo_application::site_lab::SiteRecipe,
+    first: seo_application::site_architect::SiteRecipe,
+    second: seo_application::site_architect::SiteRecipe,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpSavedExecution {
-    plan: seo_application::site_lab::ExecutionPlan,
-    receipt: seo_application::site_lab::OperationDagReceiptV1,
+    plan: seo_application::site_architect::ExecutionPlan,
+    receipt: seo_application::site_architect::OperationDagReceiptV1,
 }
 
 #[derive(serde::Deserialize)]
@@ -119,7 +119,7 @@ struct McpCompareExecutions {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct McpNeedEvidence {
-    batch: seo_application::site_lab::ConsumerNeedEvidenceBatchV1,
+    batch: seo_application::site_architect::ConsumerNeedEvidenceBatchV1,
 }
 
 fn mcp_object_schema(fields: Value, required: &[&str]) -> Value {
@@ -376,12 +376,12 @@ fn mcp_bad_arguments(_error: impl std::fmt::Display) -> Value {
 
 fn mcp_site_architect_authoring_payload_too_large(payload: &impl serde::Serialize) -> bool {
     serde_json::to_vec(payload).map_or(true, |bytes| {
-        bytes.len() > SITE_LAB_RECIPE_MAX_BYTES as usize
+        bytes.len() > SITE_ARCHITECT_RECIPE_MAX_BYTES as usize
     })
 }
 
 fn mcp_site_architect_authoring_envelope_too_large(payload: &impl serde::Serialize) -> bool {
-    serde_json::to_vec(payload).map_or(true, |bytes| bytes.len() > SITE_LAB_MCP_AUTHORING_MAX_BYTES)
+    serde_json::to_vec(payload).map_or(true, |bytes| bytes.len() > SITE_ARCHITECT_MCP_AUTHORING_MAX_BYTES)
 }
 
 fn mcp_site_architect_authoring_problem() -> Value {
@@ -394,7 +394,7 @@ fn mcp_site_architect_authoring_problem() -> Value {
 
 fn mcp_site_architect_scope_id_is_valid(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= SITE_LAB_MCP_MAX_SCOPE_ID_BYTES
+        && value.len() <= SITE_ARCHITECT_MCP_MAX_SCOPE_ID_BYTES
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
@@ -420,7 +420,7 @@ fn mcp_operator_read_result(
     response: &[u8],
     canonical_run_id: uuid::Uuid,
 ) -> Option<(Value, bool)> {
-    if response.is_empty() || response.len() > SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES as usize {
+    if response.is_empty() || response.len() > SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES as usize {
         return None;
     }
     let report: McpOwnerRunReport = serde_json::from_slice(response).ok()?;
@@ -580,17 +580,17 @@ fn mcp_operator_socket_read(locator: &McpRunStatus) -> Option<Vec<u8>> {
         .ok()?;
     let mut request = serde_json::to_vec(locator).ok()?;
     request.push(b'\n');
-    if request.len() > SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES {
+    if request.len() > SITE_ARCHITECT_MCP_OPERATOR_REQUEST_MAX_BYTES {
         return None;
     }
     socket.write_all(&request).ok()?;
     socket.shutdown(std::net::Shutdown::Write).ok()?;
     let mut result = Vec::new();
     socket
-        .take(SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES + 1)
+        .take(SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES + 1)
         .read_to_end(&mut result)
         .ok()?;
-    if result.len() > SITE_LAB_MCP_OPERATOR_REPLY_MAX_BYTES as usize
+    if result.len() > SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES as usize
         || result.last() != Some(&b'\n')
         || result[..result.len() - 1].contains(&b'\n')
     {
@@ -602,7 +602,7 @@ fn mcp_operator_socket_read(locator: &McpRunStatus) -> Option<Vec<u8>> {
 
 fn mcp_site_architect_run_status(args: Value) -> (Value, bool) {
     if serde_json::to_vec(&args).map_or(true, |bytes| {
-        bytes.len() > SITE_LAB_MCP_OPERATOR_REQUEST_MAX_BYTES
+        bytes.len() > SITE_ARCHITECT_MCP_OPERATOR_REQUEST_MAX_BYTES
     }) {
         return (
             mcp_bad_arguments("bounded UUID-only locator required"),
@@ -638,9 +638,9 @@ fn mcp_site_architect_run_status(args: Value) -> (Value, bool) {
 fn mcp_site_architect_call(
     name: &str,
     args: Value,
-    catalog: &seo_application::site_lab::SiteLabCatalog,
+    catalog: &seo_application::site_architect::SiteArchitectCatalog,
 ) -> (Value, bool) {
-    use seo_application::site_lab::{
+    use seo_application::site_architect::{
         compare_executions, describe_tools, diff_recipes, inspect_execution,
         preview_consumer_need_evidence, preview_recipe, revise_recipe, suggest_compatible_inputs,
         SiteRecipe,
@@ -727,8 +727,8 @@ fn mcp_site_architect_call(
             Ok(input) if mcp_site_architect_scope_id_is_valid(&input.tenant_id)
                 && mcp_site_architect_scope_id_is_valid(&input.run_id) => {
                 let recipe = SiteRecipe {
-                    schema_revision: seo_application::site_lab::SITE_RECIPE_SCHEMA_REVISION,
-                    scope: seo_application::site_lab::RunScope {tenant_id:input.tenant_id,run_id:input.run_id},
+                    schema_revision: seo_application::site_architect::SITE_RECIPE_SCHEMA_REVISION,
+                    scope: seo_application::site_architect::RunScope {tenant_id:input.tenant_id,run_id:input.run_id},
                     sources: Default::default(), steps: Vec::new(),
                 };
                 (json!({"status":"draft_unchecked","recipe":recipe,"execution":"not_started"}), false)
@@ -737,7 +737,7 @@ fn mcp_site_architect_call(
             Err(error) => (mcp_bad_arguments(error), true),
         },
         "site_architect_edit" => match serde_json::from_value::<McpEditRecipe>(args) {
-            Ok(input) if input.changes.len() > SITE_LAB_MCP_MAX_RECIPE_EDITS
+            Ok(input) if input.changes.len() > SITE_ARCHITECT_MCP_MAX_RECIPE_EDITS
                 || mcp_site_architect_authoring_payload_too_large(&input.recipe) =>
             {
                 (mcp_site_architect_authoring_problem(), true)
@@ -838,7 +838,7 @@ fn mcp_reply(id: Value, result: Value) -> Value {
 /// no response. No network/file IO is reachable through this dispatcher.
 fn mcp_site_architect_message(
     request: Value,
-    catalog: &seo_application::site_lab::SiteLabCatalog,
+    catalog: &seo_application::site_architect::SiteArchitectCatalog,
 ) -> Option<Value> {
     let id = request.get("id").cloned();
     let method = request.get("method").and_then(Value::as_str);
@@ -853,7 +853,7 @@ fn mcp_site_architect_message(
     let id = id?;
     let result = match method? {
         "initialize" => {
-            json!({"protocolVersion":SITE_LAB_MCP_PROTOCOL,
+            json!({"protocolVersion":SITE_ARCHITECT_MCP_PROTOCOL,
                 "capabilities":{"tools":{"listChanged":false}},
                 "serverInfo":{"name":"alegria-siteArchitect","version":env!("CARGO_PKG_VERSION")},
                 "instructions":"Read-only siteArchitect: trusted catalog, typed DAG authoring, a fail-closed one-step launch request diagnostic, saved-receipt inspection and an optional independently credentialed server-Temporal-History status reader. A trusted ChatGPT OAuth resource server is NOT configured in stdio MCP. No user authorization issuer, one-use grant consume, Temporal Start, provider effects or admission is exposed."})
@@ -884,7 +884,7 @@ fn mcp_bounded_line<R: std::io::BufRead>(input: &mut R) -> std::io::Result<Optio
         }
         let end = available.iter().position(|byte| *byte == b'\n');
         let take = end.map_or(available.len(), |position| position + 1);
-        if line.len().saturating_add(take) > SITE_LAB_MCP_MAX_MESSAGE_BYTES {
+        if line.len().saturating_add(take) > SITE_ARCHITECT_MCP_MAX_MESSAGE_BYTES {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "MCP message exceeds 3 MiB boundary",
@@ -901,7 +901,7 @@ fn mcp_bounded_line<R: std::io::BufRead>(input: &mut R) -> std::io::Result<Optio
 fn serve_site_architect_mcp<R: std::io::BufRead, W: std::io::Write>(
     mut input: R,
     mut output: W,
-    catalog: &seo_application::site_lab::SiteLabCatalog,
+    catalog: &seo_application::site_architect::SiteArchitectCatalog,
 ) -> Result<()> {
     while let Some(line) = mcp_bounded_line(&mut input)? {
         if line.iter().all(|byte| byte.is_ascii_whitespace()) {
@@ -930,9 +930,9 @@ fn mcp_site_architect_server() -> Result<i32> {
 mod site_architect_mcp_tests {
     use super::*;
 
-    fn catalog() -> seo_application::site_lab::SiteLabCatalog {
+    fn catalog() -> seo_application::site_architect::SiteArchitectCatalog {
         let registry = seo_application::operation_adapter::semantic_extraction_registry().unwrap();
-        seo_application::site_lab::installed_semantic_lab_catalog(registry.catalog().clone())
+        seo_application::site_architect::installed_semantic_operation_catalog(registry.catalog().clone())
             .unwrap()
     }
 
@@ -1593,7 +1593,7 @@ mod site_architect_mcp_tests {
             );
             assert!(!refused.to_string().contains("SENTINEL"));
         }
-        let oversized = vec![b'a'; SITE_LAB_MCP_MAX_MESSAGE_BYTES + 1];
+        let oversized = vec![b'a'; SITE_ARCHITECT_MCP_MAX_MESSAGE_BYTES + 1];
         assert!(mcp_bounded_line(&mut std::io::Cursor::new(oversized)).is_err());
     }
 }

@@ -1,12 +1,12 @@
 //! Individual operation inspection through exactly the same trusted catalog
-//! used by multi-step Site Lab recipes. This cannot start an Activity, grant
+//! used by multi-step siteArchitect recipes. This cannot start an Activity, grant
 //! operator admission or prove that provider credentials are connected.
 
 use operation_protocol::OperationRef;
 use serde::Serialize;
 
 use super::{
-    describe_tools, OperationExecutionReadinessV1, RecipeParameters, SiteLabCatalog, SiteLabError,
+    describe_tools, OperationExecutionReadinessV1, RecipeParameters, SiteArchitectCatalog, SiteArchitectError,
     ToolDescription,
 };
 
@@ -45,19 +45,19 @@ pub struct OperationInspection {
 /// Remote schemas only prove JSON-object shape: owner ValidateOnly must check
 /// all advanced settings before any external effect can be authorized.
 pub fn inspect_operation(
-    catalog: &SiteLabCatalog,
+    catalog: &SiteArchitectCatalog,
     operation: &OperationRef,
     parameters: Option<&RecipeParameters>,
-) -> Result<OperationInspection, SiteLabError> {
+) -> Result<OperationInspection, SiteArchitectError> {
     let tool = describe_tools(catalog)?
         .into_iter()
         .find(|tool| &tool.operation == operation)
-        .ok_or_else(|| SiteLabError::UnavailableOperation(operation.clone()))?;
+        .ok_or_else(|| SiteArchitectError::UnavailableOperation(operation.clone()))?;
 
     let checked_parameters = parameters
         .map(|parameters| {
             let checked = catalog.validate(operation, parameters)?;
-            Ok::<CheckedOperationParameters, SiteLabError>(CheckedOperationParameters {
+            Ok::<CheckedOperationParameters, SiteArchitectError>(CheckedOperationParameters {
                 status: if checked.verification == "typed_local" {
                     "typed_configuration_checked"
                 } else {

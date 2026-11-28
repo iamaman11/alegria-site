@@ -36,7 +36,7 @@ ID is used for manual reconciliation. Temporal Start acknowledgment alone
 does **not** mark SQL `start_confirmed`: that requires separately admitted
 server History evidence through the SQL confirmation function.
 
-The required environment variables are the existing `SITE_LAB_SINGLE_V2_*`
+The required environment variables are the existing `SITE_ARCHITECT_SINGLE_V2_*`
 tenant, trusted catalog, Temporal endpoint/namespace and read-only business
 root SQL settings, plus these new strictly operator-provisioned settings:
 

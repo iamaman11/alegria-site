@@ -161,7 +161,7 @@ async fn acquisition_native_v2_both_independent_one_step_operations_and_replay()
             })
         })
         .collect::<Vec<_>>();
-    let catalog = SiteLabV2CiRootCatalog::new();
+    let catalog = SiteArchitectV2CiRootCatalog::new();
     catalog.install(&serde_json::json!({"schema_revision":3,"entries":entries}));
     let installed = trusted_owner_catalog::load_trusted_owner_bundle(&catalog.0).unwrap();
     assert_eq!(installed.routes.catalog().contracts().count(), 2);
@@ -341,8 +341,8 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
     };
     use operation_protocol::{
         operation_dag_parent_workflow_id_v2, owner_content_hash, Operation,
-        OperationDagReceiptV1, PlanHash, SiteLabExpectedStartV1,
-        SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+        OperationDagReceiptV1, PlanHash, SiteArchitectExpectedStartV1,
+        SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
         OPERATION_DAG_PARENT_QUEUE_V2,
     };
 
@@ -351,7 +351,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         schema_revision: u16,
         run: &'a operation_protocol::OperationDagRunV6,
         context_key: &'a str,
-        expected: &'a SiteLabExpectedStartV1,
+        expected: &'a SiteArchitectExpectedStartV1,
         expires_at_unix_seconds: u64,
     }
     #[derive(serde::Serialize)]
@@ -362,9 +362,9 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         source_page_id: i64,
         expires_at_unix_seconds: i64,
     }
-    fn expected_for(run: &operation_protocol::OperationDagRunV6) -> SiteLabExpectedStartV1 {
-        SiteLabExpectedStartV1 {
-            schema_revision: SITE_LAB_START_PREFLIGHT_SCHEMA_REVISION_V1,
+    fn expected_for(run: &operation_protocol::OperationDagRunV6) -> SiteArchitectExpectedStartV1 {
+        SiteArchitectExpectedStartV1 {
+            schema_revision: SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
             command_hashes: run
                 .owner_commands
@@ -507,7 +507,7 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         .unwrap();
     let dom_owner_pin = &schemas[&dom_contract.reference];
     dom_owner_pin.validate(dom_contract).unwrap();
-    let catalog = SiteLabV2CiRootCatalog::new();
+    let catalog = SiteArchitectV2CiRootCatalog::new();
     catalog.install(&serde_json::json!({
         "schema_revision":3,
         "entries":[{
@@ -650,12 +650,12 @@ async fn acquisition_native_v2_operator_refuses_unattested_and_starts_with_sourc
         Command::new(&pg_operator_bin)
             .arg("--operator-start-single-v2")
             .arg(request)
-            .env("ALEGRIA_ENABLE_SITE_LAB_SINGLE_V2_START", "true")
-            .env("SITE_LAB_SINGLE_V2_TENANT_ID", tenant)
-            .env("SITE_LAB_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
-            .env("SITE_LAB_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
-            .env("SITE_LAB_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-            .env("SITE_LAB_SINGLE_V2_TRUSTED_CATALOG_FILE", installed_catalog)
+            .env("ALEGRIA_ENABLE_SITE_ARCHITECT_SINGLE_V2_START", "true")
+            .env("SITE_ARCHITECT_SINGLE_V2_TENANT_ID", tenant)
+            .env("SITE_ARCHITECT_SINGLE_V2_DATABASE_URL_FILE", &reader_dsn)
+            .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("SITE_ARCHITECT_SINGLE_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("SITE_ARCHITECT_SINGLE_V2_TRUSTED_CATALOG_FILE", installed_catalog)
             .env_remove("DATABASE_URL")
             .output()
             .expect("native exact-source single-step operator Start")

@@ -1,6 +1,6 @@
 //! Shared checked Serde/JSON representation at operation boundaries.
 //!
-//! The Site Lab authoring adapter and the pure DAG artifact adapter both use
+//! The siteArchitect authoring adapter and the pure DAG artifact adapter both use
 //! this policy. It does not replace owner DTOs or historical Protobuf messages.
 
 use serde::{
