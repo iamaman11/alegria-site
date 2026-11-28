@@ -136,7 +136,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 66)
+                             for _, _, _, count in rows), 67)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -182,6 +182,7 @@ class ImpactFixtures(unittest.TestCase):
                 "temporal_mixed_v2_native", "dataforseo_native_v2",
                 "acquisition_native_v2", "one_step_grant_native_v1",
                 "seo_steps_native_v2", "truth_native_v2", "mixed_pure_composition_native_v1",
+                "semantic_pure_native_v2",
             },
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
@@ -316,6 +317,13 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(E2E_SHARD_RUNS["temporal_truth"], (
             ("truth_native_v2", "truth_native_v2_", 1),
         ))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_semantic"], (
+            ("semantic_pure_native_v2", "semantic_pure_native_v2_", 1),
+        ))
+        self.assertEqual(
+            SUITE_OWNERS["semantic_pure_native_v2"]["runtime_binaries"]["INTEGRATION_SEMANTIC_PURE_OWNER_BIN"],
+            "temporal_semantic_pure",
+        )
         for name, owner_bin in (
             ("seo_steps_native_v2", "temporal_seo_steps_pure"),
             ("truth_native_v2", "temporal_truth_pure"),
@@ -484,12 +492,12 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], (
             "temporal_mixed_v6", "temporal_mixed_v7",
             "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
-            "temporal_seo_steps", "temporal_truth",
+            "temporal_seo_steps", "temporal_truth", "temporal_semantic",
         ))
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"],
                          ("temporal_qdrant",))
 
-    def test_full_real_e2e_shards_cover_all_67_including_optional_certification(self) -> None:
+    def test_full_real_e2e_shards_cover_all_68_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -508,7 +516,7 @@ class ImpactFixtures(unittest.TestCase):
             sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 43
         )
         self.assertEqual(
-            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 24
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 25
         )  # Architecture regressions incl. live mixed E2E, catalog and Truth cert.
         self.assertEqual(
             [(name, test_filter) for rows in shards.values()
@@ -614,12 +622,12 @@ class ImpactFixtures(unittest.TestCase):
         )
         self.assertEqual(impact["scope"], "scoped")
         self.assertEqual(impact["selected_suites"], [
-            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pg_effect_v3", "pure_dag_v3", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pg_effect_v3", "pure_dag_v3", "semantic_pure_native_v2", "seo_steps_native_v2", "temporal_mixed_v2_native",
             "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
         ])
         architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
         self.assertEqual(set(architecture), {
-            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pure_dag_v3", "pg_effect_v3", "seo_steps_native_v2", "temporal_mixed_v2_native",
+            "acquisition_native_v2", "dataforseo_native_v2", "mixed_pure_composition_native_v1", "one_step_grant_native_v1", "pure_dag_v3", "pg_effect_v3", "semantic_pure_native_v2", "seo_steps_native_v2", "temporal_mixed_v2_native",
             "temporal_mixed_v7_produced", "temporal_qdrant_v8", "truth_native_v2",
         })
         self.assertIn("pure_v3_", architecture["pure_dag_v3"])

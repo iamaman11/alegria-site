@@ -468,7 +468,7 @@ def check() -> None:
     mandatory_shards = (
         "temporal_mixed_v6", "temporal_mixed_v7",
         "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
-        "temporal_seo_steps", "temporal_truth",
+        "temporal_seo_steps", "temporal_truth", "temporal_semantic",
     )
     assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"] == mandatory_shards
     assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"] == ("temporal_qdrant",)
@@ -479,6 +479,7 @@ def check() -> None:
         "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
         "seo-steps-pure": 'contains(fromJSON(\'["temporal_seo_steps","temporal_acquisition"]\'), matrix.shard)',
         "truth-pure": 'contains(fromJSON(\'["temporal_truth","temporal_acquisition"]\'), matrix.shard)',
+        "semantic-pure": "matrix.shard == 'temporal_semantic'",
     }
     assert (
         "- uses: actions/download-artifact@v7\n"
@@ -495,7 +496,7 @@ def check() -> None:
     # The separately compiled DataForSEO provider artifact is published once
     # from an already-required parallel owner. No second Cargo pass may be
     # appended to the generic parent/PG binary chain on the slowest PR path.
-    issuer_build = 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p acquisition_source_issuer -p one_step_request_issuer --bins'
+    issuer_build = 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p temporal_semantic_pure -p acquisition_source_issuer -p one_step_request_issuer --bins'
     assert issuer_build in architecture
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in architecture
@@ -505,7 +506,8 @@ def check() -> None:
     assert 'needs.architecture-and-rust.result == \'success\'' in qdrant_runner
     assert '--kind acquisition_pure --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in architecture
-    for kind, artifact in (("seo_steps_pure", "seo-steps-pure"), ("truth_pure", "truth-pure")):
+    for kind, artifact in (("seo_steps_pure", "seo-steps-pure"), ("truth_pure", "truth-pure"),
+                           ("semantic_pure", "semantic-pure")):
         assert f'--kind {kind} --source-sha "$GITHUB_SHA"' in architecture
         assert f'name: rust-e2e-{artifact}-${{{{ github.sha }}}}' in architecture
     # Separate SQL identity boundary, separately compiled and digest-checked;
@@ -518,6 +520,7 @@ def check() -> None:
         "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure)",
         "temporal_seo_steps) kinds=(v3 seo_steps_pure)",
         "temporal_truth) kinds=(v3 truth_pure)",
+        "temporal_semantic) kinds=(v3 semantic_pure)",
     )
     for entry in expected_installs:
         assert entry in qdrant_runner, entry
@@ -545,7 +548,7 @@ def check() -> None:
     assert "E2E_RUNNER_PARTITIONS" in workflow
     for name in ("graph", "qdrant", "qdrant_temporal", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
         assert f"{name}_e2e_shards" in workflow
-    assert len(E2E_ARCH_SHARDS) == 14 and len(E2E_VERIFY_SHARDS) == 9
+    assert len(E2E_ARCH_SHARDS) == 15 and len(E2E_VERIFY_SHARDS) == 9
     assert set(E2E_PG_SHARDS) == {"pg_temporal", "verify_d"}
     assert set(E2E_OUTBOX_SHARDS) == {"outbox"}
     assert set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values())) == set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)

@@ -408,6 +408,16 @@ TRUTH_NATIVE_V2_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
     "INTEGRATION_TRUTH_PURE_OWNER_BIN": "temporal_truth_pure",
 }
+SEMANTIC_NATIVE_V2_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects", "-p", "temporal_semantic_pure",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects", "--bin", "temporal_semantic_pure",
+)
+SEMANTIC_NATIVE_V2_RUNTIME_BINARIES = {
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+    "INTEGRATION_SEMANTIC_PURE_OWNER_BIN": "temporal_semantic_pure",
+}
 ONE_STEP_GRANT_NATIVE_V1_PREPARE = (
     "cargo", "build", "--locked",
     "-p", "temporal_orchestrator", "-p", "temporal_acquisition_pure",
@@ -975,6 +985,34 @@ SUITE_OWNERS = {
             "--lib", "truth_native_v2_", "--locked", "--", "--nocapture",
         ),
     },
+    "semantic_pure_native_v2": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/Cargo.toml",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_semantic_pure_tests.rs",
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_read_v2.rs",
+            "app/rust/services/cli_tools/src/cli/site_architect.rs",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_semantic_pure/",
+            "app/rust/crates/seo_domain/src/extraction/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/trusted_owner_catalog/",
+            "app/rust/services/temporal_orchestrator/",
+        ),
+        "lock_crates": {"seo_domain", "seo_application", "temporal_semantic_pure",
+                        "operation_protocol", "trusted_owner_catalog", "temporal_orchestrator",
+                        "temporal_pg_effects", "integration_qdrant_temporal_e2e"},
+        "on_unknown_global_input": True,
+        "prepare": SEMANTIC_NATIVE_V2_PREPARE,
+        "runtime_binaries": SEMANTIC_NATIVE_V2_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "semantic_pure_native_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
     "one_step_grant_native_v1": {
         "paths": {
             "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
@@ -1508,7 +1546,7 @@ E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
     "vector", "temporal_qdrant", "temporal_mixed_v6", "temporal_mixed_v7",
     "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
-    "temporal_seo_steps", "temporal_truth", "truth_certification",
+    "temporal_seo_steps", "temporal_truth", "temporal_semantic", "truth_certification",
 )
 E2E_VERIFY_SHARDS = (
     "qdrant_knowledge", "pg_app_truth", "pg_app_cms", "pg_app_planning",
@@ -1522,7 +1560,7 @@ E2E_QDRANT_SHARDS = ("vector", "qdrant_knowledge")
 E2E_QDRANT_TEMPORAL_SHARDS = (
     "temporal_mixed_v6", "temporal_mixed_v7",
     "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
-    "temporal_seo_steps", "temporal_truth",
+    "temporal_seo_steps", "temporal_truth", "temporal_semantic",
 )
 E2E_QDRANT_TEMPORAL_LEGACY_SHARDS = ("temporal_qdrant",)
 E2E_PG_APP_SHARDS = ("pg_app_truth", "pg_app_cms", "pg_app_planning", "pg_app_delivery")
@@ -1585,6 +1623,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_seo_steps": (("seo_steps_native_v2", "seo_steps_native_v2_", 1),),
     "temporal_truth": (("truth_native_v2", "truth_native_v2_", 1),),
+    "temporal_semantic": (("semantic_pure_native_v2", "semantic_pure_native_v2_", 1),),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
     ),

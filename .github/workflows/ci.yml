@@ -359,12 +359,12 @@ jobs:
       # as real executables in this already-required compiler job. Transfer
       # their exact SHA-bound bytes into the native Temporal E2E runner; no
       # second owner compilation in the E2E job.
-      - name: Compile independent DataForSEO and three pure owner groups with source issuers
+      - name: Compile independent DataForSEO and pure owner groups with source issuers
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
         working-directory: app/rust
-        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
+        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p temporal_semantic_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
 
       # Reuse the independently compiled owner as an exact-source artifact.
       # The pure Temporal/PG binary job must never recompile or transitively
@@ -423,6 +423,20 @@ jobs:
         with:
           name: rust-e2e-truth-pure-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/truth_pure/
+          if-no-files-found: error
+
+      - name: Pack independent semantic owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind semantic_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/semantic_pure
+
+      - name: Publish independently compiled semantic E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/semantic_pure/
           if-no-files-found: error
 
       # One extra typed issuer, built in the existing compiler job, never
@@ -1456,6 +1470,11 @@ jobs:
         with:
           name: rust-e2e-truth-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/truth_pure
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_semantic'
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/semantic_pure
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
         run: |
           set -euo pipefail
@@ -1471,6 +1490,7 @@ jobs:
             temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure) ;;
             temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
             temporal_truth) kinds=(v3 truth_pure) ;;
+            temporal_semantic) kinds=(v3 semantic_pure) ;;
             *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
           esac
           for kind in "${kinds[@]}"; do

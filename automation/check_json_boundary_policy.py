@@ -254,12 +254,14 @@ PURE_OWNER_LOCAL_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_seo_steps_pure/src/main.rs",
     "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
     "app/rust/services/temporal_truth_pure/src/main.rs",
+    "app/rust/services/temporal_semantic_pure/src/produced_history.rs",
     "app/rust/crates/truth_domain/src/operations_json.rs",
     # Exact opt-in native Temporal parent/Acquisition Child E2E fixture.
     # Its JSON wires are real server History and typed owner artifact bytes.
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_truth_tests.rs",
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_semantic_pure_tests.rs",
 })
 
 # Exactly two opt-in cross-owner integration fixtures construct protected

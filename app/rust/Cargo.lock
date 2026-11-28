@@ -2350,6 +2350,7 @@ dependencies = [
  "postgres_store",
  "projection_contracts",
  "qdrant_contracts",
+ "seo_domain",
  "seo_steps",
  "serde",
  "serde_json",
@@ -5582,6 +5583,27 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "temporal_semantic_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "operation_protocol",
+ "prost",
+ "seo_application",
+ "serde",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "trusted_owner_catalog",
+ "url",
 ]
 
 [[package]]

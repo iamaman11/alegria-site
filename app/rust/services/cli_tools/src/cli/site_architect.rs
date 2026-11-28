@@ -1,6 +1,8 @@
 use std::io::Read;
 
-use seo_application::operation_adapter::semantic_extraction_registry;
+use seo_application::operation_adapter::{
+    semantic_extraction_owner_schemas, semantic_extraction_registry,
+};
 use seo_application::site_architect::{
     compare_executions, describe_tools, diff_recipes, inspect_execution, inspect_operation,
     installed_semantic_operation_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
@@ -312,11 +314,25 @@ fn site_architect_installed_catalog() -> Result<SiteArchitectCatalog> {
     if let Some(path) = std::env::var_os("TEMPORAL_OPERATION_DAG_CATALOG_PATH") {
         let bundle = trusted_owner_catalog::load_trusted_owner_bundle(std::path::Path::new(&path))
             .context("read operator-owned Temporal owner routes for siteArchitect")?;
+        let compiled_schemas = semantic_extraction_owner_schemas()?;
         for contract in bundle.routes.catalog().contracts() {
-            anyhow::ensure!(
-                installed.catalog().contract(&contract.reference).is_none(),
-                "trusted owner route conflicts with a built-in siteArchitect operation"
-            );
+            if let Some(local) = installed.catalog().contract(&contract.reference) {
+                anyhow::ensure!(
+                    local == contract,
+                    "trusted owner route conflicts with a built-in siteArchitect operation"
+                );
+                let schema = compiled_schemas.get(&contract.reference)
+                    .context("compiled semantic owner DTO schema missing")?;
+                bundle.verify_caller_schema(&contract.reference, schema)?;
+                anyhow::ensure!(
+                    bundle.parameter_schemas.get(&contract.reference)
+                        == Some(&json!({"type": "object", "additionalProperties": false})),
+                    "installed semantic settings differ from the compiled empty DTO contract"
+                );
+                // The same operation retains its stricter compiled authoring
+                // validator. The operator catalog supplies the native route.
+                continue;
+            }
             installed.register_contract(contract.clone())?;
             if let Some(schema) = bundle.parameter_schemas.get(&contract.reference) {
                 installed.register_remote(&contract.reference, &contract.fingerprint()?, schema.clone())?;
