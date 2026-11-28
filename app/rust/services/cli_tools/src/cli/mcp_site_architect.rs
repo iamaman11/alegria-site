@@ -1543,6 +1543,40 @@ mod site_architect_mcp_tests {
     }
 
     #[test]
+    fn mcp_port_mismatch_reports_expected_schema_and_redacts_the_authored_source() {
+        let sensitive = "SENTINEL-PRIVATE-SOURCE";
+        let response = tool_call(
+            "site_architect_check",
+            json!({"recipe":{
+                "schema_revision":2,
+                "scope":{"tenant_id":"tenant","run_id":"draft"},
+                "sources":{
+                    "source":{"schema":{"id":sensitive,"revision":9},"provenance":sensitive}
+                },
+                "steps":[{
+                    "id":sensitive,
+                    "operation":{"id":"semantic.entity_spans","revision":1},
+                    "inputs":{"input":{"source":"external","artifact":"source"}}
+                }]
+            }}),
+        );
+        assert_eq!(response["result"]["isError"], true);
+        let problem = &response["result"]["structuredContent"];
+        assert_eq!(problem["code"], "incompatible_ports");
+        assert_eq!(
+            problem["incompatible_input"],
+            json!({
+                "step_index":0,
+                "operation":{"id":"semantic.entity_spans","revision":1},
+                "port":"input",
+                "expected":{"id":"semantic.entity_span_input","revision":1},
+                "actual":{"source":"external","declared_revision":9,"same_type":false}
+            })
+        );
+        assert!(!response.to_string().contains(sensitive));
+    }
+
+    #[test]
     fn mcp_scope_identifiers_are_bounded_and_do_not_echo_invalid_inputs() {
         let sensitive = "SENTINEL-PRIVATE-SCOPE".repeat(12);
         let invalid = tool_call(

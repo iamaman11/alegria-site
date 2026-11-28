@@ -90,6 +90,10 @@ fn pure_dag_e2e_case(case: &str, run_id: &str) -> seo_application::operation_ada
             vec![external_node::<LayerRoute>("route", "route-in", "route-out")],
             vec![seed::<LayerRoute>("route-in", &route, &scope)],
         ),
+        "entity-only" => (
+            vec![external_node::<EntitySpans>("entities", "entities-in", "entity-out")],
+            vec![seed::<EntitySpans>("entities-in", &entities, &scope)],
+        ),
         // Actual produced artifact, not merely an `after` ordering edge.
         "entity-to-canonical" => (
             vec![

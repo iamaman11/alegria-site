@@ -164,6 +164,28 @@ fn full_receipt_is_consistent_but_never_claims_server_attestation() {
     assert_eq!(report.status, "self_consistent_not_attested");
     assert_eq!(report.steps.len(), 2);
     assert_eq!(report.artifacts.len(), 3);
+    let extract = &report.steps[0];
+    let analyze = &report.steps[1];
+    let input = PortId::from("input");
+    let output = PortId::from("output");
+    assert_eq!(
+        extract.inputs[&input],
+        ArtifactBinding::External {
+            artifact: "reviews".into(),
+        }
+    );
+    assert_eq!(
+        analyze.inputs[&input],
+        ArtifactBinding::Produced {
+            producer: extract.instance.clone(),
+            port: output.clone(),
+            artifact: extract.outputs[&output].clone(),
+        }
+    );
+    assert_eq!(
+        extract.child_workflow_id,
+        receipt.produced_evidence[&extract.outputs[&output]].child_workflow_id
+    );
     assert_eq!(report.temporal_history_attestation, "not_checked");
     assert_eq!(report.owner_receipt_attestation, "not_checked");
     assert_eq!(report.source_authentication, "not_checked");

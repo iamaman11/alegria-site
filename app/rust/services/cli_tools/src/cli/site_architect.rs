@@ -141,6 +141,9 @@ fn site_architect_safe_recipe_problem(error: &seo_application::site_architect::S
         "The recipe failed an installed typed operation, parameter or DAG check.",
         problem.next_action,
     );
+    if let Some(binding) = problem.incompatible_input {
+        output["incompatible_input"] = json!(binding);
+    }
     if let Some(step) = problem.step {
         if let Ok(Value::String(name)) = serde_json::to_value(&step) {
             if !name.is_empty()

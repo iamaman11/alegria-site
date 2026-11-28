@@ -302,8 +302,41 @@ pub enum SiteArchitectError {
     InvalidParameters(#[from] ParameterError),
     #[error("recipe parameters cannot be encoded")]
     ParameterEncoding,
+    #[error("{source}")]
+    IncompatibleInput {
+        #[source]
+        source: PlanError,
+        binding: Box<IncompatibleInput>,
+    },
     #[error(transparent)]
     InvalidPlan(#[from] PlanError),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncompatibleInput {
+    /// Zero-based position in the submitted recipe.
+    pub step_index: usize,
+    pub operation: OperationRef,
+    pub port: PortId,
+    pub expected: ArtifactSchema,
+    pub actual: IncompatibleInputSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum IncompatibleInputSource {
+    // Source schema IDs are authored strings. Compare the type without
+    // reflecting that string into the CLI/MCP diagnostic.
+    External {
+        declared_revision: u32,
+        same_type: bool,
+    },
+    Produced {
+        step_index: usize,
+        operation: OperationRef,
+        port: PortId,
+        schema: ArtifactSchema,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -315,6 +348,8 @@ pub struct SiteArchitectProblem {
     /// Identifies the exact recipe step without copying parameter values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<OperationInstanceId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub incompatible_input: Option<IncompatibleInput>,
 }
 
 impl SiteArchitectError {
@@ -370,7 +405,8 @@ impl SiteArchitectError {
                 "recipe_cycle",
                 "Remove a circular dependency between steps.",
             ),
-            Self::InvalidPlan(PlanError::ArtifactSchemaMismatch { .. }) => (
+            Self::IncompatibleInput { .. }
+            | Self::InvalidPlan(PlanError::ArtifactSchemaMismatch { .. }) => (
                 "incompatible_ports",
                 "Connect an output and input with the same versioned artifact schema.",
             ),
@@ -401,6 +437,10 @@ impl SiteArchitectError {
             next_action,
             step: match self {
                 Self::StepParameters { step, .. } => Some(step.clone()),
+                _ => None,
+            },
+            incompatible_input: match self {
+                Self::IncompatibleInput { binding, .. } => Some(binding.as_ref().clone()),
                 _ => None,
             },
         }
@@ -556,6 +596,52 @@ fn output_artifact_id(step: &OperationInstanceId, port: &PortId) -> ArtifactId {
     ArtifactId(format!("generated/{}/{}", step.as_str(), port.as_str()))
 }
 
+fn incompatible_input(
+    plan: &ExecutionPlan,
+    catalog: &ContractCatalog,
+    error: &PlanError,
+) -> Option<IncompatibleInput> {
+    let PlanError::ArtifactSchemaMismatch { instance, port, .. } = error else {
+        return None;
+    };
+    let (step_index, node) = plan
+        .nodes
+        .iter()
+        .enumerate()
+        .find(|(_, node)| &node.instance == instance)?;
+    let expected = catalog.contract(&node.operation)?.inputs.get(port)?;
+    let actual = match node.inputs.get(port)? {
+        ArtifactBinding::External { artifact } => {
+            let schema = &plan.external_artifacts.get(artifact)?.schema;
+            IncompatibleInputSource::External {
+                declared_revision: schema.revision,
+                same_type: schema.id == expected.id,
+            }
+        }
+        ArtifactBinding::Produced { producer, port, .. } => {
+            let (step_index, node) = plan
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, node)| &node.instance == producer)?;
+            let schema = catalog.contract(&node.operation)?.outputs.get(port)?;
+            IncompatibleInputSource::Produced {
+                step_index,
+                operation: node.operation.clone(),
+                port: port.clone(),
+                schema: schema.clone(),
+            }
+        }
+    };
+    Some(IncompatibleInput {
+        step_index,
+        operation: node.operation.clone(),
+        port: port.clone(),
+        expected: expected.clone(),
+        actual,
+    })
+}
+
 /// Sealing is allowed only while authoring this new draft. A persisted,
 /// server-issued plan must instead be validated with its original pins/hash.
 pub fn compile_recipe(
@@ -650,7 +736,14 @@ pub fn compile_recipe(
         hash: PlanHash(String::new()),
     }
     .seal(catalog)?;
-    plan.validate(catalog)?;
+    plan.validate(catalog)
+        .map_err(|source| match incompatible_input(&plan, catalog, &source) {
+            Some(binding) => SiteArchitectError::IncompatibleInput {
+                source,
+                binding: Box::new(binding),
+            },
+            None => SiteArchitectError::InvalidPlan(source),
+        })?;
     Ok(plan)
 }
 
