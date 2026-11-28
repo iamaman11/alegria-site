@@ -53,6 +53,7 @@
 | [V6_Neo4j_Runtime_Policy.md](V6_Neo4j_Runtime_Policy.md) | current-runtime-satellite | live | hard-required Neo4j contract (capabilities, graph projection freshness/completeness, blocked taxonomy) |
 | [V6_10_10_COMPLETION_PLAN.md](V6_10_10_COMPLETION_PLAN.md) | current-closure-satellite | live | ordered 10/10 closure backlog distinguishing accepted runtime, code-ready integrations, fresh implementation, and external blockers |
 | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |
+| [ISSUE94_OPERATION_DECISION_MATRIX.md](ISSUE94_OPERATION_DECISION_MATRIX.md) | current-workstream | partial | siteArchitect hierarchy, operation contracts, composition and readback for [#94](https://github.com/iamaman11/alegria-site/issues/94) |
 | [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | superseded-reference | reference | historical rich extraction and target protocol context; superseded by `V6` |
 | [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-satellite | live | runtime persistence, retry, replay, HITL, and DLQ satellite contract under `V6` |
 | [V5_Truth_Extraction_LLM_Contract.md](V5_Truth_Extraction_LLM_Contract.md) | current-runtime-satellite | live | exact truth-extraction LLM prompt, wire format, response contract, validation, and adjudication boundaries under `V6` |

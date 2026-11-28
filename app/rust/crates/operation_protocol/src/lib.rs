@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod dag_machine;
+mod dag_read_trace;
 pub mod effect_child_v4;
 pub mod external_source_attestation_v1;
 pub mod independent_user_identity_v1;
@@ -25,6 +26,10 @@ pub mod owner_schema_v3;
 pub mod owner_validation;
 pub mod signed_mcp_admission_v1;
 pub use dag_machine::{GenericDagError, OperationDagMachine, OperationDagReceiptV1};
+pub use dag_read_trace::{
+    OperationDagReadStepV1, OperationDagReadTraceV1, DAG_READ_MAX_REPLY_BYTES,
+    DAG_READ_TRACE_SCHEMA_REVISION_V1,
+};
 pub use effect_child_v4::{
     canonical_effect_dispatch_input_bytes, checked_execution_key, BoundEffectInputV4,
     EffectChildInvocationV4, EffectChildProtocolError, EffectChildResultV4,

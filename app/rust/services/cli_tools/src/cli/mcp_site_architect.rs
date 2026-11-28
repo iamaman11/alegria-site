@@ -13,7 +13,8 @@ const SITE_ARCHITECT_MCP_MAX_MESSAGE_BYTES: usize = 3 * 1024 * 1024;
 const SITE_ARCHITECT_MCP_AUTHORING_MAX_BYTES: usize = 2 * SITE_ARCHITECT_RECIPE_MAX_BYTES as usize + 4096;
 const SITE_ARCHITECT_MCP_MAX_RECIPE_EDITS: usize = 128;
 const SITE_ARCHITECT_MCP_MAX_SCOPE_ID_BYTES: usize = 128;
-const SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES: u64 = 4096;
+const SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES: u64 =
+    seo_application::site_architect::DAG_READ_MAX_REPLY_BYTES as u64;
 const SITE_ARCHITECT_MCP_OPERATOR_REQUEST_MAX_BYTES: usize = 256;
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -46,6 +47,8 @@ struct McpOwnerRunReport {
     owner_result_count: Option<usize>,
     #[serde(default)]
     result_blake3: Option<String>,
+    #[serde(default)]
+    trace: Option<seo_application::site_architect::OperationDagReadTraceV1>,
     #[serde(default)]
     governance_currently_active: Option<bool>,
     #[serde(default)]
@@ -317,8 +320,8 @@ fn mcp_site_architect_tools() -> Value {
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
         {
-            "name":"site_architect_run_status", "title":"Read an independently authorized Temporal operation status",
-            "description":"Canonical UUID read-only status via preconfigured tenant-bound Unix operator. Checks server Temporal History, not provider receipt/source; no start/retry.",
+            "name":"site_architect_run_status", "title":"Read an independently authorized Temporal run",
+            "description":"Read by canonical UUID through the tenant-bound Unix operator. Completed V2 graphs include a bounded trace checked against server Temporal Histories.",
             "inputSchema":mcp_object_schema(json!({
                 "canonical_run_id":{"type":"string","format":"uuid","minLength":36,"maxLength":36}
             }), &["canonical_run_id"]),
@@ -442,6 +445,7 @@ fn mcp_operator_read_unavailable() -> Value {
 fn mcp_operator_read_result(
     response: &[u8],
     canonical_run_id: uuid::Uuid,
+    catalog: &SiteArchitectCatalog,
 ) -> Option<(Value, bool)> {
     if response.is_empty() || response.len() > SITE_ARCHITECT_MCP_OPERATOR_REPLY_MAX_BYTES as usize {
         return None;
@@ -453,15 +457,16 @@ fn mcp_operator_read_result(
     if report.status == "refused" {
         if report.code.as_deref() != Some("run_unavailable_or_untrusted")
             || report.canonical_run_id.is_some()
+            || report.trace.is_some()
         {
             return None;
         }
         return Some((mcp_operator_read_unavailable(), true));
     }
+    let step_count = report.step_count?;
     if report.code.is_some()
         || report.canonical_run_id != Some(canonical_run_id)
-        || report.step_count != Some(1)
-        || report.owner_result_count.is_none_or(|count| count > 1)
+        || !(1..=seo_application::site_architect::DAG_MAX_NODES).contains(&step_count)
         || report.governance_currently_active.is_none()
         || report.source_authentication.as_deref() != Some("not_independently_attested")
         || report.owner_receipt_attestation.as_deref() != Some("not_independently_verified")
@@ -499,7 +504,7 @@ fn mcp_operator_read_result(
         ),
         "temporal_completed_owner_unverified" => (
             "Obtain independently attested owner SQL/provider receipt and source evidence before using the result as SEO evidence.",
-            1,
+            step_count,
             true,
             "exact_server_parent_validation_and_effect_child_histories",
         ),
@@ -518,26 +523,39 @@ fn mcp_operator_read_result(
     {
         return None;
     }
-    Some((
-        json!({
-            "status": report.status,
-            "operation":"read_operation_dag_run_v2",
-            "canonical_run_id":canonical_run_id,
-            "parent_workflow_run_id":workflow_run_id,
-            "plan_hash":plan_hash,
-            "parent_start_sha256":start_hash,
-            "step_count":1,
-            "owner_result_count":valid_count,
-            "result_blake3":report.result_blake3,
-            "governance_currently_active":report.governance_currently_active,
-            "temporal_history_attestation":report.temporal_history_attestation,
-            "owner_receipt_attestation":"not_independently_verified",
-            "source_authentication":"not_independently_attested",
-            "execution_control":"read_only_no_start_or_retry",
-            "next_action":next_action,
-        }),
-        false,
-    ))
+    match &report.trace {
+        Some(trace)
+            if requires_result
+                && step_count > 1
+                && trace.has_valid_shape(step_count)
+                && trace
+                    .steps
+                    .iter()
+                    .all(|step| catalog.catalog().contract(&step.operation).is_some()) => {}
+        None if !requires_result || step_count == 1 => {}
+        _ => return None,
+    }
+    let mut result = json!({
+        "status": report.status,
+        "operation":"read_operation_dag_run_v2",
+        "canonical_run_id":canonical_run_id,
+        "parent_workflow_run_id":workflow_run_id,
+        "plan_hash":plan_hash,
+        "parent_start_sha256":start_hash,
+        "step_count":step_count,
+        "owner_result_count":valid_count,
+        "result_blake3":report.result_blake3,
+        "governance_currently_active":report.governance_currently_active,
+        "temporal_history_attestation":report.temporal_history_attestation,
+        "owner_receipt_attestation":"not_independently_verified",
+        "source_authentication":"not_independently_attested",
+        "execution_control":"read_only_no_start_or_retry",
+        "next_action":next_action,
+    });
+    if let Some(trace) = report.trace {
+        result["trace"] = json!(trace);
+    }
+    Some((result, false))
 }
 
 #[cfg(unix)]
@@ -623,7 +641,9 @@ fn mcp_operator_socket_read(locator: &McpRunStatus) -> Option<Vec<u8>> {
     Some(result)
 }
 
-fn mcp_site_architect_run_status(args: Value) -> (Value, bool) {
+fn mcp_site_architect_run_status(args: Value, catalog: &SiteArchitectCatalog) -> (Value, bool) {
+    #[cfg(not(unix))]
+    let _ = catalog;
     if serde_json::to_vec(&args).map_or(true, |bytes| {
         bytes.len() > SITE_ARCHITECT_MCP_OPERATOR_REQUEST_MAX_BYTES
     }) {
@@ -650,7 +670,7 @@ fn mcp_site_architect_run_status(args: Value) -> (Value, bool) {
     #[cfg(unix)]
     if let Some(response) = mcp_operator_socket_read(&request) {
         if let Some((result, is_error)) =
-            mcp_operator_read_result(&response, request.canonical_run_id)
+            mcp_operator_read_result(&response, request.canonical_run_id, catalog)
         {
             return (result, is_error);
         }
@@ -738,7 +758,7 @@ fn mcp_site_architect_call(
             },
             Err(error) => (mcp_bad_arguments(error), true),
         },
-        "site_architect_run_status" => mcp_site_architect_run_status(args),
+        "site_architect_run_status" => mcp_site_architect_run_status(args, catalog),
         "site_architect_new" => match serde_json::from_value::<McpNewRecipe>(args) {
             Ok(input) if mcp_site_architect_scope_id_is_valid(&input.tenant_id)
                 && mcp_site_architect_scope_id_is_valid(&input.run_id) => {
@@ -1385,9 +1405,12 @@ mod site_architect_mcp_tests {
 
     #[test]
     fn mcp_read_status_only_accepts_verified_one_step_history_summary() {
+        let catalog = catalog();
         let run_id = uuid::Uuid::parse_str("c37c2193-e0ed-4d79-96c7-c097a64f81e5").unwrap();
-        let good = serde_json::to_vec(&safe_owner_report(run_id)).unwrap();
-        let (status, is_error) = mcp_operator_read_result(&good, run_id).unwrap();
+        let read = |value: &Value| {
+            mcp_operator_read_result(&serde_json::to_vec(value).unwrap(), run_id, &catalog)
+        };
+        let (status, is_error) = read(&safe_owner_report(run_id)).unwrap();
         assert!(!is_error);
         assert_eq!(status["status"], "temporal_completed_owner_unverified");
         assert_eq!(status["owner_result_count"], 1);
@@ -1403,19 +1426,66 @@ mod site_architect_mcp_tests {
 
         let mut report = safe_owner_report(run_id);
         report["code"] = json!("success");
-        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        assert!(read(&report).is_none());
         report = safe_owner_report(run_id);
         report["status"] = json!("provider_receipt_attested");
-        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        assert!(read(&report).is_none());
         report = safe_owner_report(run_id);
         report["source_authentication"] = json!("authenticated");
-        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        assert!(read(&report).is_none());
         report = safe_owner_report(run_id);
         report["canonical_run_id"] = json!("92f02cf7-a725-4209-8247-24295cc1e303");
-        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        assert!(read(&report).is_none());
         report = safe_owner_report(run_id);
         report["untrusted_secret"] = json!("SENTINEL-PRIVATE-API-KEY");
-        assert!(mcp_operator_read_result(&serde_json::to_vec(&report).unwrap(), run_id).is_none());
+        assert!(read(&report).is_none());
+    }
+
+    #[test]
+    fn mcp_read_status_requires_an_installed_and_ordered_trace_for_completed_dags() {
+        let catalog = catalog();
+        let run_id = uuid::Uuid::new_v4();
+        let mut report = safe_owner_report(run_id);
+        report["step_count"] = json!(2);
+        report["owner_result_count"] = json!(2);
+        let read = |value: &Value| {
+            mcp_operator_read_result(&serde_json::to_vec(value).unwrap(), run_id, &catalog)
+        };
+        assert!(read(&report).is_none());
+        report["trace"] = json!({
+            "schema_revision": 1,
+            "steps": [
+                {
+                    "operation": {"id":"semantic.entity_spans","revision":1},
+                    "input_steps": [],
+                    "child_workflow_id": format!("alegria-owner-operation-v2-{}", "a".repeat(64)),
+                    "child_run_id": uuid::Uuid::new_v4(),
+                    "receipt_blake3": "c".repeat(64),
+                },
+                {
+                    "operation": {"id":"semantic.canonicalize_mentions","revision":1},
+                    "input_steps": [0],
+                    "child_workflow_id": format!("alegria-owner-operation-v2-{}", "b".repeat(64)),
+                    "child_run_id": uuid::Uuid::new_v4(),
+                    "receipt_blake3": "d".repeat(64),
+                }
+            ]
+        });
+        let (decoded, is_error) = read(&report).unwrap();
+        assert!(!is_error);
+        assert_eq!(decoded["trace"], report["trace"]);
+
+        let mut wrong = report.clone();
+        wrong["trace"]["steps"][1]["input_steps"] = json!([1]);
+        assert!(read(&wrong).is_none());
+        let mut wrong = report.clone();
+        wrong["trace"]["steps"][1]["operation"]["revision"] = json!(2);
+        assert!(read(&wrong).is_none());
+        let mut wrong = report.clone();
+        wrong["trace"]["steps"][1]["child_run_id"] = report["trace"]["steps"][0]["child_run_id"].clone();
+        assert!(read(&wrong).is_none());
+        report["trace"]["steps"][1]["private_command"] = json!("private parameter");
+        assert!(read(&report).is_none());
     }
 
     #[test]
@@ -1428,14 +1498,13 @@ mod site_architect_mcp_tests {
             "next_action":"Unknown private SQL/Temporal diagnostic"
         });
         let (status, is_error) =
-            mcp_operator_read_result(&serde_json::to_vec(&refused).unwrap(), run_id).unwrap();
+            mcp_operator_read_result(&serde_json::to_vec(&refused).unwrap(), run_id, &catalog()).unwrap();
         assert!(is_error);
         assert_eq!(status["code"], "operator_read_unavailable_or_untrusted");
         assert!(!status.to_string().contains("Unknown private SQL"));
 
-        let (result, failure) = mcp_site_architect_run_status(json!({
-            "canonical_run_id":run_id,
-        }));
+        let (result, failure) =
+            mcp_site_architect_run_status(json!({"canonical_run_id": run_id}), &catalog());
         assert!(failure);
         assert_eq!(result["code"], "operator_read_unavailable_or_untrusted");
         assert!(!result.to_string().contains(&run_id.to_string()));

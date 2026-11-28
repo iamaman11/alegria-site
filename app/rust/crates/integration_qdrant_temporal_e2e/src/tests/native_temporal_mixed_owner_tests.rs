@@ -1926,6 +1926,27 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         format!("ci-mixed-v2-{}", Uuid::new_v4()), &temporal.namespace)
         .await.expect("connect actual Temporal History server");
 
+    let reader_dsn = private_locators.request("v2-reader-dsn", &roles.read_only_url);
+    let foreign_reader_dsn = private_locators.request(
+        "v2-foreign-reader-dsn", &roles.foreign_read_only_url,
+    );
+    let invoke_v2_read = |sql_file: &std::path::Path,
+                          reader_tenant: &str,
+                          locator: &std::path::Path,
+                          catalog: &std::path::Path| {
+        Command::new(&pg_bin)
+            .arg("--operator-read-dag-run-v2")
+            .arg(locator)
+            .env("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2", "true")
+            .env("OPERATION_DAG_READ_V2_DATABASE_URL_FILE", sql_file)
+            .env("OPERATION_DAG_READ_V2_TENANT_ID", reader_tenant)
+            .env("OPERATION_DAG_READ_V2_TEMPORAL_URL", &temporal.temporal_url)
+            .env("OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env("OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE", catalog)
+            .env_remove("DATABASE_URL")
+            .output().expect("invoke tenant-bound exact server Temporal V2 reader")
+    };
+
     for (case, run, routes, run_id, context, pg_admission, q_admission, issuer_catalog,
          q_keyword, q_vector, pg_keyword, pg_vector, independent) in [
         ("produced", &produced_run, &produced_routes, produced_id, &contexts[0],
@@ -2345,6 +2366,46 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         let receipt: OperationDagReceiptV1 = completion.to_value(&PayloadConverter::serde_json());
         assert_eq!(receipt.plan_hash, run.plan.hash);
         assert_eq!(receipt.owner_results.len(), 2);
+        let locator = private_locators.request(
+            "v2-multi-step-exact-run-read",
+            &serde_json::json!({"canonical_run_id":run_id}).to_string(),
+        );
+        let readback = invoke_v2_read(&reader_dsn, tenant, &locator, issuer_catalog);
+        assert!(readback.status.success(), "{case}: V2 trace readback: stdout={} stderr={}",
+            String::from_utf8_lossy(&readback.stdout), String::from_utf8_lossy(&readback.stderr));
+        let report: serde_json::Value = serde_json::from_slice(&readback.stdout).unwrap();
+        assert_eq!(report["status"], "temporal_completed_owner_unverified");
+        assert_eq!(report["canonical_run_id"], run_id.to_string());
+        assert_eq!(report["step_count"], 2);
+        assert_eq!(report["owner_result_count"], 2);
+        assert_eq!(report["owner_receipt_attestation"], "not_independently_verified");
+        let trace: operation_protocol::OperationDagReadTraceV1 =
+            serde_json::from_value(report["trace"].clone()).unwrap();
+        assert!(trace.has_valid_shape(2));
+        for (step, instance) in trace.steps.iter().zip(&receipt.order) {
+            let node = run.plan.nodes.iter().find(|node| &node.instance == instance).unwrap();
+            let owner = &receipt.owner_results[instance];
+            assert_eq!(step.operation, node.operation);
+            assert_eq!(step.child_workflow_id,
+                operation_protocol::owner_child_workflow_id_v2(&owner.dispatch_execution_key));
+            assert_eq!(step.receipt_blake3, operation_protocol::owner_content_hash(&owner.receipt_bytes));
+        }
+        assert!(trace.steps[0].input_steps.is_empty());
+        if independent {
+            assert!(trace.steps[1].input_steps.is_empty());
+        } else {
+            assert_eq!(trace.steps[1].input_steps, [0]);
+            let foreign = invoke_v2_read(
+                &foreign_reader_dsn, "ci-unrelated-read-only-tenant", &locator, issuer_catalog,
+            );
+            assert!(!foreign.status.success());
+            let refused: serde_json::Value = serde_json::from_slice(&foreign.stdout).unwrap();
+            assert_eq!(refused["code"], "run_unavailable_or_untrusted");
+            assert!(refused.get("trace").is_none());
+            assert!(refused.get("canonical_run_id").is_none());
+        }
+        assert!(!String::from_utf8_lossy(&readback.stdout).contains(&q_keyword));
+        eprintln!("CI_MIXED_V2_NATIVE_RUN_TRACE=PASS case={case}");
         if independent {
             assert_eq!(receipt.order.len(), 2);
             assert!(receipt.order.iter().any(|node| node.as_str() == "pg_vector_read"));
@@ -2483,9 +2544,6 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let one_start_reader_dsn = private_locators.request(
         "v2-one-step-start-root-only-dsn", &roles.start_root_read_only_url,
     );
-    let one_reader_dsn = private_locators.request(
-        "v2-one-step-reader-dsn", &roles.read_only_url,
-    );
     let invoke_single_start = |locator: &std::path::Path| {
         Command::new(&pg_bin)
             .arg("--operator-start-single-v2")
@@ -2582,9 +2640,6 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "one-step native governance: stdout={} stderr={}",
         String::from_utf8_lossy(&one_governance.stdout),
         String::from_utf8_lossy(&one_governance.stderr));
-    let foreign_reader_dsn = private_locators.request(
-        "v2-one-step-foreign-reader-dsn", &roles.foreign_read_only_url,
-    );
     let one_read_locator = private_locators.request(
         "v2-one-step-exact-run-read",
         &serde_json::json!({"canonical_run_id":single_id}).to_string(),
@@ -2592,17 +2647,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let invoke_one_read = |sql_file: &std::path::Path,
                            reader_tenant: &str,
                            locator: &std::path::Path| {
-        Command::new(&pg_bin)
-            .arg("--operator-read-dag-run-v2")
-            .arg(locator)
-            .env("ALEGRIA_ENABLE_OPERATION_DAG_READ_V2", "true")
-            .env("OPERATION_DAG_READ_V2_DATABASE_URL_FILE", sql_file)
-            .env("OPERATION_DAG_READ_V2_TENANT_ID", reader_tenant)
-            .env("OPERATION_DAG_READ_V2_TEMPORAL_URL", &temporal.temporal_url)
-            .env("OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE", &temporal.namespace)
-            .env("OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE", &single_issuer_catalog)
-            .env_remove("DATABASE_URL")
-            .output().expect("invoke tenant-bound exact server Temporal V2 reader")
+        invoke_v2_read(sql_file, reader_tenant, locator, &single_issuer_catalog)
     };
     let foreign_read = invoke_one_read(
         &foreign_reader_dsn, "ci-unrelated-read-only-tenant", &one_read_locator,
@@ -2620,7 +2665,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "v2-one-step-absent-run-read",
         &serde_json::json!({"canonical_run_id":Uuid::new_v4()}).to_string(),
     );
-    let absent_read = invoke_one_read(&one_reader_dsn, tenant, &absent_read_locator);
+    let absent_read = invoke_one_read(&reader_dsn, tenant, &absent_read_locator);
     assert!(!absent_read.status.success(), "a nonexistent V2 run must be refused");
     let absent_diagnostic: serde_json::Value = serde_json::from_slice(&absent_read.stdout)
         .expect("unknown run must return bounded redacted diagnostic JSON");
@@ -2634,7 +2679,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             "parent_workflow_run_id":one_parent_run,
         }).to_string(),
     );
-    let forged_read = invoke_one_read(&one_reader_dsn, tenant, &forged_read_locator);
+    let forged_read = invoke_one_read(&reader_dsn, tenant, &forged_read_locator);
     assert!(!forged_read.status.success(),
         "a user-supplied tenant or Temporal Run ID cannot influence read-only authority");
     let forged_diagnostic: serde_json::Value = serde_json::from_slice(&forged_read.stdout)
@@ -2680,7 +2725,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1",
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(q_before, 0, "one-step provider effect cannot precede independent issuer");
-    let pending_read = invoke_one_read(&one_reader_dsn, tenant, &one_read_locator);
+    let pending_read = invoke_one_read(&reader_dsn, tenant, &one_read_locator);
     assert!(pending_read.status.success(),
         "admitted-but-not-yet-executed one-step run must be readable: stdout={} stderr={}",
         String::from_utf8_lossy(&pending_read.stdout),
@@ -2771,7 +2816,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     ).bind(single_q_admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(final_effects, (1, 1),
         "refused duplicate Start cannot cause another durable Qdrant effect or receipt");
-    let completed_read = invoke_one_read(&one_reader_dsn, tenant, &one_read_locator);
+    let completed_read = invoke_one_read(&reader_dsn, tenant, &one_read_locator);
     assert!(completed_read.status.success(),
         "completed one-step read from exact server History: stdout={} stderr={}",
         String::from_utf8_lossy(&completed_read.stdout),

@@ -102,8 +102,10 @@ pub fn owner_child_workflow_id(dispatch_execution_key: &str) -> String {
 
 /// Parallel V2 runs MUST never address the same Temporal Child ID as V1:
 /// checked dispatch keys are deliberately independent of parent version.
+pub(crate) const OWNER_CHILD_WORKFLOW_ID_PREFIX_V2: &str = "alegria-owner-operation-v2-";
+
 pub fn owner_child_workflow_id_v2(dispatch_execution_key: &str) -> String {
-    format!("alegria-owner-operation-v2-{dispatch_execution_key}")
+    format!("{OWNER_CHILD_WORKFLOW_ID_PREFIX_V2}{dispatch_execution_key}")
 }
 
 fn expected_owner_child_id_for_parent(
