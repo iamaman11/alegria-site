@@ -2428,7 +2428,12 @@ jobs:
                   # unevaluated display name instead of the base job ID. Such
                   # a skipped owner is valid only because the accepted exact-
                   # source PR gate already required selected owners to pass.
-                  if set(expanded) in ({owner + ' ()'}, {owner + ' (not_applicable)'}):
+                  # GitHub sometimes leaves the unevaluated matrix expression
+                  # in a skipped job name. Construct it without a contiguous
+                  # Actions expression: this is executed inside a non-matrix
+                  # gate job, where that expression would otherwise be invalid.
+                  if set(expanded) in ({owner + ' ()'}, {owner + ' (not_applicable)'},
+                                      {owner + ' ($' + '{{ matrix.shard }})'}):
                       require(set(expanded.values()) == {'skipped'},
                               f"{owner} declared a non-applicable shard as executed")
                   else:
