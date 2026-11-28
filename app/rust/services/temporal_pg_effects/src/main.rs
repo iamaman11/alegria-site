@@ -960,7 +960,13 @@ mod tests {
             worker_namespace(|_| Some("site-architect-pilot".to_owned())).unwrap(),
             "site-architect-pilot"
         );
-        for invalid in ["", " ", "site-architect-pilot ", "\nprivate", "pilot\nwrong"] {
+        for invalid in [
+            "",
+            " ",
+            "site-architect-pilot ",
+            "\nprivate",
+            "pilot\nwrong",
+        ] {
             assert!(worker_namespace(|_| Some(invalid.to_owned())).is_err());
         }
     }
