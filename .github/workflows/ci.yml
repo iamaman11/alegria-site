@@ -79,6 +79,11 @@ jobs:
       - name: Enforce source-document layout even when every owner is not applicable
         run: python3 automation/check_docs_layout.py
 
+      - name: Validate all 52 siteArchitect action decisions and legacy phase coverage
+        run: |
+          python3 automation/check_site_architect_action_matrix.py
+          python3 automation/test_site_architect_action_matrix.py
+
       - name: Refuse unsafe DataForSEO owner SQL privileges and mutable receipts
         run: python3 automation/check_dataforseo_sql_policy.py
 

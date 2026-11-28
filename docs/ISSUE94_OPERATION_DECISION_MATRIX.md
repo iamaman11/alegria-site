@@ -1,5 +1,14 @@
 # Issue #94 — source-based candidate decision ledger
 
+**Принятая предметная декомпозиция 28.11.2026:** [`site_architect_action_matrix_v1.json`](site_architect_action_matrix_v1.json)
+содержит точное соответствие всех 52 исходных строк проектным действиям
+(29 KEEP, 12 SPLIT, 11 INTERNAL), 55 уникальных предложенных action IDs
+и карту 22 исторических фаз с тремя нерешёнными границами.
+`python3 automation/check_site_architect_action_matrix.py` сверяет этот
+read-only план с исходным Rust/source-аудитом. Это **не** runtime registry,
+не решение о допуске эффектов и не утверждение, что 55 действий исполняются.
+Нормативное решение — [Issue #94](https://github.com/iamaman11/alegria-site/issues/94).
+
 Decision baseline: Draft PR #95 at `851c3fa`, reconciled with canonical [Issue #94 §6.3](https://github.com/iamaman11/alegria-site/issues/94).
 Latest fully green exact-SHA PR CI checked for this ledger:
 [`d472c4b`](https://github.com/iamaman11/alegria-site/actions/runs/46077079856)

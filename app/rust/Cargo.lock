@@ -2349,6 +2349,7 @@ dependencies = [
  "postgres_store",
  "projection_contracts",
  "qdrant_contracts",
+ "seo_steps",
  "serde",
  "serde_json",
  "serial_test",
@@ -5580,6 +5581,54 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "temporal_seo_steps_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "seo_steps",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "temporal_truth_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "truth_domain",
+ "url",
+]
+
+[[package]]
+name = "temporal_web_fetch"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "chrono",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "url",
+ "uuid",
+ "web_fetch_contracts",
 ]
 
 [[package]]

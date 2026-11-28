@@ -28,6 +28,7 @@ mod tests {
     include!("tests/planning_atomic_pg_tests.rs");
     include!("tests/cms_navigation_pg_tests.rs");
     include!("tests/dataforseo_owner_pg_tests.rs");
+    include!("tests/dataforseo_paid_owner_v2_tests.rs");
     include!("tests/external_source_attestation_pg_tests.rs");
     include!("tests/one_step_request_grant_pg_tests.rs");
 }

@@ -266,8 +266,10 @@ pub fn validate_parameters_only(
     {
         return Err(DataForSeoContractError::Scope);
     }
+    // DataForSEO Google Organic task_post documents a 700-character maximum;
+    // do not accept an input that the actual paid provider will reject.
     if input.keyword.is_empty()
-        || input.keyword.len() > 2_048
+        || input.keyword.chars().count() > 700
         || input.keyword.trim() != input.keyword
         || input.keyword.chars().any(char::is_control)
     {
@@ -589,7 +591,7 @@ mod tests {
         check(|input| input.keyword.clear());
         check(|input| input.keyword = "malformed\nkeyword".into());
         check(|input| input.keyword = " leading-space".into());
-        check(|input| input.keyword = "x".repeat(2_049));
+        check(|input| input.keyword = "x".repeat(701));
         check(|input| input.language_code = "EN".into());
         check(|input| input.language_code = "en_uk".into());
         check(|input| input.location_code = -1);

@@ -13,6 +13,10 @@ MIGRATION = (
     Path(__file__).resolve().parents[1]
     / "app/db/migrations/20261127_0001_dataforseo_owner_v1_admission.sql"
 )
+PAID_MIGRATION = (
+    Path(__file__).resolve().parents[1]
+    / "app/db/migrations/20261128_0001_dataforseo_paid_owner_v2.sql"
+)
 
 
 def validate_policy(sql: str) -> None:
@@ -78,6 +82,67 @@ def validate_policy(sql: str) -> None:
         raise AssertionError("DataForSEO migration must never grant a live owner permission")
 
 
+def validate_paid_policy(sql: str) -> None:
+    """Review the isolated, opt-in paid V2 source gates without granting them."""
+    normalized = re.sub(r"--[^\n]*", "", sql).lower()
+    compact = re.sub(r"\s+", " ", normalized)
+    for clause in (
+        "begin;",
+        "commit;",
+        "check (provider_mode='paid')",
+        "references pipeline.operation_dag_one_step_request_grants_v1(request_id)",
+        "g.state<>'start_confirmed'",
+        "g.limits->>'currency_code'<>'usd'",
+        "g.limits->>'max_charge_minor_units'",
+        "pipeline.operation_dag_governance_matches_v2(",
+        "pipeline.current_session_tenant_v1()",
+        "a.issued_by=session_user",
+        "a.command_sha256=encode(public.digest(p_command_bytes,'sha256'),'hex')",
+        "dataforseo_paid_owner_attempts_v2",
+        "dataforseo_paid_owner_posted_tasks_v2",
+        "dataforseo_paid_owner_receipts_v2",
+        "return 'uncertain';",
+        "return 'posted';",
+        "return 'confirmed';",
+        "return 'started';",
+    ):
+        if clause not in compact:
+            raise AssertionError(f"Paid DataForSEO V2 security clause missing: {clause}")
+    for table in (
+        "dataforseo_paid_owner_admissions_v2",
+        "dataforseo_paid_owner_attempts_v2",
+        "dataforseo_paid_owner_posted_tasks_v2",
+        "dataforseo_paid_owner_receipts_v2",
+    ):
+        if f"create table pipeline.{table}" not in compact:
+            raise AssertionError(f"Paid DataForSEO V2 table missing: {table}")
+        for gate in ("enable row level security", "force row level security"):
+            if f"alter table pipeline.{table} {gate};" not in compact:
+                raise AssertionError(f"Paid DataForSEO V2 {gate} missing: {table}")
+        if f"revoke all on pipeline.{table}" not in compact:
+            # The first table starts a grouped REVOKE with four table names.
+            if table != "dataforseo_paid_owner_admissions_v2" or (
+                "revoke all on pipeline.dataforseo_paid_owner_admissions_v2," not in compact
+            ):
+                # Grouped REVOKE is also covered by explicit table name presence above.
+                if f"pipeline.{table}" not in compact.split(" from public;", 1)[0]:
+                    raise AssertionError(f"Paid DataForSEO V2 table REVOKE missing: {table}")
+    for name in (
+        "lookup_dataforseo_paid_owner_admission_v2",
+        "begin_dataforseo_paid_owner_v2",
+        "record_dataforseo_paid_task_v2",
+        "read_dataforseo_paid_task_v2",
+        "confirm_dataforseo_paid_owner_v2",
+        "read_confirmed_dataforseo_paid_owner_receipt_v2",
+    ):
+        if f"create function pipeline.{name}" not in compact:
+            raise AssertionError(f"Paid DataForSEO V2 function missing: {name}")
+        if f"revoke all on function pipeline.{name}" not in compact:
+            raise AssertionError(f"Paid DataForSEO V2 default EXECUTE not revoked: {name}")
+    if re.search(r"(?m)^\s*grant\s+", normalized):
+        raise AssertionError("Paid DataForSEO V2 must not grant authority during migration")
+
+
 class DataForSeoSqlPolicyTests(unittest.TestCase):
     def test_canonical_stub_only_sql_policy(self) -> None:
         validate_policy(MIGRATION.read_text(encoding="utf-8"))
@@ -103,6 +168,24 @@ class DataForSeoSqlPolicyTests(unittest.TestCase):
         )
         with self.assertRaises(AssertionError):
             validate_policy(sql)
+
+    def test_paid_v2_isolated_fail_closed_schema(self) -> None:
+        validate_paid_policy(PAID_MIGRATION.read_text(encoding="utf-8"))
+
+    def test_paid_v2_refuses_missing_forced_rls(self) -> None:
+        sql = PAID_MIGRATION.read_text(encoding="utf-8").replace(
+            "ALTER TABLE pipeline.dataforseo_paid_owner_receipts_v2 FORCE ROW LEVEL SECURITY;",
+            "-- wrongly disabled FORCE RLS",
+        )
+        with self.assertRaises(AssertionError):
+            validate_paid_policy(sql)
+
+    def test_paid_v2_refuses_accidental_direct_worker_grant(self) -> None:
+        sql = PAID_MIGRATION.read_text(encoding="utf-8") + (
+            "\nGRANT INSERT ON pipeline.dataforseo_paid_owner_attempts_v2 TO paid_worker;\n"
+        )
+        with self.assertRaises(AssertionError):
+            validate_paid_policy(sql)
 
 
 if __name__ == "__main__":

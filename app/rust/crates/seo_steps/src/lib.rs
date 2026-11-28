@@ -10,6 +10,7 @@ pub mod hitl_operator_surface_step;
 pub mod ia_build_step;
 pub mod link_recommend_step;
 pub mod opportunity_build_step;
+pub mod operation_owner_schema_json;
 pub mod outbox_builder;
 pub mod owner_pure_operations;
 pub mod page_wire;

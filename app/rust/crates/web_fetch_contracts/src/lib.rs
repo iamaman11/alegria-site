@@ -26,6 +26,7 @@ pub const MAX_RESPONSE_BYTES_V1: u32 = 2 * 1024 * 1024;
 pub const MAX_REDIRECTS_V1: u8 = 5;
 pub const MAX_TIMEOUT_SECONDS_V1: u8 = 30;
 pub const MAX_ALLOWED_HOSTS_V1: usize = 16;
+pub const MAX_URL_LENGTH_V1: usize = 4096;
 
 pub fn request_schema_v1() -> ArtifactSchema {
     ArtifactSchema {
@@ -171,7 +172,11 @@ fn valid_dns_host(host: &str) -> bool {
 }
 
 fn checked_url_host(raw: &str) -> Result<(Url, String), WebFetchPolicyError> {
-    if raw != raw.trim() || raw.contains('\\') || raw.chars().any(char::is_control) {
+    if raw.len() > MAX_URL_LENGTH_V1
+        || raw != raw.trim()
+        || raw.contains('\\')
+        || raw.chars().any(char::is_control)
+    {
         return Err(WebFetchPolicyError::InvalidUrl);
     }
     let url = Url::parse(raw).map_err(|_| WebFetchPolicyError::InvalidUrl)?;
@@ -336,6 +341,12 @@ mod tests {
                 "{url}"
             );
         }
+        let mut oversized = request();
+        oversized.source_url = format!("https://www.example.com/{}", "x".repeat(MAX_URL_LENGTH_V1));
+        assert_eq!(
+            validate_static_web_fetch_request_v1(&oversized).unwrap_err(),
+            WebFetchPolicyError::InvalidUrl
+        );
     }
 
     #[test]

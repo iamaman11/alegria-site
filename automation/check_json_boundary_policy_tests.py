@@ -56,9 +56,14 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
         self.assertEqual(PURE_OWNER_LOCAL_JSON_BOUNDARIES, {
             "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",
             "app/rust/services/temporal_acquisition_pure/src/main.rs",
+            "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+            "app/rust/services/temporal_seo_steps_pure/src/main.rs",
             "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
+            "app/rust/services/temporal_truth_pure/src/main.rs",
             "app/rust/crates/truth_domain/src/operations_json.rs",
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_truth_tests.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
         })
         for relative in PURE_OWNER_LOCAL_JSON_BOUNDARIES:
             self.assertTrue(is_allowed_json_boundary(ROOT / relative))
@@ -212,6 +217,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/temporal_orchestrator/src/qdrant_child_wire_json.rs",
             "app/rust/services/temporal_qdrant_effects/src/operator.rs",
             "app/rust/crates/voyage_api/src/lib.rs",
+            "app/rust/services/temporal_web_fetch/src/archive.rs",
             "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
             "app/rust/crates/integration_temporal_e2e/src/tests/pure_v3_temporal_tests.rs",
             "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",

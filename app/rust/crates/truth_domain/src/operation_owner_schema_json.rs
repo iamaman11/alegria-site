@@ -10,9 +10,11 @@ use std::convert::Infallible;
 use operation_protocol::{
     ArtifactSchema, ArtifactTypeId, Operation, OperationRef, OwnerDtoDescriptorFormatV3,
     OwnerDtoDescriptorV3, OwnerOperationSchemaV3, OwnerSchemaErrorV3, PinnedOwnerOperationSchemaV3,
-    PlanError, PortId, OWNER_SCHEMA_ATTESTATION_REVISION_V3,
+    PlanError, PortId, DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES,
+    OWNER_SCHEMA_ATTESTATION_REVISION_V3,
 };
 use schemars::{generate::SchemaSettings, JsonSchema};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::operations::{DetectContradictionsV1, JudgeCompletenessV1, PureTruthOperation};
 
@@ -93,4 +95,128 @@ pub fn truth_pure_operation_owner_schemas(
         .into_iter()
         .map(|schema| (schema.schema.operation.clone(), schema))
         .collect())
+}
+
+/// The only admitted pure Truth wire failures. A source-level DTO schema
+/// registration does not authorize a provider effect or a Truth revision write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthPureWireError {
+    UnknownOperation,
+    InputTooLarge,
+    InvalidInput,
+    InvalidOutput,
+    OutputTooLarge,
+}
+
+/// ValidateOnly checks the owner's real strict Rust DTO. It does not run the
+/// business rule, open PostgreSQL or trust a caller-provided JSON Schema.
+pub fn validate_truth_pure_input(
+    operation: &OperationRef,
+    payload: &[u8],
+) -> Result<(), TruthPureWireError> {
+    if payload.len() > DAG_MAX_INPUT_BYTES {
+        return Err(TruthPureWireError::InputTooLarge);
+    }
+    if operation == &JudgeCompletenessV1::contract().reference {
+        return decode_input::<JudgeCompletenessV1>(payload);
+    }
+    if operation == &DetectContradictionsV1::contract().reference {
+        return decode_input::<DetectContradictionsV1>(payload);
+    }
+    Err(TruthPureWireError::UnknownOperation)
+}
+
+fn decode_input<O>(payload: &[u8]) -> Result<(), TruthPureWireError>
+where
+    O: PureTruthOperation,
+    O::Input: DeserializeOwned,
+{
+    serde_json::from_slice::<O::Input>(payload)
+        .map(|_| ())
+        .map_err(|_| TruthPureWireError::InvalidInput)
+}
+
+/// Fixed two-operation leaf dispatch, with no caller-selected type names,
+/// arbitrary SQL, Truth write, HITL mutation or provider client.
+pub fn execute_truth_pure(
+    operation: &OperationRef,
+    payload: &[u8],
+) -> Result<Vec<u8>, TruthPureWireError> {
+    if payload.len() > DAG_MAX_INPUT_BYTES {
+        return Err(TruthPureWireError::InputTooLarge);
+    }
+    if operation == &JudgeCompletenessV1::contract().reference {
+        return evaluate::<JudgeCompletenessV1>(payload);
+    }
+    if operation == &DetectContradictionsV1::contract().reference {
+        return evaluate::<DetectContradictionsV1>(payload);
+    }
+    Err(TruthPureWireError::UnknownOperation)
+}
+
+fn evaluate<O>(payload: &[u8]) -> Result<Vec<u8>, TruthPureWireError>
+where
+    O: PureTruthOperation,
+    O::Input: DeserializeOwned,
+    O::Output: Serialize,
+{
+    let input: O::Input =
+        serde_json::from_slice(payload).map_err(|_| TruthPureWireError::InvalidInput)?;
+    let output = O::evaluate(&input);
+    let bytes = serde_json::to_vec(&output).map_err(|_| TruthPureWireError::InvalidOutput)?;
+    if bytes.len() > DAG_MAX_RESULT_BYTES {
+        return Err(TruthPureWireError::OutputTooLarge);
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn strict_truth_pure_wire_executes_two_real_dtos() {
+        let completeness = JudgeCompletenessV1::contract().reference;
+        let input = br#"{"section_id":"s1","raw_text":"Fee is EUR 25","source_numeric_tokens":["25"],"extracted_numeric_tokens":[],"extracted_rule_keys":[]}"#;
+        validate_truth_pure_input(&completeness, input).unwrap();
+        let first = execute_truth_pure(&completeness, input).unwrap();
+        let second = execute_truth_pure(&completeness, input).unwrap();
+        assert_eq!(first, second);
+        assert!(serde_json::from_slice::<serde_json::Value>(&first).unwrap()["needs_hitl"]
+            .as_bool()
+            .unwrap());
+
+        let contradictions = DetectContradictionsV1::contract().reference;
+        let input = br#"{"run_id":"run-1","facts":[]}"#;
+        validate_truth_pure_input(&contradictions, input).unwrap();
+        let bytes = execute_truth_pure(&contradictions, input).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["decision"],
+            "pass"
+        );
+    }
+
+    #[test]
+    fn truth_pure_wire_rejects_unknown_types_and_nested_fields() {
+        let reference = DetectContradictionsV1::contract().reference;
+        let forged = br#"{"run_id":"r","facts":[{"subject_key":"s","predicate_key":"p","value_normalized":"v","source_key":null,"confidence":0.8,"secret":1}]}"#;
+        assert_eq!(
+            validate_truth_pure_input(&reference, forged),
+            Err(TruthPureWireError::InvalidInput)
+        );
+        assert_eq!(
+            execute_truth_pure(
+                &OperationRef {
+                    id: "truth.unknown".into(),
+                    revision: 1,
+                },
+                br#"{}"#
+            ),
+            Err(TruthPureWireError::UnknownOperation)
+        );
+        assert_eq!(
+            validate_truth_pure_input(&reference, &vec![b' '; DAG_MAX_INPUT_BYTES + 1]),
+            Err(TruthPureWireError::InputTooLarge)
+        );
+    }
 }

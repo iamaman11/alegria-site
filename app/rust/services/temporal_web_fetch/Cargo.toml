@@ -1,0 +1,17 @@
+[package]
+name = "temporal_web_fetch"
+version = "0.1.0"
+edition = "2021"
+
+# This is the native, owner-only HTTPS transport and immutable byte archive.
+# Installation as a Temporal effectful owner additionally requires an
+# independently authorized admission/receipt service. Merely compiling this
+# package must never register a trusted operation route.
+[dependencies]
+web_fetch_contracts = { path = "../../crates/web_fetch_contracts" }
+reqwest = { workspace = true, features = ["blocking"] }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }

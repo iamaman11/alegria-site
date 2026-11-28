@@ -91,6 +91,9 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_orchestrator/src/qdrant_child_wire_json.rs",
     "app/rust/services/temporal_qdrant_effects/src/operator.rs",
     "app/rust/crates/voyage_api/src/lib.rs",
+    # Operator-owned immutable public-HTML evidence sidecar uses a bounded
+    # typed JSON wire for readback, not a general HTTP or DAG authoring API.
+    "app/rust/services/temporal_web_fetch/src/archive.rs",
     # Real Temporal/history and full-stack tests were moved verbatim out of
     # the broad harness. Grant exact test files, never an E2E crate prefix.
     "app/rust/crates/integration_temporal_e2e/src/tests/manual_llm_temporal_tests.rs",
@@ -244,11 +247,19 @@ ACQUISITION_SOURCE_ISSUER_JSON_BOUNDARIES = frozenset({
 PURE_OWNER_LOCAL_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/acquisition/src/operation_owner_schema_json.rs",
     "app/rust/services/temporal_acquisition_pure/src/main.rs",
+    # SEO and Truth owner-local typed DTO/descriptor adapters and opt-in
+    # Temporal wire fixtures. No sibling business policy or protocol modules
+    # gain permission to parse untrusted JSON.
+    "app/rust/crates/seo_steps/src/operation_owner_schema_json.rs",
+    "app/rust/services/temporal_seo_steps_pure/src/main.rs",
     "app/rust/crates/truth_domain/src/operation_owner_schema_json.rs",
+    "app/rust/services/temporal_truth_pure/src/main.rs",
     "app/rust/crates/truth_domain/src/operations_json.rs",
     # Exact opt-in native Temporal parent/Acquisition Child E2E fixture.
     # Its JSON wires are real server History and typed owner artifact bytes.
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_acquisition_tests.rs",
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_truth_tests.rs",
+    "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_seo_steps_tests.rs",
 })
 
 # A single opt-in cross-owner integration fixture constructs protected catalog
@@ -269,9 +280,13 @@ DATAFORSEO_NATIVE_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/dataforseo_contracts/src/lib.rs",
     "app/rust/services/temporal_dataforseo/src/main.rs",
     "app/rust/services/temporal_dataforseo/src/operator.rs",
+    # Paid-provider transport parses only bounded provider response bytes;
+    # dispatch remains disabled until independently authorized SQL V2 admission.
+    "app/rust/services/temporal_dataforseo/src/paid_provider.rs",
     # This single opt-in physical E2E decodes captured server History and
     # the immutable SQL receipt, and constructs only loopback HTTP fixtures.
     "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_dataforseo_tests.rs",
+    "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_paid_owner_v2_tests.rs",
 })
 
 FORBIDDEN_PATTERNS = {

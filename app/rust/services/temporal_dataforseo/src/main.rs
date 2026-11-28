@@ -36,6 +36,11 @@ use url::Url;
 use uuid::Uuid;
 
 mod operator;
+// Strict paid HTTPS wire/parser is compiled and tested, but MUST NOT be
+// dispatched until SQL V2 one-use grants and provider receipts have passed
+// a separately attested native Temporal/PG E2E. V1 remains fixture-only.
+#[allow(dead_code)]
+mod paid_provider;
 
 fn non_retryable(error: impl std::fmt::Display) -> ActivityError {
     ActivityError::application(ApplicationFailure::non_retryable(std::io::Error::other(
