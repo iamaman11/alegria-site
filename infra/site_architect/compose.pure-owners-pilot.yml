@@ -1,0 +1,52 @@
+# Independent, provider-free siteArchitect V2 owners for an isolated Temporal
+# namespace. This stack NEVER provisions SQL grants or initiates a Workflow.
+# Both immutable native images must first be attested by GitHub and imported.
+services:
+  acquisition:
+    image: alegria-site-architect-acquisition:${SITE_ARCHITECT_OWNER_IMAGE_SHA:?Attested GitHub SHA required}
+    container_name: alegria_site_architect_acquisition_pilot_v1
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1: "true"
+      WORKER_BUILD_ID: ${SITE_ARCHITECT_OWNER_IMAGE_SHA:?Attested GitHub SHA required}
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: site-architect-pilot
+      TEMPORAL_ACQUISITION_OWNER_QUEUE: alegria-acquisition-pure-owner-v1
+    networks: [isolated-temporal]
+
+  orchestrator:
+    image: alegria-site-architect-orchestrator:${SITE_ARCHITECT_OWNER_IMAGE_SHA:?Attested GitHub SHA required}
+    container_name: alegria_site_architect_orchestrator_pilot_v1
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      ALLOW_OPERATION_DAG_V2_WITH_OWNER_VALIDATION: "true"
+      WORKER_BUILD_ID: ${SITE_ARCHITECT_OWNER_IMAGE_SHA:?Attested GitHub SHA required}
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-operation-dag-v2
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: site-architect-pilot
+      TEMPORAL_WORKER_VERSIONING: "false"
+      TEMPORAL_OPERATION_DAG_CATALOG_PATH: /etc/alegria/acquisition-catalog.json
+    volumes:
+      - type: volume
+        source: trusted-catalog
+        target: /etc/alegria
+        read_only: true
+    networks: [isolated-temporal]
+
+volumes:
+  trusted-catalog:
+    external: true
+    name: ${SITE_ARCHITECT_OWNER_CATALOG_VOLUME:?Preinstalled immutable owner catalog required}
+
+networks:
+  isolated-temporal:
+    external: true
+    name: alegria-site-clean_temporal_pure_control

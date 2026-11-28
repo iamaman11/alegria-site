@@ -80,3 +80,45 @@ Access → Worker → VPC Service → Tunnel → localhost ingress in **fail-clo
 mode. A healthy Tunnel or HTTP 400 on malformed proof is *not* proof of an
 accepted one-use SQL grant or a Temporal Start. The remaining four attested
 native owners are not started by this transport installer.
+
+## Windows B: independent native pure-owner pilot lifecycle
+
+The *other* long-lived part of the isolated pilot has two native containers:
+Acquisition and the typed V2 DAG Orchestrator. The separate, GitHub-built
+request/source issuers are deliberately **one-shot authorization commands**,
+not permanently running daemons. The PostgreSQL image hosts the private
+signed ingress already described above. Each of the five release artifacts
+thus retains its real ownership boundary.
+
+Create the separate `site-architect-pilot` **Temporal namespace** once, with
+one-day retention; verify it exists before bringing up owner pollers. The
+network `alegria-site-clean_temporal_pure_control` must already exist as an
+**internal-only** bridge connected to the Temporal server. No port is
+published, no provider can be contacted, and the base `default` namespace is
+not used by these two new workers.
+
+From a clean checkout of the current canonical GitHub `main`, with the two
+attested native images already loaded on B:, use:
+
+```powershell
+pwsh -NoProfile -File infra/local/windows_site_architect_pure_owners.ps1 -Action Status
+pwsh -NoProfile -File infra/local/windows_site_architect_pure_owners.ps1 -Action Install -Commit '<40-hex-GitHub-image-SHA>'
+pwsh -NoProfile -File infra/local/windows_site_architect_pure_owners.ps1 -Action Update -Commit '<40-hex-new-GitHub-image-SHA>'
+pwsh -NoProfile -File infra/local/windows_site_architect_pure_owners.ps1 -Action Remove
+```
+
+`Install` exports the exact three Acquisition v3 routes **from the native
+GitHub image itself** and provisions a per-source-SHA, root-owned, immutable
+`/etc/alegria` catalog volume. Subsequent runs check the exact catalog hash,
+ownership and permissions without replacing it. The two independent workers
+use the dedicated Temporal namespace and internal-only control network. The
+first migration of manually launched v1 pilot workers requires the additional
+explicit `-AdoptExistingOwners` switch; only those two exact containers are
+replaced, after confirming no running pilot Workflow. Repeated `Install` is
+non-recreating. `Update` refuses to interrupt a running Workflow. `Remove`
+preserves all Docker volumes, Temporal History and database data.
+
+**Not authorized by this owner lifecycle:** creating SQL users/policies,
+issuing one-use approvals/grants, accepting a remote MCP user login, performing
+Temporal Start, or claiming more than the three compiled Acquisition routes
+as ready. Those are separate, physical acceptance gates for issue #94.
