@@ -194,6 +194,7 @@ def check() -> None:
     assert "uses: actions/attest@v4" in site_architect
     assert "site-architect-images-${{ env.SOURCE_SHA }}" in site_architect
     assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1" in workflow
+    assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_stack.ps1" in workflow
     windows_installer = (ROOT / "infra/local/windows_site_architect_images.ps1").read_text(encoding="utf-8")
     assert "docker load" in windows_installer
     installer_commands = "\n".join(line for line in windows_installer.splitlines() if not line.lstrip().startswith("#"))
