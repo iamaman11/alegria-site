@@ -122,6 +122,15 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
 
+    def test_windows_stack_lifecycle_is_native_operator_only(self) -> None:
+        path = "infra/local/windows_stack.ps1"
+        report = self.impact(path)
+        self.assertEqual(report["scope"], "none")
+        self.assertIn("windows-operator-smoke", report["selected_ci_jobs"])
+        self.assertNotIn("rust-e2e-pg-harness", report["selected_ci_jobs"])
+        decision = worker_release_decision(report, [path], manual=False)
+        self.assertFalse(decision["worker_required"])
+
     def test_shared_real_provider_fixtures_fail_closed_across_both_e2e_crates(self) -> None:
         report = self.impact("app/rust/crates/integration_data_fixtures/src/postgres.rs")
         self.assertEqual(report["scope"], "full")

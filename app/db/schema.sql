@@ -1,6 +1,10 @@
 -- ==============================================================================
 -- Alegria SEO Engine — Unified Schema (V2)
 -- ==============================================================================
+-- ALEGRIA_SCHEMA_BASELINE_MIGRATION: 20261125_0016_qdrant_operator_resignal_v1.sql
+-- This fresh initdb schema already incorporates the migrations up to this
+-- inclusive boundary. Apply only lexicographically newer migrations on a new
+-- database. Existing databases require their own reviewed upgrade procedure.
 -- Применяется автоматически при первом старте контейнера (initdb.d/init.sql).
 -- Все DDL идемпотентны (CREATE IF NOT EXISTS, OR REPLACE).
 -- Порядок секций: расширения → схемы → kb.* → verified.* → system.* →

@@ -33,8 +33,69 @@ set +a
 
 ## Windows staging — existing Docker Desktop Hyper-V on B:
 
-`windows_staging.ps1` is the single chat-callable operator entry point for the
-**existing** Compose deployment. It uses the Windows Docker CLI and `gh`
+### One-command Docker stack lifecycle (GitHub-only)
+
+`windows_stack.ps1` is the operator's **single entry point** for four routine
+actions on Docker Desktop (Hyper-V, B:). It never compiles an image on Windows.
+The two application Workers are pulled as exact-source GitHub Actions artifacts,
+SHA256 checked, and GitHub-attestation verified **before container deletion**.
+The five siteArchitect native-owner release images are imported independently
+with `windows_site_architect_images.ps1`; importing them is not permission to
+start protected pilot effects or alter Cloudflare policies.
+
+Use a clean `git` checkout of the **current main** on `B:`. Supply the SHA
+of the most recent *certified Worker image release* to `-Commit`; it may be an
+ancestor of main when later commits only change operator scripts or docs.
+Thus lifecycle-only changes do not trigger another Rust image build. For example:
+
+```powershell
+$source = '<40-character-current-main-SHA>'
+$workerRelease = '<40-character-certified-worker-release-SHA>'
+$script = 'B:\Alegria\runtime\alegria-site-' + $source + '\infra\local\windows_stack.ps1'
+
+# Inspect without changes.
+pwsh -NoProfile -File $script -Action Status
+
+# One-time clean installation with isolated, new Docker volumes. Existing
+# Alegria containers are removed, but all old volumes and DB dumps survive.
+pwsh -NoProfile -File $script -Action Install -Commit $workerRelease `
+  -ReplaceOldContainers -BackupDirectory 'B:\Alegria\secrets\docker-reinstall-20261128'
+
+# Future updates (no volume recreation; outbox first, then Temporal Worker).
+pwsh -NoProfile -File $script -Action Update -Commit $workerRelease
+
+# Remove only this project's containers and networks; all volumes survive.
+pwsh -NoProfile -File $script -Action Remove
+```
+
+`Install` uses only an explicit ten-service Compose allowlist, including the
+two Temporal initialization one-shots, rather than activating every service in
+`docker-compose.yml`. It fetches only missing explicitly pinned vendor images
+*before* cleanup, and every `up` uses `--no-build --pull never`; optional
+analytics, Grafana, evaluation profiles and release owners cannot be compiled
+or launched accidentally. It checks the installer against current GitHub main,
+the Worker release as an ancestor of main, and both signed
+Worker releases, binds host ports to loopback, preserves an inventory of old
+volumes, then applies **only post-baseline SQL migrations** selected by the
+inclusive marker in `app/db/schema.sql`, before starting either Worker. This
+avoids replaying historical tenant constraints already folded into initdb.
+It verifies the resulting eight runtime containers. If the old
+project's volumes or project name already exist, use `Update` or a **new**
+Compose project name for another clean installation; a repeat of `Install`
+never silently reuses a previous database.
+
+`Update` delegates to the existing guarded `windows_staging.ps1` release
+promotions and does not run database migrations. Incompatible schema changes
+still require a separately tested migration or an explicit new clean install.
+
+`Remove` uses `docker compose down --remove-orphans` only for the exact project
+name—never `-v` or `docker volume prune`. It does not touch other Docker
+projects. `Status` reads project containers and volume count only.
+
+### Per-Worker guarded staging
+
+`windows_staging.ps1` is the lower-level, guarded **single-Worker promotion**
+called by `windows_stack.ps1 -Action Update`. It uses the Windows Docker CLI and `gh`
 (the canonical remote `iamaman11/alegria-site`), no WSL or second service.
 Run it from any exact-commit GitHub checkout on `B:`:
 

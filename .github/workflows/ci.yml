@@ -2224,6 +2224,7 @@ jobs:
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_stack.ps1
 
   gate:
     name: CI

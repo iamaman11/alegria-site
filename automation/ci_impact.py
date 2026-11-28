@@ -124,6 +124,8 @@ CI_ONLY_VERIFY_FILES = {
     "automation/check_ci_workflow_contract.py",
     "automation/check_expert_core_activation_contract.py",
     "automation/report_sccache_failures.py",
+    "infra/local/windows_stack.ps1",
+    "automation/smoke_windows_stack.ps1",
 } | PHYSICAL_STUDY_ONLY_FILES
 
 # Release packaging has a narrower input graph than PR verification. These
@@ -153,6 +155,7 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "automation/run_rust_owned_check.sh",
     "automation/check_windows_staging_rollback.py",
     "infra/local/windows_staging.ps1",
+    "infra/local/windows_stack.ps1",
     "docs/ci-fast-path.md",
     "docs/ARCHITECTURE_BOUNDARIES.md",
 }) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS | PHYSICAL_STUDY_ONLY_FILES
@@ -1418,7 +1421,8 @@ def ci_jobs_for_change(
            path.startswith("infra/qdrant/") or path.startswith("infra/neo4j/") for path in changed):
         require("stack-storage-graph", "storage/graph Compose deployment configuration")
 
-    if any(path.startswith("automation/") and path.endswith(".ps1") or
+    if any(path in {"infra/local/windows_stack.ps1"} or
+           path.startswith("automation/") and path.endswith(".ps1") or
            path.startswith("automation/check_windows_") for path in changed):
         require("windows-operator-smoke", "native Windows operator contract")
 
