@@ -1,4 +1,4 @@
-# Four existing native Rust binaries, four independent final images. None
+# Five existing native Rust binaries, five independent final images. None
 # contains the legacy provider-linked temporal_worker executable.
 # This is an opt-in runtime topology experiment, not a production cutover.
 FROM rust:1.100.0-slim-bookworm AS build-base
@@ -24,6 +24,7 @@ RUN case "$OWNER_PACKAGE" in \
       temporal_pg_effects) set -- ;; \
       temporal_acquisition_pure) set -- ;; \
       acquisition_source_issuer) set -- ;; \
+      one_step_request_issuer) set -- ;; \
       *) echo "invalid owner package" >&2; exit 1 ;; \
     esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
@@ -39,6 +40,7 @@ RUN find /app/app/rust -type f -name '*.rs' \
       temporal_pg_effects) set -- ;; \
       temporal_acquisition_pure) set -- ;; \
       acquisition_source_issuer) set -- ;; \
+      one_step_request_issuer) set -- ;; \
       *) echo "invalid owner package" >&2; exit 1 ;; \
     esac \
     && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
@@ -51,6 +53,8 @@ FROM build-base AS pg-builder
 FROM build-base AS acquisition-builder
 
 FROM build-base AS source-issuer-builder
+
+FROM build-base AS request-issuer-builder
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
@@ -72,3 +76,7 @@ ENTRYPOINT ["/usr/local/bin/temporal_acquisition_pure"]
 FROM runtime AS source-issuer
 COPY --from=source-issuer-builder /app/app/rust/target/release/acquisition_source_issuer /usr/local/bin/acquisition_source_issuer
 ENTRYPOINT ["/usr/local/bin/acquisition_source_issuer"]
+
+FROM runtime AS request-issuer
+COPY --from=request-issuer-builder /app/app/rust/target/release/one_step_request_issuer /usr/local/bin/one_step_request_issuer
+ENTRYPOINT ["/usr/local/bin/one_step_request_issuer"]

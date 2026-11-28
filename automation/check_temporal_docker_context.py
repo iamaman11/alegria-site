@@ -351,6 +351,7 @@ class TemporalDockerContextTests(unittest.TestCase):
             "app/rust/services/temporal_pg_effects": "temporal_pg_effects",
             "app/rust/services/temporal_acquisition_pure": "temporal_acquisition_pure",
             "app/rust/services/acquisition_source_issuer": "acquisition_source_issuer",
+            "app/rust/services/one_step_request_issuer": "one_step_request_issuer",
             "app/rust/services/temporal": "temporal_worker",
             "app/rust/crates/acquisition": "acquisition",
             "app/rust/crates/operation_protocol": "operation_protocol",
@@ -363,10 +364,14 @@ class TemporalDockerContextTests(unittest.TestCase):
             "temporal_orchestrator": set(), "temporal_pg_effects": set(),
             "temporal_acquisition_pure": set(),
             "acquisition_source_issuer": set(),
+            "one_step_request_issuer": set(),
             "temporal_worker": set(), "truth_domain": {"temporal_orchestrator", "temporal_pg_effects"},
             "postgres_store": {"temporal_pg_effects"},
             "acquisition": {"temporal_acquisition_pure", "acquisition_source_issuer"},
-            "operation_protocol": {"temporal_acquisition_pure", "acquisition_source_issuer", "acquisition"},
+            "operation_protocol": {
+                "temporal_acquisition_pure", "acquisition_source_issuer",
+                "one_step_request_issuer", "acquisition",
+            },
             "graph_neo4j": {"temporal_worker"},
             "vector_qdrant": {"temporal_worker"},
         }
@@ -390,6 +395,7 @@ class TemporalDockerContextTests(unittest.TestCase):
             "acquisition-source-issuer-v1": {
                 "acquisition_source_issuer", "acquisition", "operation_protocol",
             },
+            "one-step-request-issuer-v1": {"one_step_request_issuer", "operation_protocol"},
         }
         for image_owner, allowed in expected.items():
             with self.subTest(image_owner=image_owner):
@@ -412,6 +418,7 @@ class TemporalDockerContextTests(unittest.TestCase):
             "temporal-worker", "temporal-orchestrator-v3", "temporal-pg-effects-v3",
             "temporal-acquisition-pure-v1",
             "acquisition-source-issuer-v1",
+            "one-step-request-issuer-v1",
         })
         with self.assertRaisesRegex(ValueError, "unknown Cargo image context owner"):
             release_closure(owners, reverse, image_owner="temporal-worker-v4")
@@ -442,6 +449,7 @@ class TemporalDockerContextTests(unittest.TestCase):
             for image_owner in (
                 "temporal-orchestrator-v3", "temporal-pg-effects-v3",
                 "temporal-acquisition-pure-v1", "acquisition-source-issuer-v1",
+                "one-step-request-issuer-v1",
             )
         }
         for image_owner, packages in closures.items():
@@ -457,6 +465,12 @@ class TemporalDockerContextTests(unittest.TestCase):
                     self.assertNotIn("postgres_store", packages)
                     self.assertNotIn("temporal_orchestrator", packages)
                     self.assertNotIn("temporal_pg_effects", packages)
+                elif image_owner == "one-step-request-issuer-v1":
+                    self.assertIn("operation_protocol", packages)
+                    self.assertNotIn("acquisition", packages)
+                    self.assertNotIn("postgres_store", packages)
+                    self.assertNotIn("temporal_orchestrator", packages)
+                    self.assertNotIn("temporal_pg_effects", packages)
                 else:
                     self.assertIn("truth_domain", packages)
         self.assertNotIn("postgres_store", closures["temporal-orchestrator-v3"])
@@ -467,6 +481,7 @@ class TemporalDockerContextTests(unittest.TestCase):
         for owner, stage, image_stage in (
             ("temporal_acquisition_pure", "acquisition-builder", "acquisition"),
             ("acquisition_source_issuer", "source-issuer-builder", "source-issuer"),
+            ("one_step_request_issuer", "request-issuer-builder", "request-issuer"),
         ):
             with self.subTest(owner=owner):
                 self.assertEqual(dockerfile.count(f"{owner}) set -- ;;"), 2)

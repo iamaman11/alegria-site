@@ -34,6 +34,7 @@ IMAGE_CONTEXT_ROOTS = {
     "temporal-pg-effects-v3": frozenset({"temporal_pg_effects"}),
     "temporal-acquisition-pure-v1": frozenset({"temporal_acquisition_pure"}),
     "acquisition-source-issuer-v1": frozenset({"acquisition_source_issuer"}),
+    "one-step-request-issuer-v1": frozenset({"one_step_request_issuer"}),
 }
 
 
