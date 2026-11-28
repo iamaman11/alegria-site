@@ -4,19 +4,22 @@
 import { bindings, defineConfig } from "cf/config";
 
 const publicRelease = process.env.SITE_ARCHITECT_ENABLE_PUBLIC_MCP === "yes";
-const resourceUrl = process.env.SITE_ARCHITECT_MCP_RESOURCE_URL;
+// Account and technical hostname are canonical for this project. A release
+// cannot silently inherit another Cloudflare account or point at alegria.by.
+const technicalMcpResourceUrl = "https://alegria-site-architect-mcp.alegria-site.workers.dev/mcp";
 const accessIssuerUrl = process.env.SITE_ARCHITECT_ACCESS_ISSUER_URL;
 const accessAud = process.env.SITE_ARCHITECT_ACCESS_AUD;
 const admissionVpcServiceId = process.env.SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID;
 
-if (publicRelease && (!resourceUrl || !accessIssuerUrl || !accessAud || !admissionVpcServiceId)) {
-  throw new Error("Public MCP requires exact resource URL, Access issuer and AUD, and private VPC Service");
+if (publicRelease && (!accessIssuerUrl || !accessAud || !admissionVpcServiceId)) {
+  throw new Error("Public MCP requires Access issuer and AUD, and private VPC Service");
 }
-if (publicRelease && (!resourceUrl?.startsWith("https://") || !accessIssuerUrl?.startsWith("https://"))) {
-  throw new Error("Public MCP Access issuer and resource must use HTTPS");
+if (publicRelease && !accessIssuerUrl?.startsWith("https://")) {
+  throw new Error("Public MCP Access issuer must use HTTPS");
 }
 
 export default defineConfig({
+  accountId: "78e5fcb3762c1473113d51838556da74",
   worker: {
     name: "alegria-site-architect-mcp",
     entrypoint: "./src/index.ts",
@@ -30,7 +33,7 @@ export default defineConfig({
       ACCESS_ALLOWED_EMAIL: bindings.secret(),
       ACCESS_AUD: accessAud ? bindings.text(accessAud) : undefined,
       ACCESS_ISSUER_URL: accessIssuerUrl ? bindings.text(accessIssuerUrl) : undefined,
-      MCP_SERVER_URL: resourceUrl ? bindings.text(resourceUrl) : undefined,
+      MCP_SERVER_URL: publicRelease ? bindings.text(technicalMcpResourceUrl) : undefined,
       ONE_STEP_ADMISSION: admissionVpcServiceId
         ? bindings.vpcService({ id: admissionVpcServiceId })
         : undefined,

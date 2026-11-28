@@ -4,6 +4,15 @@ This isolated Cloudflare Worker is **not deployed or user Start-ready**. The
 canonical repository is `iamaman11/alegria-site`, Draft PR #95; `main` and
 `alegria-seo-staging` must remain untouched during this pilot.
 
+The only target account is **`site-alegria`**
+(`78e5fcb3762c1473113d51838556da74`). The MCP resource URL is fixed to
+the technical hostname
+`https://alegria-site-architect-mcp.alegria-site.workers.dev/mcp`.
+This expected URL is not yet deployed or physically accepted. No DNS zone,
+custom domain, `alegria.by` route or other account is part of this pilot.
+The account ID and resource URL are pinned in `cloudflare.config.ts`, not
+chosen by ambient CLI credentials or a release-time environment variable.
+
 ## Boundary
 
 - Native `createMcpHandler` supplies the stateless `/mcp` transport.
@@ -73,7 +82,6 @@ operator must explicitly set:
 | Environment configuration | Trust requirement |
 | --- | --- |
 | `SITE_ARCHITECT_ENABLE_PUBLIC_MCP=yes` | Explicit public release switch, not a grant to Start |
-| `SITE_ARCHITECT_MCP_RESOURCE_URL` | Exact externally reachable HTTPS URL ending `/mcp` |
 | `SITE_ARCHITECT_ACCESS_ISSUER_URL` | Operator-pinned HTTPS Cloudflare Access issuer; signed into the native proof as a fixed identity namespace |
 | `SITE_ARCHITECT_ACCESS_AUD` | Exact audience of the dedicated Managed OAuth Access application; checked against verified `ctx.access.aud` |
 | `SITE_ARCHITECT_PRIVATE_ADMISSION_VPC_SERVICE_ID` | Existing private VPC Service ID configured for the native ingress via Cloudflare Tunnel; required for public release |
@@ -106,7 +114,7 @@ availability and TLS routing on the chosen account before release.
    email and operator-pinned AUD, verify real sign-in, revocation, expiry,
    resource and denied-user behavior. Confirm the app exposes only one MCP
    mutating tool and never interpret the fixed HMAC scope as a token grant.
-2. Implement a private-only native HTTP ingress and independently test a stolen,
+2. Verify the implemented private-only native HTTP ingress and independently test a stolen,
    forged, cross-tenant, revoked, repeated and expired subject/grant.
    The CI fixture signer for the private native operator is *not* a real
    Access login or a production identity-provider acceptance test.
