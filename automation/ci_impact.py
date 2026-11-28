@@ -497,6 +497,33 @@ SUITE_OWNERS = {
             "--lib", "dataforseo_owner_pg_", "--locked", "--", "--nocapture",
         ),
     },
+    # The paid V2 owner is a separate, opt-in SQL authority from the V1
+    # fixture-only path. This genuine disposable PostgreSQL test covers
+    # independently approved USD bounds, one committed pre-POST claim,
+    # no re-POST after unknown, immutable provider bytes and FORCE RLS.
+    # It makes NO real paid API request and does not attest server History.
+    # Run with the same pg_app_harness and existing pg_app_truth shard.
+    "dataforseo_paid_owner_pg_v2": {
+        "paths": {
+            "app/db/migrations/20261128_0001_dataforseo_paid_owner_v2.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_paid_owner_v2_tests.rs",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_dataforseo/",
+            "app/rust/crates/dataforseo_contracts/",
+            "app/rust/services/one_step_request_issuer/",
+        ),
+        "lock_crates": {"temporal_dataforseo", "dataforseo_contracts",
+                        "one_step_request_issuer", "operation_protocol",
+                        "integration_pg_app_e2e"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+            "--lib", "dataforseo_paid_owner_v2_", "--locked", "--", "--nocapture",
+        ),
+    },
     "one_step_grant_pg_v1": {
         "paths": {
             "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
@@ -1422,7 +1449,8 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 # while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
-    "dataforseo_owner_pg_v1", "external_source_attestation_pg_v1", "one_step_grant_pg_v1",
+    "dataforseo_owner_pg_v1", "dataforseo_paid_owner_pg_v2",
+    "external_source_attestation_pg_v1", "one_step_grant_pg_v1",
     "draft_qa_scenario", "draft_qa_pg_persistence", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
     "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
@@ -1526,6 +1554,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "pg_app_truth": (
         ("truth_adjudication_integrity", "truth_adjudication_", 3),
         ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
+        ("dataforseo_paid_owner_pg_v2", "dataforseo_paid_owner_v2_", 1),
         ("external_source_attestation_pg_v1", "external_source_attestation_pg_", 1),
         ("one_step_grant_pg_v1", "one_step_grant_pg_", 1),
     ),

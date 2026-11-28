@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 64)
+                             for _, _, _, count in rows), 65)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -185,7 +185,8 @@ class ImpactFixtures(unittest.TestCase):
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
                                        "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity",
-                                       "dataforseo_owner_pg_v1", "external_source_attestation_pg_v1",
+                                       "dataforseo_owner_pg_v1", "dataforseo_paid_owner_pg_v2",
+                                       "external_source_attestation_pg_v1",
                                        "one_step_grant_pg_v1"},
             "integration_pg_v3_e2e": {"pg_effect_v3", "pg_temporal_v3"},
             "integration_outbox_e2e": {"outbox_a14"},
@@ -475,7 +476,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"],
                          ("temporal_qdrant",))
 
-    def test_full_real_e2e_shards_cover_all_65_including_optional_certification(self) -> None:
+    def test_full_real_e2e_shards_cover_all_66_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -491,7 +492,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
         self.assertTrue(all(shards[shard] for shard in shards))
         self.assertEqual(
-            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 42
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 43
         )
         self.assertEqual(
             sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 23
@@ -1228,6 +1229,30 @@ class ImpactFixtures(unittest.TestCase):
             ("dataforseo_owner_pg_v1", "dataforseo_owner_pg_", 1),
             E2E_SHARD_RUNS["pg_app_truth"],
         )
+
+    def test_paid_dataforseo_v2_owner_is_required_in_existing_pg_app_truth_shard(self) -> None:
+        suite = "dataforseo_paid_owner_pg_v2"
+        owner = SUITE_OWNERS[suite]
+        self.assertEqual(
+            owner["command"],
+            ("cargo", "test", "-p", "integration_pg_app_e2e", "--features", "e2e",
+             "--lib", "dataforseo_paid_owner_v2_", "--locked", "--", "--nocapture"),
+        )
+        self.assertIn(suite, FULL_VERIFY_E2E_SUITES)
+        self.assertIn(
+            (suite, "dataforseo_paid_owner_v2_", 1), E2E_SHARD_RUNS["pg_app_truth"],
+        )
+        for path in (
+            "app/db/migrations/20261128_0001_dataforseo_paid_owner_v2.sql",
+            "app/db/migrations/20261127_0003_operation_dag_one_step_request_grants_v1.sql",
+            "app/rust/crates/integration_pg_app_e2e/src/tests/dataforseo_paid_owner_v2_tests.rs",
+            "app/rust/services/temporal_dataforseo/src/paid_provider.rs",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertIn(suite, report["selected_suites"])
+                self.assertIn("architecture-and-rust", report["selected_ci_jobs"])
+                self.assertIn("verify", report["selected_ci_jobs"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
