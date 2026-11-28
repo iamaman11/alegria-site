@@ -117,6 +117,7 @@ class ImpactFixtures(unittest.TestCase):
             "rust-e2e-truth-harness", "rust-truth-e2e",
         })
         self.assertIn("temporal-worker", report["selected_images"])
+        self.assertTrue(e2e_shard_commands_for_report(report)["graph"])
         decision = worker_release_decision(report, paths, manual=False)
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")

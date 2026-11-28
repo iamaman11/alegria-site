@@ -662,7 +662,8 @@ SUITE_OWNERS = {
                      "app/rust/crates/integration_graph_fixtures/", "app/rust/crates/graph_capability/",
                      "app/rust/crates/integration_test_env/"),
         "lock_crates": {"graph_neo4j"},
-        "on_unknown_global_input": False,
+        # Full CI requires rust-graph-e2e. This is its only executable suite.
+        "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_graph_e2e", "--features", "e2e",
             # Both the context-key probe and real Neo4j scoped-edge regression
