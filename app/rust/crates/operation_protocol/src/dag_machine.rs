@@ -643,7 +643,9 @@ mod tests {
         OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
     };
 
-    fn site_architect_expected_start(run: &OperationDagRunV6) -> crate::SiteArchitectExpectedStartV1 {
+    fn site_architect_expected_start(
+        run: &OperationDagRunV6,
+    ) -> crate::SiteArchitectExpectedStartV1 {
         crate::SiteArchitectExpectedStartV1 {
             schema_revision: crate::SITE_ARCHITECT_START_PREFLIGHT_SCHEMA_REVISION_V1,
             plan_hash: run.plan.hash.clone(),
@@ -742,7 +744,11 @@ mod tests {
         let mut tampered_route = run.clone();
         tampered_route.pinned_routes[0].task_queue = "untrusted-queue".to_owned();
         assert!(matches!(
-            crate::preflight_unadmitted_site_architect_v2_start(&tampered_route, &routes, &expected),
+            crate::preflight_unadmitted_site_architect_v2_start(
+                &tampered_route,
+                &routes,
+                &expected
+            ),
             Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
 
@@ -892,7 +898,11 @@ mod tests {
         let mut changed_deployment = run.clone();
         changed_deployment.pinned_routes[0].build_id = "untrusted-build".into();
         assert!(matches!(
-            crate::preview_unadmitted_site_architect_v2_start(&changed_deployment, &routes, &expected),
+            crate::preview_unadmitted_site_architect_v2_start(
+                &changed_deployment,
+                &routes,
+                &expected
+            ),
             Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
     }
@@ -965,7 +975,11 @@ mod tests {
             .unwrap()
             .provenance = "claim-another-source".into();
         assert!(matches!(
-            crate::preview_unadmitted_site_architect_v2_start(&different_origin, &routes, &expected),
+            crate::preview_unadmitted_site_architect_v2_start(
+                &different_origin,
+                &routes,
+                &expected
+            ),
             Err(crate::SiteArchitectStartPreflightError::InvalidRun(_))
         ));
     }

@@ -6,8 +6,8 @@ use operation_protocol::OperationRef;
 use serde::Serialize;
 
 use super::{
-    describe_tools, OperationExecutionReadinessV1, RecipeParameters, SiteArchitectCatalog, SiteArchitectError,
-    ToolDescription,
+    describe_tools, OperationExecutionReadinessV1, RecipeParameters, SiteArchitectCatalog,
+    SiteArchitectError, ToolDescription,
 };
 
 /// A digest of the installed owner's typed parameter check, never a copy of

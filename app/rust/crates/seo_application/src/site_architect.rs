@@ -241,7 +241,9 @@ pub struct ToolDescription {
 /// Every registered owner contract is discoverable without adding a new
 /// provider-specific case to the CLI or the DAG kernel. The caller must pass
 /// a *trusted* catalog; never register contracts from a user recipe.
-pub fn describe_tools(catalog: &SiteArchitectCatalog) -> Result<Vec<ToolDescription>, SiteArchitectError> {
+pub fn describe_tools(
+    catalog: &SiteArchitectCatalog,
+) -> Result<Vec<ToolDescription>, SiteArchitectError> {
     catalog
         .catalog()
         .contracts()
@@ -491,7 +493,9 @@ pub fn suggest_compatible_inputs(
     catalog: &SiteArchitectCatalog,
 ) -> Result<RecipeConnectionPreview, SiteArchitectError> {
     if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION {
-        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(
+            recipe.schema_revision,
+        ));
     }
     if recipe.steps.len() > DAG_MAX_NODES {
         return Err(SiteArchitectError::TooManySteps(recipe.steps.len()));
@@ -560,12 +564,16 @@ pub fn compile_recipe(
     if recipe.schema_revision != SITE_RECIPE_SCHEMA_REVISION
         && recipe.schema_revision != LEGACY_SITE_RECIPE_SCHEMA_REVISION
     {
-        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(
+            recipe.schema_revision,
+        ));
     }
     if recipe.schema_revision == LEGACY_SITE_RECIPE_SCHEMA_REVISION
         && recipe.steps.iter().any(|step| !step.parameters.is_empty())
     {
-        return Err(SiteArchitectError::UnsupportedRevision(recipe.schema_revision));
+        return Err(SiteArchitectError::UnsupportedRevision(
+            recipe.schema_revision,
+        ));
     }
     if recipe.steps.is_empty() {
         return Err(SiteArchitectError::EmptyRecipe);

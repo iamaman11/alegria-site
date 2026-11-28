@@ -151,7 +151,8 @@ pub fn preflight_unadmitted_single_operation_v2_start(
     expected: &SiteArchitectExpectedStartV1,
 ) -> Result<SiteArchitectUnadmittedPreflightV1, SiteArchitectSingleOperationPreflightError> {
     check_single_operation_shape(run)?;
-    preflight_unadmitted_site_architect_v2_start(run, installed_routes, expected).map_err(Into::into)
+    preflight_unadmitted_site_architect_v2_start(run, installed_routes, expected)
+        .map_err(Into::into)
 }
 
 /// Show one tool's exact typed inputs, outputs, trusted route, effects and
@@ -298,15 +299,17 @@ pub fn preview_unadmitted_site_architect_v2_start(
                     .expect("native V2 preflight checked input port schemas")
                     .clone();
                 let view = match binding {
-                    ArtifactBinding::External { artifact } => SiteArchitectPreviewInputV1::External {
-                        artifact: artifact.clone(),
-                        schema,
-                        payload_hash: expected
-                            .source_payload_hashes
-                            .get(artifact)
-                            .expect("exact checked External source set")
-                            .clone(),
-                    },
+                    ArtifactBinding::External { artifact } => {
+                        SiteArchitectPreviewInputV1::External {
+                            artifact: artifact.clone(),
+                            schema,
+                            payload_hash: expected
+                                .source_payload_hashes
+                                .get(artifact)
+                                .expect("exact checked External source set")
+                                .clone(),
+                        }
+                    }
                     ArtifactBinding::Produced {
                         producer,
                         port: producer_port,

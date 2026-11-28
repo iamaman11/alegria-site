@@ -1612,7 +1612,10 @@ async fn try_start_from_private_request(
         Duration::from_secs(15),
         Connection::connect(
             ConnectionOptions::new(config.url)
-                .identity(format!("alegria-site-architect-single-v2-{}", std::process::id()))
+                .identity(format!(
+                    "alegria-site-architect-single-v2-{}",
+                    std::process::id()
+                ))
                 .build(),
         ),
     )
