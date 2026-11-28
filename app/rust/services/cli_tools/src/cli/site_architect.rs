@@ -323,21 +323,38 @@ fn site_architect_installed_catalog() -> Result<SiteArchitectCatalog> {
     Ok(installed)
 }
 
+fn site_architect_tools_report(
+    catalog: &SiteArchitectCatalog,
+) -> std::result::Result<Value, Value> {
+    let operations = describe_tools(catalog).map_err(|error| json!(error.problem()))?;
+    let matrix = seo_application::site_architect::matrix::operation_matrix(&operations)
+        .map_err(|error| site_architect_problem(
+            "operation_matrix_invalid",
+            &error.to_string(),
+            "Correct the bundled product matrix.",
+        ))?;
+    Ok(json!({
+        "status": "catalog_preview_only",
+        "launch_readiness": site_architect_launch_readiness(&operations),
+        "operations": operations,
+        "matrix": matrix,
+        "execution": "not_started"
+    }))
+}
+
 fn site_architect_command(action: SiteArchitectCommand) -> Result<i32> {
     let installed = site_architect_installed_catalog()?;
     let catalog = &installed;
 
     match action {
         SiteArchitectCommand::Tools => {
-            let operations = describe_tools(catalog)?;
-            let launch_readiness = site_architect_launch_readiness(&operations);
-            site_architect_print(&json!({
-                "status": "catalog_preview_only",
-                "operations": operations,
-                "launch_readiness": launch_readiness,
-                "execution": "not_started",
-                "note": "Declared tools are not provider connectivity or owner admission proof.",
-            }))?;
+            match site_architect_tools_report(catalog) {
+                Ok(report) => site_architect_print(&report)?,
+                Err(problem) => {
+                    site_architect_print(&problem)?;
+                    return Ok(2);
+                }
+            }
         }
         SiteArchitectCommand::Operation {
             id,

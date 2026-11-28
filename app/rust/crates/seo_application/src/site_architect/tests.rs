@@ -207,6 +207,56 @@ fn catalog() -> SiteArchitectCatalog {
 }
 
 #[test]
+fn product_matrix_joins_exact_revisions_and_keeps_proposals_out_of_execution() {
+    use super::matrix::{operation_matrix, ContractStatus};
+
+    let registry = catalog();
+    let mut tools = describe_tools(&registry).unwrap();
+    let mut extension = tools[0].clone();
+    extension.operation.revision += 1;
+    tools.push(extension.clone());
+
+    let matrix = operation_matrix(&tools).unwrap();
+    assert_eq!(matrix.installed_outside_matrix, vec![extension.operation]);
+    let shared = op("knowledge.vector_candidates.search");
+    let candidates = matrix.areas.values().flatten();
+    assert_eq!(
+        candidates
+            .filter(|row| row.operations.contains(&shared))
+            .count(),
+        2
+    );
+    assert_eq!(
+        matrix
+            .actions
+            .iter()
+            .filter(|row| row.operation == shared)
+            .count(),
+        1
+    );
+
+    for row in &matrix.actions {
+        match row.status {
+            ContractStatus::Planned => {
+                let ports = row.proposed_ports.as_ref().unwrap();
+                assert!(!ports.inputs.is_empty() && !ports.outputs.is_empty());
+                for schema in ports.inputs.values().chain(ports.outputs.values()) {
+                    assert!(!schema.id.as_str().is_empty() && schema.revision > 0);
+                }
+                assert!(registry.catalog().contract(&row.operation).is_none());
+            }
+            ContractStatus::SourceDeclared => {
+                assert!(row.declaration.is_some() && row.proposed_ports.is_none());
+            }
+            ContractStatus::InstalledContract => {
+                assert!(tools.iter().any(|tool| tool.operation == row.operation));
+                assert!(row.proposed_ports.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
     let mut registry = catalog();
     let catalog_before = describe_tools(&registry).unwrap();

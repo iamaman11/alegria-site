@@ -297,7 +297,7 @@ fn mcp_site_architect_tools() -> Value {
     json!({"tools":[
         {
             "name":"site_architect_tools", "title":"Available siteArchitect operations",
-            "description":"Installed owner contracts, typed ports, parameter schemas and per-gate readiness. Catalog membership is not execution permission.",
+            "description":"Product action matrix by area and exact revision, plus installed owner contracts, typed ports, settings and readiness.",
             "inputSchema":mcp_object_schema(json!({}), &[]),
             "annotations":{"readOnlyHint":true,"openWorldHint":false}
         },
@@ -704,17 +704,9 @@ fn mcp_site_architect_call(
             let parsed: std::result::Result<serde_json::Map<String, Value>, _> =
                 serde_json::from_value(if args.is_null() { json!({}) } else { args });
             match parsed {
-                Ok(fields) if fields.is_empty() => match describe_tools(catalog) {
-                    Ok(operations) => {
-                        let launch_readiness = site_architect_launch_readiness(&operations);
-                        (json!({
-                            "status":"catalog_preview_only",
-                            "operations":operations,
-                            "launch_readiness":launch_readiness,
-                            "execution":"not_started"
-                        }), false)
-                    },
-                    Err(error) => (json!(error.problem()), true),
+                Ok(fields) if fields.is_empty() => match site_architect_tools_report(catalog) {
+                    Ok(report) => (report, false),
+                    Err(problem) => (problem, true),
                 },
                 _ => (mcp_bad_arguments("site_architect_tools takes an empty arguments object"), true),
             }

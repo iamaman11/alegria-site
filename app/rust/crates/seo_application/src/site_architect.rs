@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod evidence;
+pub mod matrix;
 mod operation_inspection;
 mod parameters_json;
 mod readiness;
