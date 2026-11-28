@@ -208,6 +208,10 @@ ONE_STEP_REQUEST_GRANT_JSON_BOUNDARIES = frozenset({
     # admission boundary. This verifier has no SQL authority or Temporal
     # execution access; no sibling operation_protocol module gains JSON rights.
     "app/rust/crates/operation_protocol/src/signed_mcp_admission_v1.rs",
+    # The single opt-in, loopback-only operator HTTP adapter decodes a bounded
+    # signed MCP proof and serializes a sealed reply; it cannot issue grants.
+    # No other temporal_pg_effects module inherits JSON ingress permission.
+    "app/rust/services/temporal_pg_effects/src/operator_signed_ingress_v1.rs",
     # Only the independently credentialed issuer's strict private request
     # and protected catalog decoding; no JSON ingress in its SQL/ACL main.
     "app/rust/services/one_step_request_issuer/src/issue_json.rs",
