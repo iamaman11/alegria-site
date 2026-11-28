@@ -75,7 +75,10 @@ analytics, Grafana, evaluation profiles and release owners cannot be compiled
 or launched accidentally. It checks the installer against current GitHub main,
 the Worker release as an ancestor of main, and both signed
 Worker releases, binds host ports to loopback, preserves an inventory of old
-volumes, and verifies the resulting eight runtime containers. If the old
+volumes, then applies **only post-baseline SQL migrations** selected by the
+inclusive marker in `app/db/schema.sql`, before starting either Worker. This
+avoids replaying historical tenant constraints already folded into initdb.
+It verifies the resulting eight runtime containers. If the old
 project's volumes or project name already exist, use `Update` or a **new**
 Compose project name for another clean installation; a repeat of `Install`
 never silently reuses a previous database.

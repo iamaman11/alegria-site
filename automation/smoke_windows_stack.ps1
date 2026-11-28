@@ -16,7 +16,8 @@ foreach ($action in $actions) {
 }
 $required = @('--no-build', '--pull', 'never', 'Read-Staging-Verified-Worker-Image',
     'gh attestation verify', 'docker', 'ReplaceOldContainers', 'BackupDirectory',
-    'Assert-Previous-Volumes', 'Verify-Running-Stack')
+    'Assert-Previous-Volumes', 'Verify-Running-Stack',
+    'Apply-Fresh-Business-Migrations', 'ALEGRIA_SCHEMA_BASELINE_MIGRATION')
 foreach ($token in $required) {
     if (-not $source.Contains($token)) { throw "Lifecycle safety contract absent: $token" }
 }

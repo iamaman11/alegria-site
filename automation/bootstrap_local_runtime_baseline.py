@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,21 @@ from local_db_baseline import require_database_baseline
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_SQL = ROOT / "app" / "db" / "schema.sql"
 MIGRATIONS_DIR = ROOT / "app" / "db" / "migrations"
+BASELINE_RE = re.compile(
+    r"^-- ALEGRIA_SCHEMA_BASELINE_MIGRATION: ([0-9]{8}_[0-9]{4}_[a-z0-9_]+\.sql)$",
+    re.MULTILINE,
+)
+
+
+def fresh_schema_migrations() -> list[Path]:
+    """Migrations after the explicit inclusive schema.sql bootstrap boundary."""
+    baseline = BASELINE_RE.findall(SCHEMA_SQL.read_text(encoding="utf-8"))
+    if len(baseline) != 1:
+        raise RuntimeError("schema.sql requires exactly one migration baseline marker")
+    ordered = sorted(MIGRATIONS_DIR.glob("*.sql"))
+    if baseline[0] not in {path.name for path in ordered}:
+        raise RuntimeError(f"schema.sql baseline migration does not exist: {baseline[0]}")
+    return [path for path in ordered if path.name > baseline[0]]
 
 
 def psql(database_url: str, *args: str, input_text: str | None = None) -> None:
@@ -101,7 +117,7 @@ def create_database(admin_database_url: str, db_name: str) -> None:
 
 def apply_schema_and_migrations(database_url: str) -> None:
     psql(database_url, "-v", "ON_ERROR_STOP=1", "-f", str(SCHEMA_SQL))
-    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+    for path in fresh_schema_migrations():
         psql(database_url, "-v", "ON_ERROR_STOP=1", "-f", str(path))
 
 

@@ -84,6 +84,49 @@ function Verify-Running-Stack {
     }
 }
 
+function Apply-Fresh-Business-Migrations {
+    # The initdb schema contains an inclusive set of historical migrations.
+    # Replaying those SQL files would duplicate tenant constraints. This is
+    # the same baseline selection as automation/bootstrap_local_runtime_baseline.py.
+    $schemaPath = Join-Path $root 'app\db\schema.sql'
+    $matches = [regex]::Matches([IO.File]::ReadAllText($schemaPath),
+        '(?m)^-- ALEGRIA_SCHEMA_BASELINE_MIGRATION: ([0-9]{8}_[0-9]{4}_[a-z0-9_]+\.sql)$')
+    if ($matches.Count -ne 1) { throw 'No unique fresh schema migration baseline marker' }
+    $baseline = $matches[0].Groups[1].Value
+    $all = @(Get-ChildItem (Join-Path $root 'app\db\migrations') -Filter '*.sql' -File |
+        Sort-Object Name)
+    if ($baseline -notin @($all | ForEach-Object Name)) { throw 'Schema baseline migration is missing' }
+    $delta = @($all | Where-Object { $_.Name -cgt $baseline })
+    if (-not $delta.Count) { Write-Output 'POST_BASELINE_MIGRATIONS=NONE'; return }
+
+    $folder = '/tmp/alegria-migrations-' + [guid]::NewGuid().ToString('n')
+    $created = $false
+    try {
+        & $docker exec alegria_postgres mkdir -p $folder 2>$null
+        Assert-Exit 'create temporary migration folder'
+        $created = $true
+        & $docker cp (Join-Path $root 'app\db\migrations') ('alegria_postgres:' + $folder + '/migrations') 2>$null
+        Assert-Exit 'copy canonical SQL migrations into PostgreSQL container'
+        $paths = @($delta | ForEach-Object { $folder + '/migrations/' + $_.Name })
+        $shell = 'set -eu; for f in ' + ($paths -join ' ') +
+            '; do echo "MIGRATION=${f##*/}"; psql -X -q -v ON_ERROR_STOP=1 ' +
+            '-U postgres -d alegria -f "$f" >/dev/null 2>' + $folder +
+            '/last-error.log; done; echo POST_BASELINE_MIGRATIONS=PASS'
+        & $docker exec alegria_postgres sh -ec $shell 2>$null
+        $status = $LASTEXITCODE
+        if ($status -ne 0) {
+            & $docker exec alegria_postgres tail -n 12 ($folder + '/last-error.log') 2>$null
+            throw "Post-baseline migration chain failed: exit $status"
+        }
+        Write-Output "POST_BASELINE_COUNT=$($delta.Count)"
+    } finally {
+        if ($created) {
+            & $docker exec alegria_postgres rm -r $folder 2>$null | Out-Null
+            Assert-Exit 'remove exact temporary migration files'
+        }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $docker -PathType Leaf)) { throw 'B: Docker CLI missing' }
 & $docker info --format '{{.ServerVersion}}' | Out-Null
 Assert-Exit 'Docker Engine readiness'
@@ -267,6 +310,7 @@ Invoke-Compose (@('up', '--no-build', '--pull', 'never', '-d') +
     @('postgres', 'postgres-temporal', 'neo4j', 'qdrant'))
 Invoke-Compose (@('up', '--no-build', '--pull', 'never', '-d') +
     @('pgbouncer', 'temporal-schema', 'temporal-server', 'temporal-namespace'))
+Apply-Fresh-Business-Migrations
 Invoke-Compose (@('up', '--no-build', '--pull', 'never', '-d') +
     @('outbox-worker', 'temporal-worker'))
 

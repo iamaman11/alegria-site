@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bootstrap_local_runtime_baseline import fresh_schema_migrations
+
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "app" / "db" / "migrations"
 
@@ -24,6 +26,17 @@ def main() -> int:
     if not MIGRATIONS_DIR.exists():
         print("SEO_MIGRATION_PARITY: FAILED")
         print(f"- missing migrations directory `{MIGRATIONS_DIR.relative_to(ROOT)}`")
+        return 1
+
+    try:
+        post_baseline = fresh_schema_migrations()
+    except RuntimeError as exc:
+        print(f"SEO_MIGRATION_PARITY: FAILED\n- {exc}")
+        return 1
+    if (not post_baseline or
+            post_baseline[0].name != "20261125_0017_qdrant_mixed_owner_v2.sql" or
+            post_baseline[-1].name != sorted(MIGRATIONS_DIR.glob("*.sql"))[-1].name):
+        print("SEO_MIGRATION_PARITY: FAILED\n- fresh schema has no complete post-baseline migration chain")
         return 1
 
     combined = "\n".join(
