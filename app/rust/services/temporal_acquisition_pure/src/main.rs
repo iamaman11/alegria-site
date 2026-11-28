@@ -487,7 +487,10 @@ mod tests {
                 .unwrap();
             assert_eq!(entry["contract"], serde_json::to_value(&contract).unwrap());
             assert_eq!(entry["route"]["build_id"], build_id.as_str());
-            assert_eq!(entry["route"]["workflow_type"], OWNER_OPERATION_CHILD_TYPE_V1);
+            assert_eq!(
+                entry["route"]["workflow_type"],
+                OWNER_OPERATION_CHILD_TYPE_V1
+            );
             assert_eq!(entry["route"]["task_queue"], OWNER_QUEUE_V1);
             assert_eq!(
                 entry["route"]["contract_hash"],
@@ -497,9 +500,12 @@ mod tests {
                 entry["owner_schema"],
                 serde_json::to_value(&acquisition_owner_schemas().unwrap()[&operation]).unwrap()
             );
-            assert_eq!(entry["parameter_schema"], serde_json::json!({
-                "type": "object", "additionalProperties": false
-            }));
+            assert_eq!(
+                entry["parameter_schema"],
+                serde_json::json!({
+                    "type": "object", "additionalProperties": false
+                })
+            );
         }
     }
 }
