@@ -70,25 +70,22 @@ if ($acceptedRuns.Count -lt 1) {
     throw "CI NO-GO: ci not SUCCESS at $Commit"
 }
 $verifiedRunId = [string]$acceptedRuns[0].databaseId
-# A single CI workflow both proves the source and (when required) packages the
-# release artifact. The accepted image must come from its successful package
-# job, not from a manually dispatched deep or dependency-refresh run.
-if ($Service -eq 'temporal-worker') {
-    $imageRunId = $null
-    foreach ($run in $acceptedRuns) {
-        $jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs
-        Assert-Exit 'GitHub CI package job lookup'
-        $jobs = @((($jobsJson | ConvertFrom-Json).jobs) | Where-Object {
-            $_.name -eq 'package' -and $_.conclusion -eq 'success'
-        })
-        if ($jobs.Count -eq 1) {
-            $imageRunId = [string]$run.databaseId
-            break
-        }
+# A single CI workflow verifies source and packages both owners independently.
+$packageJob = if ($Service -eq 'temporal-worker') { 'package' } else { 'package-outbox' }
+$imageRunId = $null
+foreach ($run in $acceptedRuns) {
+    $jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs
+    Assert-Exit 'GitHub CI package job lookup'
+    $jobs = @((($jobsJson | ConvertFrom-Json).jobs) | Where-Object {
+        $_.name -eq $packageJob -and $_.conclusion -eq 'success'
+    })
+    if ($jobs.Count -eq 1) {
+        $imageRunId = [string]$run.databaseId
+        break
     }
-    if (-not $imageRunId) {
-        throw "Worker image NO-GO: no successful package job in ci for $Commit; dispatch ci / worker-image on main"
-    }
+}
+if (-not $imageRunId) {
+    throw "Worker image NO-GO: no successful $packageJob job in ci for $Commit; dispatch ci / worker-image on main"
 }
 Write-Output "CI=PASS COMMIT=$Commit"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
@@ -248,16 +245,15 @@ Assert-Exit 'rollback guard: verified image absent'
 if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
 $latestTag = $project + '-' + $Service + ':latest'
-if ($Service -eq 'temporal-worker') {
-    # No local compilation. Load only the source-specific successful release
-    # artifact, never a floating or unverified Docker image.
-    $artifactName = 'temporal-worker-image-' + $Commit
+# Neither Worker may compile on Windows: both require independently signed
+# source-specific GitHub Actions images from the accepted main workflow.
+    $artifactName = $Service + '-image-' + $Commit
     $artifactDir = Join-Path $downloads ($artifactName + '-' + [guid]::NewGuid().ToString('n'))
     New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
     try {
         & gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir
         Assert-Exit 'download source-verified Worker release image'
-        $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit
+        $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit -Service $Service
         # A checksum shipped beside the archive only detects corruption. This
         # Sigstore check additionally ties those bytes to GitHub's own signed
         # build provenance for the precise canonical workflow identity.
@@ -269,7 +265,7 @@ if ($Service -eq 'temporal-worker') {
         }
         & $docker image load --input $artifact.Archive | Out-Null
         Assert-Exit 'load verified CI Worker image'
-        $imageTag = 'alegria-seo-temporal:ci'
+        $imageTag = if ($Service -eq 'temporal-worker') { 'alegria-seo-temporal:ci' } else { 'alegria-outbox:ci' }
         $loadedId = ((& $docker image inspect $imageTag --format '{{.Id}}') | Out-String).Trim()
         Assert-Exit 'inspect loaded CI Worker image'
         if ($loadedId -cne $artifact.ImageId) {
@@ -287,17 +283,11 @@ if ($Service -eq 'temporal-worker') {
         # Previous image has already been secured under its rollback tag.
         & $docker image tag $artifact.ImageId $latestTag
         Assert-Exit 'tag exact CI Worker image for existing Compose project'
-        Write-Output "WORKER_IMAGE=RELEASE_ARTIFACT SOURCE_SHA=$Commit RUN_ID=$imageRunId IMAGE=$artifact.ImageId"
+        Write-Output "WORKER_IMAGE=RELEASE_ARTIFACT SERVICE=$Service SOURCE_SHA=$Commit RUN_ID=$imageRunId IMAGE=$artifact.ImageId"
     } finally {
         # Only the unique, newly-created download staging directory is removed.
         Remove-Item -LiteralPath $artifactDir -Force -Recurse
     }
-} else {
-    # Outbox retains the existing build path until it has its own certified CI
-    # image. Do not falsely claim a zero-build deployment for this service.
-    & $docker @newArgs build --quiet $Service
-    Assert-Exit "build $Service"
-}
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'inspect selected candidate image'
 # An operator-only commit can legitimately rebuild to the SAME immutable image.

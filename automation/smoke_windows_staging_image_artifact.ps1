@@ -41,6 +41,26 @@ try {
     Assert-Reject 'malformed checksum manifest' { Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $sha }
     Remove-Item -LiteralPath (Join-Path $temp 'temporal-worker.tar.gz.sha256') -Force
     Assert-Reject 'missing checksum manifest' { Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $sha }
+
+    # Outbox has an independent release archive, checksum, immutable ID and
+    # source identity; a Temporal archive cannot silently stand in for it.
+    $outboxArchive = Join-Path $temp 'outbox-worker.tar.gz'
+    [System.IO.File]::WriteAllBytes($outboxArchive, [byte[]](7, 8, 9, 10))
+    $outboxDigest = (Get-FileHash -LiteralPath $outboxArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath (Join-Path $temp 'outbox-worker.tar.gz.sha256') -Value "$outboxDigest  outbox-worker.tar.gz"
+    $outbox = Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $sha -Service 'outbox-worker'
+    if ($outbox.Service -cne 'outbox-worker' -or $outbox.Archive -cne $outboxArchive -or
+        $outbox.ImageId -cne $imageId) { throw 'Outbox artifact metadata failed' }
+    Assert-Reject 'outbox with different SHA' {
+        Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $otherSha -Service 'outbox-worker'
+    }
+    Assert-Reject 'outbox claims to be Temporal' {
+        Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $sha -Service 'temporal-worker'
+    }
+    [System.IO.File]::WriteAllBytes($outboxArchive, [byte[]](7, 8, 9, 11))
+    Assert-Reject 'tampered Outbox bytes' {
+        Read-Staging-Verified-Worker-Image -ArtifactDirectory $temp -ExpectedSha $sha -Service 'outbox-worker'
+    }
 } finally {
     Remove-Item -LiteralPath $temp -Force -Recurse
 }

@@ -68,8 +68,11 @@ recovery path can still rebuild **only the previously deployed source** if its
 image metadata has disappeared; its seven required runtime files must match
 the running container before it can become a rollback candidate.
 
-`outbox-worker` still builds locally; it needs its own independently verified
-CI image before the no-build claim can cover both workers. Each deployment
+`outbox-worker` now has a separate accepted-main `package-outbox` release owner
+inside the **same** `ci.yml`. Dispatch `worker-image` on `main` to build both
+Worker images independently on GitHub; each emits its own immutable archive,
+SHA256 manifest and signed GitHub provenance. The Windows installer refuses
+to compile either Worker when its release artifact is missing. Each deployment
 uses `docker compose ... up --no-build` for container recreation and verifies
 the selected image, source checkout, environment and runtime readback.
 **Never** run `docker compose down -v` during update/rollback.
