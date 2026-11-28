@@ -69,10 +69,20 @@ npm ci
 npm run check
 npm test
 npm run build
+npm run test:worker
 ```
 
 `npm run build` calls native `cf deploy --dry-run` and must not deploy. The
 Worker uses `cloudflare.config.ts` (no parallel Wrangler config).
+`test:worker` loads the bundled Worker in Workerd with a fixture Access
+context and checks tool discovery and calls over both stateless MCP wire
+formats. [Cloudflare Agents handler documentation](https://developers.cloudflare.com/agents/model-context-protocol/apis/handler-api/)
+
+The `temporal_acquisition` CI shard exercises the actual TypeScript signer
+and reply decoder over loopback HTTP against
+`temporal_pg_effects --operator-serve-signed-granted-single-v1`, backed by
+disposable PostgreSQL and Temporal. It uses a fixture subject and key and
+independently inspects the SQL grant and Temporal History.
 
 The default config has `workersDev: false`, no routes, no Access application
 variables and no admission binding. Deploying that default **does not expose
@@ -103,10 +113,10 @@ These are not interchangeable with a SQL connection string, raw token or
 public HTTP URL. The native operator's protected-file reader requires Unix
 `openat`/no-follow/0600 semantics: on a Windows machine it must run inside a
 Linux VM, WSL2 or equivalent Unix environment, not as a native Windows
-process. A real Tunnel/VPC Service, private ingress host and authorization
-application do not exist in this PR. Do not set the release switch just to see
-MCP tools. Workers VPC is currently a beta Cloudflare product; validate its
-availability and TLS routing on the chosen account before release.
+process. The technical hostname has an existing Access application with
+Managed OAuth enabled. The pilot Worker deployment, private Tunnel/VPC
+binding to the native ingress and live connection still need release
+verification. Workers VPC is currently in beta. [Cloudflare VPC Service documentation](https://developers.cloudflare.com/workers-vpc/configuration/vpc-services/)
 
 ## Mandatory acceptance before user launch
 

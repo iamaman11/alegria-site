@@ -183,6 +183,100 @@ enum PureInputPolicy {
     StrictV4,
 }
 
+// Keep legacy replay decoding and new strict admission on the same typed path.
+fn decode_operation_input<O: PureExtractionOperation>(
+    bytes: &[u8],
+    operation: &OperationRef,
+    artifact: &ArtifactId,
+    policy: PureInputPolicy,
+) -> Result<O::Input, OperationRunError> {
+    let invalid = |reason: String| OperationRunError::InvalidInput {
+        operation: operation.clone(),
+        artifact: artifact.clone(),
+        reason,
+    };
+    let authored = if policy == PureInputPolicy::StrictV4 {
+        Some(
+            crate::typed_json::parse_unique_json_bytes(bytes)
+                .map_err(|error| invalid(format!("ambiguous JSON input: {error}")))?,
+        )
+    } else {
+        None
+    };
+    let typed: O::Input =
+        serde_json::from_slice(bytes).map_err(|error| invalid(error.to_string()))?;
+    if let Some(authored) = authored {
+        let normalized = crate::typed_json::normalized_wire_json_value(&typed)
+            .map_err(|error| invalid(format!("typed JSON normalization failed: {error}")))?;
+        if !crate::typed_json::preserves_authored_fields(&authored, &normalized) {
+            return Err(invalid(
+                "typed input discarded or altered an authored JSON field".into(),
+            ));
+        }
+    }
+    Ok(typed)
+}
+
+/// Strictly validate a semantic owner's input without executing the operation.
+pub fn validate_semantic_operation_input(
+    operation: &OperationRef,
+    payload: &[u8],
+) -> Result<(), OperationRunError> {
+    macro_rules! check {
+        ($($op:ty),+ $(,)?) => { $(
+            if operation == &<$op>::contract().reference {
+                return decode_operation_input::<$op>(payload, operation, &ArtifactId::from("input"), PureInputPolicy::StrictV4).map(|_| ());
+            }
+        )+ };
+    }
+    check!(
+        LayerRoute,
+        EntitySpans,
+        CanonicalizeMentions,
+        EditorialTopics,
+        OperationalEntities
+    );
+    Err(OperationRunError::MissingExecutor(operation.clone()))
+}
+
+/// Execute one installed semantic operation with the strict owner DTO codec.
+/// The caller is responsible for authorizing the operation and its envelope.
+pub fn execute_semantic_operation(
+    operation: &OperationRef,
+    payload: &[u8],
+) -> Result<Vec<u8>, OperationRunError> {
+    let registry = semantic_extraction_registry()?;
+    let handler = registry
+        .handlers
+        .get(operation)
+        .ok_or_else(|| OperationRunError::MissingExecutor(operation.clone()))?;
+    let contract = registry
+        .catalog
+        .contract(operation)
+        .ok_or_else(|| OperationRunError::MissingExecutor(operation.clone()))?;
+    let input_port = contract
+        .inputs
+        .keys()
+        .next()
+        .expect("registered pure input")
+        .clone();
+    let output_port = contract
+        .outputs
+        .keys()
+        .next()
+        .expect("registered pure output");
+    let mut outputs = handler(&BTreeMap::from([(
+        input_port,
+        (ArtifactId::from("input"), payload.to_vec()),
+    )]))?;
+    outputs
+        .remove(output_port)
+        .ok_or_else(|| OperationRunError::InvalidOutputPort {
+            operation: operation.clone(),
+            port: output_port.clone(),
+        })
+}
+
 impl Default for OperationRegistry {
     fn default() -> Self {
         Self {
@@ -226,45 +320,8 @@ impl OperationRegistry {
                         artifact: ArtifactId::from("missing-input"),
                         reason: "required input port was not bound".to_owned(),
                     })?;
-            // V3 was deployed with plain Serde decoding; keep that behavior
-            // for historical replay. Only V4 refuses raw duplicate keys and
-            // caller fields lost through a concrete owner's typed decoder.
-            let authored = if input_policy == PureInputPolicy::StrictV4 {
-                Some(
-                    crate::typed_json::parse_unique_json_bytes(bytes).map_err(|error| {
-                        OperationRunError::InvalidInput {
-                            operation: error_reference.clone(),
-                            artifact: artifact.clone(),
-                            reason: format!("ambiguous JSON input: {error}"),
-                        }
-                    })?,
-                )
-            } else {
-                None
-            };
-            let typed: O::Input =
-                serde_json::from_slice(bytes).map_err(|error| OperationRunError::InvalidInput {
-                    operation: error_reference.clone(),
-                    artifact: artifact.clone(),
-                    reason: error.to_string(),
-                })?;
-            if let Some(authored) = authored {
-                let normalized =
-                    crate::typed_json::normalized_wire_json_value(&typed).map_err(|error| {
-                        OperationRunError::InvalidInput {
-                            operation: error_reference.clone(),
-                            artifact: artifact.clone(),
-                            reason: format!("typed JSON normalization failed: {error}"),
-                        }
-                    })?;
-                if !crate::typed_json::preserves_authored_fields(&authored, &normalized) {
-                    return Err(OperationRunError::InvalidInput {
-                        operation: error_reference.clone(),
-                        artifact: artifact.clone(),
-                        reason: "typed input discarded or altered an authored JSON field".into(),
-                    });
-                }
-            }
+            let typed =
+                decode_operation_input::<O>(bytes, &error_reference, artifact, input_policy)?;
             let output: O::Output = O::evaluate(&typed);
             let encoded =
                 serde_json::to_vec(&output).map_err(|error| OperationRunError::InvalidOutput {

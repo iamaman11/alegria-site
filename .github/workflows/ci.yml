@@ -15,6 +15,7 @@ on:
         options:
           - comprehensive
           - worker-image
+          - site-architect-images
           - dependency-refresh
           - physical-study
       expected_source_sha:
@@ -359,12 +360,12 @@ jobs:
       # as real executables in this already-required compiler job. Transfer
       # their exact SHA-bound bytes into the native Temporal E2E runner; no
       # second owner compilation in the E2E job.
-      - name: Compile independent DataForSEO and three pure owner groups with source issuers
+      - name: Compile independent DataForSEO and pure owner groups with source issuers
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
         working-directory: app/rust
-        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
+        run: cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p temporal_semantic_pure -p acquisition_source_issuer -p one_step_request_issuer --bins
 
       # Reuse the independently compiled owner as an exact-source artifact.
       # The pure Temporal/PG binary job must never recompile or transitively
@@ -423,6 +424,20 @@ jobs:
         with:
           name: rust-e2e-truth-pure-${{ github.sha }}
           path: automation/reports/rust-ci-artifacts/truth_pure/
+          if-no-files-found: error
+
+      - name: Pack independent semantic owner for native E2E
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: |
+          python3 automation/rust_ci_artifacts.py pack --kind semantic_pure --source-sha "$GITHUB_SHA" \
+            --directory automation/reports/rust-ci-artifacts/semantic_pure
+
+      - name: Publish independently compiled semantic E2E artifact
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/semantic_pure/
           if-no-files-found: error
 
       # One extra typed issuer, built in the existing compiler job, never
@@ -1422,6 +1437,10 @@ jobs:
         with:
           name: rust-e2e-qdrant-temporal-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/qdrant_temporal_harness
+      - uses: actions/setup-node@v7
+        if: matrix.shard == 'temporal_acquisition'
+        with:
+          node-version: "26"
       - uses: actions/download-artifact@v7
         if: contains(fromJSON('["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]'), matrix.shard)
         with:
@@ -1437,7 +1456,7 @@ jobs:
           name: rust-e2e-dataforseo-effects-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/dataforseo_effects
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'temporal_acquisition'
+        if: contains(fromJSON('["temporal_acquisition","temporal_semantic"]'), matrix.shard)
         with:
           name: rust-e2e-acquisition-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/acquisition_pure
@@ -1456,6 +1475,11 @@ jobs:
         with:
           name: rust-e2e-truth-pure-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/truth_pure
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'temporal_semantic'
+        with:
+          name: rust-e2e-semantic-pure-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/semantic_pure
       - name: Verify actual parent, child and native three-provider E2E binary from one SHA
         run: |
           set -euo pipefail
@@ -1471,6 +1495,7 @@ jobs:
             temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure) ;;
             temporal_seo_steps) kinds=(v3 seo_steps_pure) ;;
             temporal_truth) kinds=(v3 truth_pure) ;;
+            temporal_semantic) kinds=(v3 acquisition_pure semantic_pure) ;;
             *) echo "Unknown mandatory Temporal shard" >&2; exit 1 ;;
           esac
           for kind in "${kinds[@]}"; do
@@ -1954,6 +1979,8 @@ jobs:
           npm test --prefix infra/cloudflare/site-architect-mcp
       - name: Build remote MCP resource Worker without deployment
         run: npm run build --prefix infra/cloudflare/site-architect-mcp
+      - name: Verify both MCP transports in the bundled Worker
+        run: npm run test:worker --prefix infra/cloudflare/site-architect-mcp
       - name: Offline Cloudflare publication boundary tests
         run: python3 automation/smoke_seo_cloudflare_deploy.py
       - name: Actual cf CLI build and asset preservation (no deployment)
@@ -2196,10 +2223,11 @@ jobs:
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1
 
   gate:
     name: CI
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation) && github.ref == 'refs/heads/main'))
     needs:
       - impact
       - architecture-and-rust
@@ -2290,7 +2318,7 @@ jobs:
         run: python3 automation/report_ci_critical_path.py
 
       - name: Verify main merge comes from a fully successful PR CI
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["worker-image","site-architect-images"]'), inputs.operation))
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO_NAME: ${{ github.repository }}
@@ -2837,6 +2865,133 @@ jobs:
         with:
           name: temporal-worker-image-${{ env.SOURCE_SHA }}
           path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # Explicit, accepted-main-only release for the five independent native
+  # siteArchitect owners. PRs validate sources but never publish installable
+  # Docker images; Windows only verifies and loads this attested archive.
+  package-site-architect:
+    needs: gate
+    if: >-
+      ${{ !cancelled() && needs.gate.result == 'success' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.operation == 'site-architect-images' &&
+      github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Refuse an unaccepted or ambiguous image source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build separate siteArchitect owner images in GitHub only
+        shell: bash
+        run: |
+          set -euo pipefail
+          owners=(pg orchestrator acquisition request-issuer source-issuer)
+          for owner in "${owners[@]}"; do
+            tag="alegria-site-architect-${owner}:${SOURCE_SHA}"
+            # All targets share one Rust builder in this runner. Export its
+            # cache only once, after the final target, not five times.
+            export_cache=()
+            if [[ "$owner" == source-issuer ]]; then
+              export_cache=(--cache-to 'type=gha,scope=site-architect-native,mode=max,compression=zstd,compression-level=1')
+            fi
+            docker buildx build --load --platform linux/amd64 \
+              --file infra/site_architect/Dockerfile.images \
+              --target "$owner" --tag "$tag" \
+              --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+              --label "by.alegria.source-head-sha=$SOURCE_SHA" \
+              --cache-from 'type=gha,scope=site-architect-native' \
+              "${export_cache[@]}" .
+            test "$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' "$tag")" = "$SOURCE_SHA"
+          done
+
+      - name: Smoke-test all five immutable runtime entrypoints without network access
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in \
+            pg:temporal_pg_effects \
+            orchestrator:temporal_orchestrator \
+            acquisition:temporal_acquisition_pure \
+            request-issuer:one_step_request_issuer \
+            source-issuer:acquisition_source_issuer; do
+            owner="${pair%%:*}"
+            binary="${pair#*:}"
+            entrypoint="$(docker image inspect --format '{{json .Config.Entrypoint}}' "alegria-site-architect-${owner}:${SOURCE_SHA}")"
+            test "$entrypoint" = "[\"/usr/local/bin/${binary}\"]"
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --entrypoint /bin/sh "alegria-site-architect-${owner}:${SOURCE_SHA}" \
+              -ec "test -x /usr/local/bin/$binary"
+          done
+
+      - name: Create exact-SHA multi-image receipt and archive
+        shell: bash
+        env:
+          ARTIFACT_DIR: ${{ runner.temp }}/site-architect-image-artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          source = os.environ['SOURCE_SHA']
+          root = Path(os.environ['ARTIFACT_DIR'])
+          owners = ('pg', 'orchestrator', 'acquisition', 'request-issuer', 'source-issuer')
+          images = []
+          for owner in owners:
+              tag = f'alegria-site-architect-{owner}:{source}'
+              image_id = subprocess.check_output(
+                  ['docker', 'image', 'inspect', '--format', '{{.Id}}', tag], text=True,
+              ).strip()
+              if not image_id.startswith('sha256:') or len(image_id) != 71:
+                  raise SystemExit(f'Invalid image ID for {owner}')
+              images.append({'owner': owner, 'tag': tag, 'image_id': image_id})
+          (root / 'manifest.json').write_text(json.dumps({
+              'schema_revision': 1, 'source_sha': source, 'images': images,
+          }, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+          tags=()
+          for owner in pg orchestrator acquisition request-issuer source-issuer; do
+            tags+=("alegria-site-architect-${owner}:${SOURCE_SHA}")
+          done
+          docker save "${tags[@]}" | gzip -1 > "$ARTIFACT_DIR/site-architect-images.tar.gz"
+          (cd "$ARTIFACT_DIR" && sha256sum site-architect-images.tar.gz > site-architect-images.tar.gz.sha256)
+
+      - name: Attest exact image archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/site-architect-image-artifact/site-architect-images.tar.gz
+
+      - name: Upload attested siteArchitect runtime images
+        uses: actions/upload-artifact@v7
+        with:
+          name: site-architect-images-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/site-architect-image-artifact/
           if-no-files-found: error
           compression-level: 0
           retention-days: 30

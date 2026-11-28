@@ -16,6 +16,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "source_section_contracts",
  "url",
 ]
 
@@ -2350,6 +2351,7 @@ dependencies = [
  "postgres_store",
  "projection_contracts",
  "qdrant_contracts",
+ "seo_domain",
  "seo_steps",
  "serde",
  "serde_json",
@@ -4754,6 +4756,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "source_section_contracts",
 ]
 
 [[package]]
@@ -5087,6 +5090,15 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "source_section_contracts"
+version = "0.1.0"
+dependencies = [
+ "operation_protocol",
+ "schemars 1.2.3",
+ "serde",
 ]
 
 [[package]]
@@ -5582,6 +5594,27 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "temporal_semantic_pure"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "operation_protocol",
+ "prost",
+ "seo_application",
+ "serde",
+ "serde_json",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "trusted_owner_catalog",
+ "url",
 ]
 
 [[package]]

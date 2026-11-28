@@ -77,6 +77,7 @@ test("private handoff carries signed verified subject and opaque ID; never a bea
     calls++;
     assert.equal(request.url, "http://admission.internal/v1/one-step");
     assert.equal(request.method, "POST");
+    assert.equal(request.redirect, "error");
     assert.equal(request.headers.has("authorization"), false);
     const body = await request.json() as SignedOneStepAdmissionV1;
     assert.equal(body.schema_revision, 1);
@@ -88,10 +89,10 @@ test("private handoff carries signed verified subject and opaque ID; never a bea
     assert.match(body.nonce, /^[0-9a-f-]{36}$/);
     assert.equal(body.expires_at_unix_seconds - body.issued_at_unix_seconds, 30);
     assert.deepEqual(Object.keys(body), ["schema_revision", "request_id", "issuer", "audience", "subject", "scope", "issued_at_unix_seconds", "expires_at_unix_seconds", "nonce", "signature_hex"]);
-    return Response.json({ schema_revision: 1, request_id: requestId, status: "request_reserved", code: "one_use_reserved" });
+    return Response.json({ schema_revision: 1, request_id: requestId, status: "request_reserved", code: "one_use_reserved_execution_unverified" });
   } };
   assert.deepEqual(await admitOneStep(service, subject, requestId, signingKeyHex), {
-    status: "request_reserved", code: "one_use_reserved", request_id: requestId,
+    status: "request_reserved", code: "one_use_reserved_execution_unverified", request_id: requestId,
   });
   assert.equal(calls, 1);
 });
@@ -100,6 +101,7 @@ test("transport failures, non-2xx and malformed replies never become success or 
   const cases: AdmissionService[] = [
     { fetch: async () => { throw Error("connection reset after grant reservation"); } },
     { fetch: async () => Response.json({ code: "forbidden" }, { status: 403 }) },
+    { fetch: async () => Response.redirect("https://other.example.org/v1/one-step") },
     { fetch: async () => Response.json({ schema_revision: 1, request_id: requestId, status: "started", code: "done" }) },
     { fetch: async () => Response.json({ schema_revision: 1, request_id: "different", status: "request_reserved", code: "wrong" }) },
     { fetch: async () => Response.json({ schema_revision: 1, request_id: requestId, status: "request_reserved", code: "ok", provider_token: "secret" }) },
@@ -112,6 +114,20 @@ test("transport failures, non-2xx and malformed replies never become success or 
 });
 
 test("sealed reply never confuses an accepted reservation with Temporal History", () => {
-  assert.equal(parseAdmissionReply({schema_revision:1,request_id:requestId,status:"request_reserved",code:"reserved"},requestId).status,"request_reserved");
+  assert.equal(parseAdmissionReply({schema_revision:1,request_id:requestId,status:"request_reserved",code:"one_use_reserved_execution_unverified"},requestId).status,"request_reserved");
   assert.equal(parseAdmissionReply({schema_revision:1,request_id:requestId,status:"complete",code:"success"},requestId).status,"start_outcome_unknown");
+});
+
+test("only recognized admission statuses and matching codes reach the MCP client", () => {
+  const wire = { schema_revision: 1, request_id: requestId };
+  assert.equal(
+    parseAdmissionReply({ ...wire, status: "launch_blocked", code: "signed_remote_admission_not_verified" }, requestId).status,
+    "launch_blocked",
+  );
+  for (const code of ["signed_remote_admission_not_verified", signingKeyHex]) {
+    assert.deepEqual(
+      parseAdmissionReply({ ...wire, status: "request_reserved", code }, requestId),
+      { status: "start_outcome_unknown", code: "unattested_admission_reply", request_id: requestId },
+    );
+  }
 });

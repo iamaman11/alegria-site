@@ -54,7 +54,9 @@ export default {
     // Request-local factory: no mutable global identity and no second OAuth
     // server. Access app policy grants only this single mutating MCP tool;
     // the native operator still requires its own signed one-use SQL grant.
-    const mcp = createMcpHandler(() => createServer(subject, runtimeEnv), { legacy: "reject" });
+    // Both MCP wire generations pass through the Access check above on every
+    // request. The older transport also uses the same request-local factory.
+    const mcp = createMcpHandler(() => createServer(subject, runtimeEnv), { legacy: "stateless" });
     return mcp(request, runtimeEnv, ctx);
   },
 };

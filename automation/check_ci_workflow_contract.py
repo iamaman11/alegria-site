@@ -78,7 +78,8 @@ def check() -> None:
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
     assert "  workflow_dispatch:\n" in workflow
-    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))\n" in workflow
+    # Only accepted-main manual releases may join the standard CI gate.
+    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && contains(fromJSON('[\"worker-image\",\"site-architect-images\"]'), inputs.operation) && github.ref == 'refs/heads/main'))\n" in workflow
     assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
     assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
@@ -180,6 +181,23 @@ def check() -> None:
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
+    # siteArchitect images are built only by Actions from accepted main;
+    # the Windows operator can load attested images but cannot build them.
+    site_architect = release.split("  package-site-architect:\n", 1)[1]
+    assert "    needs: gate\n" in site_architect
+    assert "needs.gate.result == 'success'" in site_architect
+    assert "github.event_name == 'workflow_dispatch'" in site_architect
+    assert "inputs.operation == 'site-architect-images'" in site_architect
+    assert "github.ref == 'refs/heads/main'" in site_architect
+    assert "      id-token: write\n      attestations: write\n      artifact-metadata: write\n" in site_architect
+    assert "docker buildx build --load --platform linux/amd64" in site_architect
+    assert "uses: actions/attest@v4" in site_architect
+    assert "site-architect-images-${{ env.SOURCE_SHA }}" in site_architect
+    assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_site_architect_image_artifact.ps1" in workflow
+    windows_installer = (ROOT / "infra/local/windows_site_architect_images.ps1").read_text(encoding="utf-8")
+    assert "docker load" in windows_installer
+    installer_commands = "\n".join(line for line in windows_installer.splitlines() if not line.lstrip().startswith("#"))
+    assert not re.search(r"\bdocker\s+(?:build|compose\s+build)\b", installer_commands)
     assert "report['worker_release_decision']" in release
     assert "print('WORKER_IMAGE_REASON=' + decision['reason'])" in release
     selection_script = textwrap.dedent(
@@ -453,6 +471,12 @@ def check() -> None:
     assert "needs.rust-e2e-qdrant-effects-binaries.result == 'success'" in qdrant_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in qdrant_runner
     assert "rust-e2e-legacy-binaries" not in qdrant_runner
+    assert (
+        '- uses: actions/setup-node@v7\n'
+        "        if: matrix.shard == 'temporal_acquisition'\n"
+        '        with:\n'
+        '          node-version: "26"'
+    ) in qdrant_runner
     legacy_qdrant_runner = runner_blocks["rust-qdrant-temporal-legacy-e2e"]
     assert (
         "needs: [impact, architecture-and-rust, rust-e2e-qdrant-temporal-harness, "
@@ -468,17 +492,18 @@ def check() -> None:
     mandatory_shards = (
         "temporal_mixed_v6", "temporal_mixed_v7",
         "temporal_mixed_v2", "temporal_dataforseo", "temporal_acquisition",
-        "temporal_seo_steps", "temporal_truth",
+        "temporal_seo_steps", "temporal_truth", "temporal_semantic",
     )
     assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"] == mandatory_shards
     assert E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-legacy-e2e"] == ("temporal_qdrant",)
     download_gates = {
         "qdrant-effects": 'contains(fromJSON(\'["temporal_mixed_v6","temporal_mixed_v7","temporal_mixed_v2"]\'), matrix.shard)',
         "dataforseo-effects": "matrix.shard == 'temporal_dataforseo'",
-        "acquisition-pure": "matrix.shard == 'temporal_acquisition'",
+        "acquisition-pure": 'contains(fromJSON(\'["temporal_acquisition","temporal_semantic"]\'), matrix.shard)',
         "one-step-request-issuer": "matrix.shard == 'temporal_acquisition'",
         "seo-steps-pure": 'contains(fromJSON(\'["temporal_seo_steps","temporal_acquisition"]\'), matrix.shard)',
         "truth-pure": 'contains(fromJSON(\'["temporal_truth","temporal_acquisition"]\'), matrix.shard)',
+        "semantic-pure": "matrix.shard == 'temporal_semantic'",
     }
     assert (
         "- uses: actions/download-artifact@v7\n"
@@ -495,7 +520,7 @@ def check() -> None:
     # The separately compiled DataForSEO provider artifact is published once
     # from an already-required parallel owner. No second Cargo pass may be
     # appended to the generic parent/PG binary chain on the slowest PR path.
-    issuer_build = 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p acquisition_source_issuer -p one_step_request_issuer --bins'
+    issuer_build = 'cargo build --locked -p temporal_dataforseo -p temporal_acquisition_pure -p temporal_seo_steps_pure -p temporal_truth_pure -p temporal_semantic_pure -p acquisition_source_issuer -p one_step_request_issuer --bins'
     assert issuer_build in architecture
     assert '--kind dataforseo_effects --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-dataforseo-effects-${{ github.sha }}' in architecture
@@ -505,7 +530,8 @@ def check() -> None:
     assert 'needs.architecture-and-rust.result == \'success\'' in qdrant_runner
     assert '--kind acquisition_pure --source-sha "$GITHUB_SHA"' in architecture
     assert 'name: rust-e2e-acquisition-pure-${{ github.sha }}' in architecture
-    for kind, artifact in (("seo_steps_pure", "seo-steps-pure"), ("truth_pure", "truth-pure")):
+    for kind, artifact in (("seo_steps_pure", "seo-steps-pure"), ("truth_pure", "truth-pure"),
+                           ("semantic_pure", "semantic-pure")):
         assert f'--kind {kind} --source-sha "$GITHUB_SHA"' in architecture
         assert f'name: rust-e2e-{artifact}-${{{{ github.sha }}}}' in architecture
     # Separate SQL identity boundary, separately compiled and digest-checked;
@@ -518,6 +544,7 @@ def check() -> None:
         "temporal_acquisition) kinds=(v3 acquisition_pure one_step_request_issuer seo_steps_pure truth_pure)",
         "temporal_seo_steps) kinds=(v3 seo_steps_pure)",
         "temporal_truth) kinds=(v3 truth_pure)",
+        "temporal_semantic) kinds=(v3 acquisition_pure semantic_pure)",
     )
     for entry in expected_installs:
         assert entry in qdrant_runner, entry
@@ -545,7 +572,7 @@ def check() -> None:
     assert "E2E_RUNNER_PARTITIONS" in workflow
     for name in ("graph", "qdrant", "qdrant_temporal", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
         assert f"{name}_e2e_shards" in workflow
-    assert len(E2E_ARCH_SHARDS) == 14 and len(E2E_VERIFY_SHARDS) == 9
+    assert len(E2E_ARCH_SHARDS) == 15 and len(E2E_VERIFY_SHARDS) == 9
     assert set(E2E_PG_SHARDS) == {"pg_temporal", "verify_d"}
     assert set(E2E_OUTBOX_SHARDS) == {"outbox"}
     assert set().union(*(set(shards) for shards in E2E_RUNNER_PARTITIONS.values())) == set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)

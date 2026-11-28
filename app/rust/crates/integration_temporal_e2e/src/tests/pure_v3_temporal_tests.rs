@@ -441,40 +441,59 @@ async fn pure_v3_temporal_new_queue_provider_free_replay_and_restart() {
     let mut pinned_worker =
         spawn_pure_orchestrator(&temporal, &source_sha, PureDagMode::SchemaPinnedV5);
     assert!(pinned_worker.child.try_wait().unwrap().is_none());
-    let pinned_run_id = Uuid::new_v4().to_string();
-    let pinned = schema_pinned_pure_v5_fixture("entity-to-canonical", &pinned_run_id);
-    let pinned_handle = client
-        .start_workflow(
-            UntypedWorkflow::new("AlegriaPureOperationDagV3Workflow"),
-            RawValue::from_value(&pinned, &converter),
-            WorkflowStartOptions::new("alegria-pure-dag-v5", pinned_run_id.clone()).build(),
+    let mut standalone_artifacts = None;
+    for case in ["entity-only", "entity-to-canonical"] {
+        let pinned_run_id = Uuid::new_v4().to_string();
+        let pinned = schema_pinned_pure_v5_fixture(case, &pinned_run_id);
+        let pinned_handle = client
+            .start_workflow(
+                UntypedWorkflow::new("AlegriaPureOperationDagV3Workflow"),
+                RawValue::from_value(&pinned, &converter),
+                WorkflowStartOptions::new("alegria-pure-dag-v5", pinned_run_id.clone()).build(),
+            )
+            .await
+            .expect("submit V5 with real owner generated structural pins");
+        let completed = timeout(
+            Duration::from_secs(45),
+            pinned_handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("submit V5 with real owner generated structural pins");
-    let completed = timeout(
-        Duration::from_secs(45),
-        pinned_handle.get_result(WorkflowGetResultOptions::default()),
-    )
-    .await
-    .expect("schema-pinned V5 DAG must finish")
-    .expect("correct installed owner descriptors must be executable");
-    let actual: seo_application::operation_adapter::PureDagReceipt =
-        completed.to_value(&converter);
-    let run: seo_application::operation_adapter::PureDagRun =
-        serde_json::from_value(pinned["run"].clone()).unwrap();
-    let expected = seo_application::operation_adapter::execute_pure_dag(&pinned_run_id, &run)
-        .expect("same exact-source V5 pure DAG reference must succeed");
-    assert_eq!(
-        serde_json::to_value(actual).unwrap(),
-        serde_json::to_value(expected).unwrap()
-    );
-    let accepted_history = pinned_handle
-        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
-        .to_json()
-        .await
-        .expect("fetch V5 server History with immutable schema pins");
-    assert!(scheduled_temporal_activities(&accepted_history).is_empty());
-    assert_pure_history_replays(&accepted_history, PureDagMode::SchemaPinnedV5);
+        .expect("schema-pinned V5 DAG must finish")
+        .expect("correct installed owner descriptors must be executable");
+        let actual: seo_application::operation_adapter::PureDagReceipt =
+            completed.to_value(&converter);
+        let run: seo_application::operation_adapter::PureDagRun =
+            serde_json::from_value(pinned["run"].clone()).unwrap();
+        let expected = seo_application::operation_adapter::execute_pure_dag(&pinned_run_id, &run)
+            .expect("same exact-source V5 pure DAG reference must succeed");
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let artifacts = ["entities-in", "entity-out"].map(|id| {
+            actual.artifacts[&operation_protocol::ArtifactId::from(id)]
+                .payload
+                .clone()
+        });
+        if let Some(standalone) = &standalone_artifacts {
+            assert_eq!(
+                &artifacts, standalone,
+                "the same source must produce the same spans in a larger DAG"
+            );
+            assert!(actual.artifacts.contains_key(&"canonical-out".into()));
+        } else {
+            assert_eq!(actual.order.len(), 1);
+            standalone_artifacts = Some(artifacts);
+        }
+        let accepted_history = pinned_handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json()
+            .await
+            .expect("fetch V5 server History with immutable schema pins");
+        assert!(scheduled_temporal_activities(&accepted_history).is_empty());
+        assert_pure_history_replays(&accepted_history, PureDagMode::SchemaPinnedV5);
+        eprintln!("CI_PURE_V5_DAG=PASS case={case}");
+    }
 
     // Native Temporal rejects every spoofed snapshot before an operation
     // runs. Each failed server History is also replayed by the official SDK.
@@ -544,6 +563,6 @@ async fn pure_v3_temporal_new_queue_provider_free_replay_and_restart() {
         assert_pure_history_replays(&history, PureDagMode::SchemaPinnedV5);
     }
     drop(pinned_worker);
-    eprintln!("CI_PURE_V5_OWNER_GENERATED_SCHEMA_PIN_E2E=PASS accepted=1 rejected=4 replayed=5");
+    eprintln!("CI_PURE_V5_OWNER_GENERATED_SCHEMA_PIN_E2E=PASS accepted=2 rejected=4 replayed=6");
     eprintln!("CI_PURE_V3_TEMPORAL_E2E=PASS");
 }

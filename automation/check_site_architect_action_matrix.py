@@ -16,7 +16,7 @@ from pathlib import Path
 import audit_operation_inventory as ledger
 
 ROOT = Path(__file__).resolve().parent.parent
-MATRIX = ROOT / "docs/site_architect_action_matrix_v1.json"
+MATRIX = ROOT / "app/rust/crates/seo_application/src/site_architect/site_architect_action_matrix_v1.json"
 ACTION_ID = re.compile(r"^[a-z][a-z0-9]*(?:[._][a-z][a-z0-9_]*)+@[1-9][0-9]*$")
 DECISIONS = {"KEEP": 29, "SPLIT": 12, "INTERNAL": 11}
 RESOLVED_LEGACY_PHASES = {
@@ -109,6 +109,9 @@ def validate(
         declared = {}
     if set(declared) - set(referenced):
         errors.append(f"source contracts not selected: {sorted(set(declared)-set(referenced))}")
+    proposed = manifest.get("proposed_ports")
+    if not isinstance(proposed, dict) or set(proposed) != set(referenced) - set(declared):
+        errors.append("each action awaiting its Rust contract needs its own proposed ports")
     for operation_id, source in declared.items():
         if not isinstance(source, str):
             errors.append(f"{operation_id}: declaration source is not a path")

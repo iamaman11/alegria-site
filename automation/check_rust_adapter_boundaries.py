@@ -55,6 +55,7 @@ TEMPORAL_DATAFORSEO_SRC = RUST_ROOT / "services" / "temporal_dataforseo" / "src"
 TEMPORAL_ACQUISITION_PURE_SRC = RUST_ROOT / "services" / "temporal_acquisition_pure" / "src"
 TEMPORAL_SEO_STEPS_PURE_SRC = RUST_ROOT / "services" / "temporal_seo_steps_pure" / "src"
 TEMPORAL_TRUTH_PURE_SRC = RUST_ROOT / "services" / "temporal_truth_pure" / "src"
+TEMPORAL_SEMANTIC_PURE_SRC = RUST_ROOT / "services" / "temporal_semantic_pure" / "src"
 TEMPORAL_WEB_FETCH_SRC = RUST_ROOT / "services" / "temporal_web_fetch" / "src"
 ACQUISITION_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_acquisition_pure" / "Cargo.toml").resolve()
 ACQUISITION_PURE_OWNER_SOURCE_FILES = frozenset({
@@ -65,10 +66,13 @@ ACQUISITION_PURE_OWNER_TEMPORAL_SDKS = frozenset({
 })
 SEO_STEPS_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_seo_steps_pure" / "Cargo.toml").resolve()
 TRUTH_PURE_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_truth_pure" / "Cargo.toml").resolve()
+SEMANTIC_PURE_OWNER_MANIFEST = TEMPORAL_SEMANTIC_PURE_SRC.parent / "Cargo.toml"
+SEMANTIC_HISTORY_SOURCE = (TEMPORAL_SEMANTIC_PURE_SRC / "produced_history.rs").resolve()
 WEB_FETCH_OWNER_MANIFEST = (RUST_ROOT / "services" / "temporal_web_fetch" / "Cargo.toml").resolve()
 PURE_OWNER_RUNTIME_SOURCE_FILES = frozenset({
     (TEMPORAL_SEO_STEPS_PURE_SRC / "main.rs").resolve(),
     (TEMPORAL_TRUTH_PURE_SRC / "main.rs").resolve(),
+    (TEMPORAL_SEMANTIC_PURE_SRC / "main.rs").resolve(),
 })
 WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES = frozenset({
     (TEMPORAL_WEB_FETCH_SRC / "transport.rs").resolve(),
@@ -191,6 +195,7 @@ MANIFEST_DEP_EXCEPTIONS = {
     ACQUISITION_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     SEO_STEPS_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     TRUTH_PURE_OWNER_MANIFEST: ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
+    SEMANTIC_PURE_OWNER_MANIFEST.resolve(): ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     WEB_FETCH_OWNER_MANIFEST: frozenset({"reqwest"}),
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
@@ -523,6 +528,9 @@ def new_site_architect_owner_sdk_allowed(file_path: Path, pattern: re.Pattern[st
         file_path, pattern, exact_files=PURE_OWNER_RUNTIME_SOURCE_FILES,
         sdk_set=ACQUISITION_PURE_OWNER_TEMPORAL_SDKS,
     ) or exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=frozenset({SEMANTIC_HISTORY_SOURCE}),
+        sdk_set=frozenset({"temporalio-client", "temporalio-common"}),
+    ) or exact_temporal_sdk_source_allowed(
         file_path, pattern, exact_files=WEB_FETCH_OWNER_TRANSPORT_SOURCE_FILES,
         sdk_set=frozenset({"reqwest"}),
     )
@@ -686,6 +694,11 @@ def main() -> int:
                 violations.append(
                     f"{manifest.parent.name} pure owner links effect/parent `{dependency}`"
                 )
+        semantic_closure, _ = workspace_dependency_closure(SEMANTIC_PURE_OWNER_MANIFEST)
+        for dependency in sorted(semantic_closure & (
+            DAG_PROVIDER_CRATES | {"temporal_worker", "temporal_gateway", "temporal_orchestrator"}
+        )):
+            violations.append(f"semantic pure owner links effect/parent `{dependency}`")
         web_closure, _ = workspace_dependency_closure(WEB_FETCH_OWNER_MANIFEST)
         for dependency in sorted(web_closure & (
             DAG_PROVIDER_CRATES | NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME

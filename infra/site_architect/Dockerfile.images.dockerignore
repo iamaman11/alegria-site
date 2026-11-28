@@ -1,0 +1,11 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__/
+**/*.pyc
+**/target/
+**/.mypy_cache/
+**/.ruff_cache/
+docs/
+automation/reports/
+app/rust/crates/integration_harness/src/tests/

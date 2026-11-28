@@ -17,12 +17,13 @@ e2e = [
   "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
   "dep:trusted_owner_catalog", "dep:dataforseo_contracts",
   "dep:acquisition",
-  "dep:seo_steps",
+  "dep:seo_steps", "dep:seo_domain",
 ]
 
 [dependencies]
 acquisition = { path = "../acquisition", optional = true }
 seo_steps = { path = "../seo_steps", optional = true }
+seo_domain = { path = "../seo_domain", optional = true }
 anyhow = { workspace = true, optional = true }
 integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
 operation_protocol = { path = "../operation_protocol", optional = true }

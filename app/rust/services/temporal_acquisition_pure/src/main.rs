@@ -5,8 +5,9 @@
 //! is reachable from these Workflow bodies. The generic V2 DAG parent owns
 //! the business RunScope and owner route pin; this worker checks the exact
 //! compiled owner DTO and checked-dispatch bytes again. It does NOT attest
-//! parent/producer server History or external-source authenticity. Produced
-//! inputs are denied until an independent History-attestation path exists.
+//! parent/producer server History or external-source authenticity. Incoming
+//! Produced bindings are denied. A downstream owner can attest this worker's
+//! result directly from Temporal History.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,13 +16,13 @@ use std::sync::OnceLock;
 use acquisition::operation_owner_schema_json::{
     acquisition_owner_schemas, execute_acquisition_pure, validate_acquisition_pure_input,
 };
-use acquisition::operations::{acquisition_pure_contracts, ClassifySourcePage, EvaluateDomBlocks};
+use acquisition::operations::acquisition_pure_contracts;
 use anyhow::{ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
-    Operation, OperationContract, OperationRef, OwnerInvocationV1, OwnerResultV1,
-    OwnerValidationRequestV1, OwnerValidationResultV1, PinnedOwnerRouteV1, PortId,
-    TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    OperationContract, OperationRef, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
+    OwnerValidationResultV1, PinnedOwnerRouteV1, PortId, TrustedRouteCatalog,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{workflow, workflow_methods};
@@ -52,9 +53,8 @@ fn contract(operation: &OperationRef) -> Result<OperationContract> {
         .context("unregistered Acquisition pure operation")
 }
 
-/// The command is deliberately *only* an empty owner-authored settings DTO;
-/// all actual operation input is the immutable typed artifact on port input.
-/// No untrusted run can choose another owner, effect, route, or provider URL.
+/// Settings are empty. Operation input is the immutable typed artifact on the
+/// input port. The source URL serves only as page-classification data.
 fn verify_owner_validation(request: &OwnerValidationRequestV1) -> Result<()> {
     request.validate_shape()?;
     let installed = contract(&request.operation)?;
@@ -195,32 +195,28 @@ fn immutable_build_id(value: &str) -> bool {
         && value.bytes().any(|byte| byte != b'0')
 }
 
-/// No caller-authored route catalog is loaded. Only the two compiled
-/// acquisition contracts are routed to this worker's fixed Task Queue.
+/// Route the compiled Acquisition contracts to this worker's fixed Task Queue.
 fn trusted_owner_catalog(build_id: &str) -> Result<TrustedRouteCatalog> {
     ensure!(
         immutable_build_id(build_id),
         "WORKER_BUILD_ID must be 40-hex Git SHA"
     );
+    let contracts = acquisition_pure_contracts()?;
     let schemas = acquisition_owner_schemas()?;
     ensure!(
-        schemas.len() == 2,
-        "both acquisition owner schemas are required"
+        schemas.len() == contracts.contracts().count(),
+        "compiled Acquisition contracts and owner schemas differ"
     );
     let mut trusted = TrustedRouteCatalog::default();
-    for operation in [
-        ClassifySourcePage::contract().reference,
-        EvaluateDomBlocks::contract().reference,
-    ] {
-        let installed = contract(&operation)?;
+    for installed in contracts.contracts() {
         schemas
-            .get(&operation)
+            .get(&installed.reference)
             .context("compiled Acquisition structural schema missing")?
-            .validate(&installed)?;
+            .validate(installed)?;
         trusted.register(
             installed.clone(),
             PinnedOwnerRouteV1 {
-                operation,
+                operation: installed.reference.clone(),
                 owner: installed.owner.clone(),
                 contract_hash: installed.fingerprint()?,
                 workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.to_owned(),
@@ -238,22 +234,16 @@ fn trusted_owner_catalog(build_id: &str) -> Result<TrustedRouteCatalog> {
 fn trusted_catalog_document_v3(build_id: &str) -> Result<serde_json::Value> {
     let routes = trusted_owner_catalog(build_id)?;
     let schemas = acquisition_owner_schemas()?;
-    let mut entries = Vec::with_capacity(2);
-    for operation in [
-        ClassifySourcePage::contract().reference,
-        EvaluateDomBlocks::contract().reference,
-    ] {
-        let installed = routes
-            .catalog()
-            .contract(&operation)
-            .context("compiled Acquisition contract missing from trusted routes")?;
+    let mut entries = Vec::with_capacity(schemas.len());
+    for installed in routes.catalog().contracts() {
+        let operation = &installed.reference;
         let route = routes
-            .trusted_snapshot_for([&operation])?
+            .trusted_snapshot_for([operation])?
             .into_iter()
             .next()
             .context("compiled Acquisition route missing")?;
         let owner_schema = schemas
-            .get(&operation)
+            .get(operation)
             .context("compiled Acquisition owner DTO schema missing")?;
         owner_schema.validate(installed)?;
         entries.push(serde_json::json!({
@@ -363,9 +353,10 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use acquisition::operations::{ClassifySourcePage, EvaluateDomBlocks, PrepareEntitySpanInput};
     use operation_protocol::{
-        OperationInstanceId, OperationOwnerId, PlanHash, RunScope, TemporalExecutionIdentityV4,
-        OWNER_VALIDATION_SCHEMA_REVISION_V1,
+        Operation, OperationInstanceId, OperationOwnerId, PlanHash, RunScope,
+        TemporalExecutionIdentityV4, OWNER_VALIDATION_SCHEMA_REVISION_V1,
     };
 
     fn valid_owner_validation() -> OwnerValidationRequestV1 {
@@ -475,10 +466,11 @@ mod tests {
         let document = trusted_catalog_document_v3(&build_id).unwrap();
         assert_eq!(document["schema_revision"], 3);
         let entries = document["entries"].as_array().unwrap();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         for operation in [
             ClassifySourcePage::contract().reference,
             EvaluateDomBlocks::contract().reference,
+            PrepareEntitySpanInput::contract().reference,
         ] {
             let contract = contract(&operation).unwrap();
             let entry = entries

@@ -16,6 +16,8 @@ from check_rust_adapter_boundaries import (
     DELIVERY_FORBIDDEN_LOCAL_OWNERS,
     MANIFEST_DEP_EXCEPTIONS,
     PURE_OWNER_RUNTIME_SOURCE_FILES,
+    SEMANTIC_HISTORY_SOURCE,
+    SEMANTIC_PURE_OWNER_MANIFEST,
     SEO_STEPS_PURE_OWNER_MANIFEST,
     TRUTH_PURE_OWNER_MANIFEST,
     WEB_FETCH_OWNER_MANIFEST,
@@ -71,8 +73,13 @@ class NativeAcquisitionPureOwnerBoundaryTests(unittest.TestCase):
 
 class SiteArchitectNewOwnerSdkBoundaryTests(unittest.TestCase):
     def test_pure_workers_get_only_exact_native_temporal_sdk_access(self) -> None:
-        self.assertEqual(len(PURE_OWNER_RUNTIME_SOURCE_FILES), 2)
-        for manifest in (SEO_STEPS_PURE_OWNER_MANIFEST, TRUTH_PURE_OWNER_MANIFEST):
+        manifests = (SEO_STEPS_PURE_OWNER_MANIFEST, TRUTH_PURE_OWNER_MANIFEST,
+                     SEMANTIC_PURE_OWNER_MANIFEST)
+        self.assertEqual(
+            PURE_OWNER_RUNTIME_SOURCE_FILES,
+            {manifest.parent / "src" / "main.rs" for manifest in manifests},
+        )
+        for manifest in manifests:
             self.assertEqual(MANIFEST_DEP_EXCEPTIONS[manifest],
                              ACQUISITION_PURE_OWNER_TEMPORAL_SDKS)
         for source in PURE_OWNER_RUNTIME_SOURCE_FILES:
@@ -84,10 +91,19 @@ class SiteArchitectNewOwnerSdkBoundaryTests(unittest.TestCase):
                 source, re.compile(r"\buse\s+reqwest::")))
         for path in (
             SEO_STEPS_PURE_OWNER_MANIFEST.parent / "src" / "other.rs",
+            SEMANTIC_PURE_OWNER_MANIFEST.parent / "src" / "other.rs",
             RUST_ROOT / "crates" / "seo_steps" / "src" / "owner_pure_operations.rs",
         ):
             self.assertFalse(new_site_architect_owner_sdk_allowed(
                 path, re.compile(r"\btemporalio_sdk::")))
+
+    def test_semantic_history_reads_only_through_temporal_client_and_protos(self) -> None:
+        for sdk in ("temporalio_client", "temporalio_common"):
+            self.assertTrue(new_site_architect_owner_sdk_allowed(
+                SEMANTIC_HISTORY_SOURCE, re.compile(rf"\b{sdk}::")))
+        for sdk in ("temporalio_sdk", "temporalio_macros", "reqwest", "sqlx"):
+            self.assertFalse(new_site_architect_owner_sdk_allowed(
+                SEMANTIC_HISTORY_SOURCE, re.compile(rf"\b{sdk}::")))
 
     def test_web_transport_and_paid_client_do_not_grant_sibling_sdk_access(self) -> None:
         self.assertEqual(MANIFEST_DEP_EXCEPTIONS[WEB_FETCH_OWNER_MANIFEST], {"reqwest"})

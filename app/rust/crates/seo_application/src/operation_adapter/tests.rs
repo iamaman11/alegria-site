@@ -881,3 +881,35 @@ fn pure_dag_result_budget_is_measured_before_temporal_history_return() {
         })
     ));
 }
+
+#[test]
+fn semantic_codec_chains_owner_operations_and_rejects_ambiguous_inputs() {
+    let entity = EntitySpans::contract().reference;
+    let canonical = CanonicalizeMentions::contract().reference;
+    let input = serde_json::to_vec(&entity_input()).unwrap();
+    validate_semantic_operation_input(&entity, &input).unwrap();
+    let spans = execute_semantic_operation(&entity, &input).unwrap();
+    let expected_spans = serde_json::to_vec(&EntitySpans::evaluate(&entity_input())).unwrap();
+    assert_eq!(spans, expected_spans);
+    validate_semantic_operation_input(&canonical, &spans).unwrap();
+    let result = execute_semantic_operation(&canonical, &spans).unwrap();
+    let typed_spans: entity_spans::EntitySpanOutput = serde_json::from_slice(&spans).unwrap();
+    assert_eq!(
+        result,
+        serde_json::to_vec(&CanonicalizeMentions::evaluate(&typed_spans)).unwrap()
+    );
+
+    for invalid in [
+        br#"{"section_id":"a","section_id":"b","raw_text":"x"}"#.as_slice(),
+        br#"{"section_id":"a","raw_text":"x","unknown":true}"#.as_slice(),
+    ] {
+        assert!(validate_semantic_operation_input(&entity, invalid).is_err());
+        assert!(execute_semantic_operation(&entity, invalid).is_err());
+    }
+    let mut unknown = entity.clone();
+    unknown.revision += 1;
+    assert!(matches!(
+        execute_semantic_operation(&unknown, &input),
+        Err(OperationRunError::MissingExecutor(_))
+    ));
+}

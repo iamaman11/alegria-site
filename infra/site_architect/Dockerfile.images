@@ -1,0 +1,46 @@
+# CI-only build: Windows imports attested images and must never compile sources.
+# One builder compiles the five independently deployable siteArchitect owners.
+FROM rust:1.100.0-slim-bookworm AS builder
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    protobuf-compiler libprotobuf-dev libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV SQLX_OFFLINE=true \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=0 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 \
+    CARGO_PROFILE_RELEASE_STRIP=symbols
+
+COPY app ./app
+RUN cargo build --release --locked --no-default-features \
+    --manifest-path /app/app/rust/Cargo.toml \
+    -p temporal_pg_effects -p temporal_orchestrator \
+    -p temporal_acquisition_pure -p one_step_request_issuer \
+    -p acquisition_source_issuer --bins
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+USER 65532:65532
+
+FROM runtime AS pg
+COPY --from=builder /app/app/rust/target/release/temporal_pg_effects /usr/local/bin/temporal_pg_effects
+ENTRYPOINT ["/usr/local/bin/temporal_pg_effects"]
+
+FROM runtime AS orchestrator
+COPY --from=builder /app/app/rust/target/release/temporal_orchestrator /usr/local/bin/temporal_orchestrator
+ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]
+
+FROM runtime AS acquisition
+COPY --from=builder /app/app/rust/target/release/temporal_acquisition_pure /usr/local/bin/temporal_acquisition_pure
+ENTRYPOINT ["/usr/local/bin/temporal_acquisition_pure"]
+
+FROM runtime AS request-issuer
+COPY --from=builder /app/app/rust/target/release/one_step_request_issuer /usr/local/bin/one_step_request_issuer
+ENTRYPOINT ["/usr/local/bin/one_step_request_issuer"]
+
+FROM runtime AS source-issuer
+COPY --from=builder /app/app/rust/target/release/acquisition_source_issuer /usr/local/bin/acquisition_source_issuer
+ENTRYPOINT ["/usr/local/bin/acquisition_source_issuer"]

@@ -213,6 +213,7 @@ class RustArtifactTests(unittest.TestCase):
             for kind, executable in (
                 ("seo_steps_pure", "temporal_seo_steps_pure"),
                 ("truth_pure", "temporal_truth_pure"),
+                ("semantic_pure", "temporal_semantic_pure"),
             ):
                 with self.subTest(kind=kind):
                     source = self.executable(executable, f"compiled {kind} owner".encode())

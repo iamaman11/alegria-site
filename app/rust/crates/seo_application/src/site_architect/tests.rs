@@ -207,6 +207,68 @@ fn catalog() -> SiteArchitectCatalog {
 }
 
 #[test]
+fn product_matrix_joins_exact_revisions_and_keeps_proposals_out_of_execution() {
+    use super::matrix::{operation_matrix, ContractStatus};
+    use crate::operation_adapter::semantic_extraction_owner_schemas;
+
+    let registry = catalog();
+    let mut tools = describe_tools(&registry).unwrap();
+    let mut extension = tools[0].clone();
+    extension.operation.revision += 1;
+    tools.push(extension.clone());
+
+    let matrix = operation_matrix(&tools).unwrap();
+    assert_eq!(matrix.installed_outside_matrix, vec![extension.operation]);
+    for (reference, descriptor) in semantic_extraction_owner_schemas().unwrap() {
+        let contract = registry.catalog().contract(&reference).unwrap();
+        descriptor.validate(contract).unwrap();
+        let row = matrix.actions.iter().find(|row| row.operation == reference);
+        assert!(
+            row.is_some_and(|row| {
+                row.status == ContractStatus::InstalledContract && row.declaration.is_some()
+            }),
+            "the matrix must use the exact owner-declared revision for {reference:?}"
+        );
+    }
+    let shared = op("knowledge.vector_candidates.search");
+    let candidates = matrix.areas.values().flatten();
+    assert_eq!(
+        candidates
+            .filter(|row| row.operations.contains(&shared))
+            .count(),
+        2
+    );
+    assert_eq!(
+        matrix
+            .actions
+            .iter()
+            .filter(|row| row.operation == shared)
+            .count(),
+        1
+    );
+
+    for row in &matrix.actions {
+        match row.status {
+            ContractStatus::Planned => {
+                let ports = row.proposed_ports.as_ref().unwrap();
+                assert!(!ports.inputs.is_empty() && !ports.outputs.is_empty());
+                for schema in ports.inputs.values().chain(ports.outputs.values()) {
+                    assert!(!schema.id.as_str().is_empty() && schema.revision > 0);
+                }
+                assert!(registry.catalog().contract(&row.operation).is_none());
+            }
+            ContractStatus::SourceDeclared => {
+                assert!(row.declaration.is_some() && row.proposed_ports.is_none());
+            }
+            ContractStatus::InstalledContract => {
+                assert!(tools.iter().any(|tool| tool.operation == row.operation));
+                assert!(row.proposed_ports.is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn registered_tools_are_discoverable_and_never_claim_a_live_provider() {
     let mut registry = catalog();
     let catalog_before = describe_tools(&registry).unwrap();
@@ -310,13 +372,79 @@ fn invalid_ports_and_missing_producers_produce_actionable_errors() {
     let registry = catalog();
     let mut wrong_type = recipe();
     wrong_type.steps[1].inputs = external("topics");
+    let problem = preview_recipe(&wrong_type, &registry)
+        .unwrap_err()
+        .problem();
+    assert_eq!(problem.code, "incompatible_ports");
+    let binding = problem.incompatible_input.unwrap();
+    assert_eq!(binding.step_index, 1);
+    assert_eq!(binding.operation, op("semantic.canonicalize_mentions"));
+    assert_eq!(binding.port, PortId::from("input"));
     assert_eq!(
-        preview_recipe(&wrong_type, &registry)
-            .unwrap_err()
-            .problem()
-            .code,
-        "incompatible_ports"
+        binding.expected,
+        registry
+            .catalog()
+            .contract(&binding.operation)
+            .unwrap()
+            .inputs[&binding.port]
     );
+    assert!(matches!(
+        binding.actual,
+        IncompatibleInputSource::External {
+            declared_revision: 1,
+            same_type: false
+        }
+    ));
+
+    let mut wrong_revision = recipe();
+    wrong_revision
+        .sources
+        .get_mut(&ArtifactId::from("mentions"))
+        .unwrap()
+        .schema
+        .revision = 2;
+    let problem = preview_recipe(&wrong_revision, &registry)
+        .unwrap_err()
+        .problem();
+    let binding = problem.incompatible_input.unwrap();
+    assert_eq!(binding.expected.revision, 1);
+    assert!(matches!(
+        binding.actual,
+        IncompatibleInputSource::External {
+            declared_revision: 2,
+            same_type: true
+        }
+    ));
+
+    wrong_type.steps[1].inputs.insert(
+        PortId::from("input"),
+        RecipeInput::Produced {
+            step: OperationInstanceId::from("editorial"),
+            port: PortId::from("output"),
+        },
+    );
+    let problem = preview_recipe(&wrong_type, &registry)
+        .unwrap_err()
+        .problem();
+    assert_eq!(problem.code, "incompatible_ports");
+    let binding = problem.incompatible_input.unwrap();
+    let IncompatibleInputSource::Produced {
+        step_index,
+        operation,
+        port,
+        schema,
+    } = binding.actual
+    else {
+        panic!("expected a typed producer output");
+    };
+    assert_eq!(step_index, 2);
+    assert_eq!(operation, op("semantic.editorial_topics"));
+    assert_eq!(port, PortId::from("output"));
+    assert_eq!(
+        schema,
+        registry.catalog().contract(&operation).unwrap().outputs[&port]
+    );
+    assert_ne!(binding.expected, schema);
 
     let mut missing = recipe();
     missing.steps[1].inputs.insert(

@@ -172,6 +172,53 @@ MCP предоставляет двенадцать инструментов с�
 
 Оба примера используют одни и те же задекларированные источники. Во втором `editorial` ждёт `canonicalize`; можно проверить, как это меняет зависимости. Оба файла сохранили историческое имя `*_v1.json` ради прежних ссылок, но содержат `schema_revision: 2` и поле `parameters: {}` у шагов. Рецепты с ревизией **1** и без параметров остаются совместимыми. Это **не A/B-тест с трафиком**.
 
+## Нативный семантический владелец V2
+
+`temporal_semantic_pure` обслуживает пять существующих операций владельца
+`semantic_extraction` на очереди `alegria-semantic-pure-owner-v1`. Он публикует
+V3-манифест с контрактами, маршрутами и схемами из того же Rust-кода, что
+применяется при локальной проверке рецепта.
+
+```bash
+WORKER_BUILD_ID=<source-sha> temporal_semantic_pure --export-trusted-catalog-v3
+```
+
+Для стенда оператор устанавливает этот манифест в доверенный каталог под
+`/etc/alegria` и передаёт его путь через
+`TEMPORAL_OPERATION_DAG_CATALOG_PATH` родительскому workflow, worker и CLI.
+Worker требует `ALEGRIA_ENABLE_SEMANTIC_PURE_OWNER_V1=true`, явные
+`TEMPORAL_URL`, `TEMPORAL_NAMESPACE` и `WORKER_BUILD_ID`. При подключении
+маршрута к уже известной семантической операции CLI сверяет её ревизию,
+контракт и схемы владельца и сохраняет локальную проверку DTO.
+
+Общий Temporal V2 DAG исполняет и одиночный `semantic.entity_spans@1`, и
+его связку с `semantic.canonicalize_mentions@1`. Перед выполнением
+операции read-only Activity сверяет истории дочернего и родительского
+Workflow и результаты `ValidateOnly`. Для Produced-входа она также сверяет
+его байты с фактическим результатом завершившегося шага-производителя.
+
+### Связка Acquisition и семантики
+
+Оператор добавляет в установленный каталог V3 записи, экспортированные
+обоими воркерами. Acquisition публикует собственные контракты командой
+`temporal_acquisition_pure --export-trusted-catalog-v3` с тем же правилом
+для `WORKER_BUILD_ID`. Его очередь — `alegria-acquisition-pure-owner-v1`,
+запуск требует `ALEGRIA_ENABLE_ACQUISITION_PURE_OWNER_V1=true`.
+
+| Шаг | Операция | Вход |
+| --- | --- | --- |
+| `prepare` | `acquisition.prepare_entity_span_input@1` | Внешний `acquisition.prepare_entity_span_input@1` |
+| `extract` | `semantic.entity_spans@1` | `prepare.output` с общей схемой `semantic.entity_span_input@1` |
+| `canonicalize` | `semantic.canonicalize_mentions@1` | `extract.output` со схемой `semantic.entity_span_output@1` |
+
+Для `prepare` вход содержит `page` с полями `url`, `title`, `raw_text`
+и `block` с полями `dom_block_id`, `block_role`, `text`. Acquisition
+применяет правила допустимости страницы и блока на этапе `ValidateOnly`.
+В выходе он сохраняет идентификатор блока в `section_id` и текст блока в
+`raw_text`. Внешний документ сохраняет статус источника без подтверждённой
+подлинности. В операторском чтении по `run_id` завершённая связка содержит
+три шага, их связи `input_steps` и идентификаторы дочерних запусков Temporal.
+
 ## Как типизированно подключать шаги
 
 В `site-architect tools` у операции опубликованы два независимых контракта:
@@ -208,8 +255,10 @@ MCP предоставляет двенадцать инструментов с�
 - `source_authentication: not_verified`, `execution: not_started`: данные не загружались, Temporal не запускался, внешние эффекты не выполнялись.
 - `invalid`: код проблемы, текст и `next_action`; завершение команды с кодом 2. Размер JSON ограничен 256 KiB; неизвестные поля уровня рецепта запрещены, а поля параметров проверяются только когда доступен локальный DTO.
 - Ошибки параметров дополнительно содержат **`step`** с точным `OperationInstanceId`, а не только общую причину. Для отсутствующей схемы — `operation_parameter_schema_missing`, для несовпадения отпечатка установленного контракта — `operation_parameter_contract_mismatch`. Ни DTO-значения, ни команды владельцев в сообщение не копируются.
+- При `incompatible_ports` поле `incompatible_input` указывает позицию шага в массиве рецепта с нуля, операцию, входной порт и ожидаемую схему. Для связи между шагами также видны позиция производителя, его операция, выходной порт и фактическая схема. Для внешнего входа возвращаются объявленная ревизия и признак совпадения типа.
 - `structural_comparison_only`: проверены две структуры с объявленными источниками; результатов ранжирования, конверсии и поведения пользователей пока нет.
 - `self_consistent_not_attested`: `inspect` проверил исходный **сохранённый** `ExecutionPlan` и конечный `OperationDagReceiptV1` V2 по доверенному каталогу: хеш плана, детерминированный порядок, полный набор external/produced артефактов, схемы, scope, каждый owner result, payload/result/receipt hashes и V2 Child Workflow ID. Это **локальная проверка согласованности**, а не серверное подтверждение Temporal History или долговечной записи owner.
+- В `inspect.steps` входные и выходные порты ссылаются на артефакты из `inspect.artifacts`. От результата можно перейти к шагу-производителю и его входу, сверить хеши и найти Child Workflow по вычисленному `child_workflow_id`.
 - `same_source_bytes_structural_result_comparison`: `compare-results` сравнивает выходные артефакты двух **разных** run_id только при идентичных реальных байтах исходных артефактов, tenant, source schema и provenance. Показывает изменившиеся хеши (`added/removed/modified/schema_changed`) и количество неизменённых выходов, но **не делает** выводов об эффективности SEO/сайта.
 - `different_source_snapshot`: сравнение запрещено, пока фактические исходные байты или происхождение различаются. Два одинаковых текстовых описания источников не считаются доказательством идентичности данных.
 
@@ -240,7 +289,7 @@ cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
 
 ### Отдельное чтение `run_id` с серверной History — без провайдерских утверждений
 
-Ещё одна независимая **локальная операторская** команда получает состояние уже существующего одноступенчатого V2-run, не осуществляя новый Start или действия у поставщика:
+Отдельная **локальная операторская** команда читает состояние существующего V2-запуска по его бизнес-UUID.
 
 ```bash
 cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
@@ -249,7 +298,22 @@ cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
 
 Локатор строго ограничен приватным JSON `{ "canonical_run_id": "<UUID>" }`: **никакой переданный `tenant_id`, путь к receipt, Workflow Run ID или провайдерский токен не принимаются**. Требуются `ALEGRIA_ENABLE_OPERATION_DAG_READ_V2=true`, `OPERATION_DAG_READ_V2_TENANT_ID`, `OPERATION_DAG_READ_V2_DATABASE_URL_FILE`, `OPERATION_DAG_READ_V2_TEMPORAL_URL`, `OPERATION_DAG_READ_V2_TEMPORAL_NAMESPACE` и `OPERATION_DAG_READ_V2_TRUSTED_CATALOG_FILE`. SQL DSN читается из отдельного приватного файла; сессия обязана быть самостоятельным **tenant-bound SELECT-only LOGIN** без побочных прав на таблицы. Temporal URL также обязан быть локальным loopback.
 
-Читатель сначала сопоставляет tenant business root с отдельной SQL-governance V2, затем находит **точную серверную Temporal History** по закреплённым Workflow ID и серверному Run ID, сверяет байты Start с SQL SHA-256, доверенный каталог/план и ровно один owner-result. Для статуса завершённого одношагового V2-run дополнительно проверяет **две подлинные серверные Child Histories**: `ValidateOnly` и owner effect, их принадлежность родителю, входы и типизированные результаты. Возвращаются безопасные идентификаторы, хеши, количество шагов/результатов и один из диагностических статусов (`temporal_running`, `temporal_failed`, `temporal_completed_owner_unverified`); при отсутствии полномочий, несоответствии или чужом tenant — общий отказ `run_unavailable_or_untrusted` **без раскрытия факта существования чужого запуска**. Сырые данные источников, команды и секреты в выдачу не попадают.
+Читатель сопоставляет tenant business root с отдельной SQL-governance V2,
+находит точную серверную Temporal History и сверяет байты Start с SQL SHA-256
+и доверенным каталогом. Для завершённого запуска он проверяет две Child
+Histories на каждый узел, `ValidateOnly` и исполнение владельца. Проверяются
+принадлежность родителю, порядок волн, точные входы и результаты. Итоговая
+квитанция, заново собранная через `OperationDagMachine`, должна побайтово
+совпасть с завершением родителя.
+
+Для завершённых многошаговых запусков ответ содержит `trace.schema_revision = 1`.
+Массив `trace.steps` следует каноническому порядку. В записи есть точная
+операция, `input_steps` с индексами производителей входов, Child Workflow ID,
+серверный Child Run ID и `receipt_blake3`. Индексы начинаются с нуля и
+соответствуют этому массиву. Сводка одношагового запуска содержит
+идентификаторы родителя, хеши, число шагов и статус. При отсутствии
+полномочий, несоответствии или другом tenant возвращается общий отказ
+`run_unavailable_or_untrusted`.
 
 Статус **`temporal_completed_owner_unverified` подтверждает серверное завершение V2 parent, подлинность отдельных `ValidateOnly`/owner Child Histories и согласованность их типизированных результатов**. Он *не* означает независимо подтверждённый durable provider receipt, реальный эффект Neo4j/Qdrant/DataForSEO, пригодное SEO-доказательство, завершённое исследование потребностей или проверенную provenance. До такого утверждения нужен отдельный независимый durable owner receipt и проверка первоисточника. Читатель не возвращает сохранённые plan/receipt для `site-architect inspect` или MCP: подтверждённый серверный экспорт содержимого пока отдельное P0. Сам Start не опубликован в MCP.
 
@@ -285,6 +349,9 @@ cargo run --manifest-path app/rust/Cargo.toml -p temporal_pg_effects -- \
 Обмен ограничен по времени, размерам и параллелизму. При сбое соединения,
 несоответствии Histories, неизвестном или чужом run возвращается
 безопасный отказ без уточнения о существовании чужих данных.
+Чтобы показать многошаговый `trace`, MCP сверяет каждую ревизию операции
+со своим установленным доверенным каталогом. Отдельного доступа к SQL или
+Temporal для этого у него нет.
 
 Это **локальная аутентификация процесса через Unix**, а не аутентификация
 облачного пользователя ChatGPT; удалённый MCP transport с сопоставлением

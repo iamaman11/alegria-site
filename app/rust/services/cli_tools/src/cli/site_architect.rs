@@ -1,6 +1,8 @@
 use std::io::Read;
 
-use seo_application::operation_adapter::semantic_extraction_registry;
+use seo_application::operation_adapter::{
+    semantic_extraction_owner_schemas, semantic_extraction_registry,
+};
 use seo_application::site_architect::{
     compare_executions, describe_tools, diff_recipes, inspect_execution, inspect_operation,
     installed_semantic_operation_catalog, preview_recipe, ExecutionPlan, OperationDagReceiptV1,
@@ -141,6 +143,9 @@ fn site_architect_safe_recipe_problem(error: &seo_application::site_architect::S
         "The recipe failed an installed typed operation, parameter or DAG check.",
         problem.next_action,
     );
+    if let Some(binding) = problem.incompatible_input {
+        output["incompatible_input"] = json!(binding);
+    }
     if let Some(step) = problem.step {
         if let Ok(Value::String(name)) = serde_json::to_value(&step) {
             if !name.is_empty()
@@ -309,11 +314,25 @@ fn site_architect_installed_catalog() -> Result<SiteArchitectCatalog> {
     if let Some(path) = std::env::var_os("TEMPORAL_OPERATION_DAG_CATALOG_PATH") {
         let bundle = trusted_owner_catalog::load_trusted_owner_bundle(std::path::Path::new(&path))
             .context("read operator-owned Temporal owner routes for siteArchitect")?;
+        let compiled_schemas = semantic_extraction_owner_schemas()?;
         for contract in bundle.routes.catalog().contracts() {
-            anyhow::ensure!(
-                installed.catalog().contract(&contract.reference).is_none(),
-                "trusted owner route conflicts with a built-in siteArchitect operation"
-            );
+            if let Some(local) = installed.catalog().contract(&contract.reference) {
+                anyhow::ensure!(
+                    local == contract,
+                    "trusted owner route conflicts with a built-in siteArchitect operation"
+                );
+                let schema = compiled_schemas.get(&contract.reference)
+                    .context("compiled semantic owner DTO schema missing")?;
+                bundle.verify_caller_schema(&contract.reference, schema)?;
+                anyhow::ensure!(
+                    bundle.parameter_schemas.get(&contract.reference)
+                        == Some(&json!({"type": "object", "additionalProperties": false})),
+                    "installed semantic settings differ from the compiled empty DTO contract"
+                );
+                // The same operation retains its stricter compiled authoring
+                // validator. The operator catalog supplies the native route.
+                continue;
+            }
             installed.register_contract(contract.clone())?;
             if let Some(schema) = bundle.parameter_schemas.get(&contract.reference) {
                 installed.register_remote(&contract.reference, &contract.fingerprint()?, schema.clone())?;
@@ -323,21 +342,38 @@ fn site_architect_installed_catalog() -> Result<SiteArchitectCatalog> {
     Ok(installed)
 }
 
+fn site_architect_tools_report(
+    catalog: &SiteArchitectCatalog,
+) -> std::result::Result<Value, Value> {
+    let operations = describe_tools(catalog).map_err(|error| json!(error.problem()))?;
+    let matrix = seo_application::site_architect::matrix::operation_matrix(&operations)
+        .map_err(|error| site_architect_problem(
+            "operation_matrix_invalid",
+            &error.to_string(),
+            "Correct the bundled product matrix.",
+        ))?;
+    Ok(json!({
+        "status": "catalog_preview_only",
+        "launch_readiness": site_architect_launch_readiness(&operations),
+        "operations": operations,
+        "matrix": matrix,
+        "execution": "not_started"
+    }))
+}
+
 fn site_architect_command(action: SiteArchitectCommand) -> Result<i32> {
     let installed = site_architect_installed_catalog()?;
     let catalog = &installed;
 
     match action {
         SiteArchitectCommand::Tools => {
-            let operations = describe_tools(catalog)?;
-            let launch_readiness = site_architect_launch_readiness(&operations);
-            site_architect_print(&json!({
-                "status": "catalog_preview_only",
-                "operations": operations,
-                "launch_readiness": launch_readiness,
-                "execution": "not_started",
-                "note": "Declared tools are not provider connectivity or owner admission proof.",
-            }))?;
+            match site_architect_tools_report(catalog) {
+                Ok(report) => site_architect_print(&report)?,
+                Err(problem) => {
+                    site_architect_print(&problem)?;
+                    return Ok(2);
+                }
+            }
         }
         SiteArchitectCommand::Operation {
             id,

@@ -10,6 +10,11 @@ const EXACT_SCOPE = "site_architect.run_one";
 const PRIVATE_ADMISSION_URL = "http://admission.internal/v1/one-step";
 const ATTESTATION_TTL_SECONDS = 30;
 const MAX_ADMISSION_REPLY_BYTES = 2048;
+const PRIVATE_REPLY_CODES = {
+  launch_blocked: "signed_remote_admission_not_verified",
+  request_reserved: "one_use_reserved_execution_unverified",
+  start_outcome_unknown: "operator_start_outcome_unconfirmed",
+} as const;
 
 export type StartReply = {
   status: "launch_blocked" | "request_reserved" | "start_outcome_unknown";
@@ -113,14 +118,14 @@ export function parseAdmissionReply(raw: unknown, requestId: string): StartReply
     return reply(requestId, "start_outcome_unknown", "unattested_admission_reply");
   }
   const row = raw as Record<string, unknown>;
+  const status = row.status;
   if (Object.keys(row).some((key) => !["schema_revision", "request_id", "status", "code"].includes(key))
     || row.schema_revision !== 1 || row.request_id !== requestId
-    || typeof row.status !== "string"
-    || !["launch_blocked", "request_reserved", "start_outcome_unknown"].includes(row.status)
-    || typeof row.code !== "string" || !SAFE_ID.test(row.code)) {
+    || (status !== "launch_blocked" && status !== "request_reserved" && status !== "start_outcome_unknown")
+    || row.code !== PRIVATE_REPLY_CODES[status]) {
     return reply(requestId, "start_outcome_unknown", "unattested_admission_reply");
   }
-  return reply(requestId, row.status as StartReply["status"], row.code);
+  return reply(requestId, status, PRIVATE_REPLY_CODES[status]);
 }
 
 // A private service can fail or be misconfigured. Never buffer an unbounded
@@ -181,9 +186,11 @@ export async function admitOneStep(
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
+      redirect: "error",
       signal: AbortSignal.timeout(10_000),
     }));
-    if (!response.ok || Number(response.headers.get("content-length") ?? "0") > MAX_ADMISSION_REPLY_BYTES) {
+    if (!response.ok || response.redirected
+      || Number(response.headers.get("content-length") ?? "0") > MAX_ADMISSION_REPLY_BYTES) {
       return reply(requestId, "start_outcome_unknown", "admission_outcome_unconfirmed");
     }
     const text = await readBoundedAdmissionReply(response);

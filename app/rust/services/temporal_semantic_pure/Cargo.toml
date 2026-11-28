@@ -1,0 +1,22 @@
+[package]
+name = "temporal_semantic_pure"
+version = "0.1.0"
+edition = "2021"
+
+# The only runtime I/O is a read of exact Temporal parent and Child History.
+[dependencies]
+operation_protocol = { path = "../../crates/operation_protocol" }
+seo_application = { path = "../../crates/seo_application" }
+trusted_owner_catalog = { path = "../../crates/trusted_owner_catalog" }
+temporalio-sdk = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+temporalio-common = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }

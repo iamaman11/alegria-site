@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/acquisition",
+  "crates/source_section_contracts",
   "crates/truth_domain",
   "crates/primitives",
   "crates/contracts",
@@ -43,6 +44,7 @@ members = [
   "crates/temporal_gateway",
   "services/temporal",
   "services/temporal_acquisition_pure",
+  "services/temporal_semantic_pure",
   "services/temporal_seo_steps_pure",
   "services/temporal_truth_pure",
   "services/temporal_web_fetch",

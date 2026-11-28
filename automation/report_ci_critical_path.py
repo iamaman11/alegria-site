@@ -47,6 +47,9 @@ E2E_PATHS = {
     "native-dataforseo": (
         "rust-qdrant-temporal-e2e (temporal_dataforseo)", NATIVE_QDRANT_COMPILERS,
     ),
+    "native-semantic": (
+        "rust-qdrant-temporal-e2e (temporal_semantic)", NATIVE_QDRANT_COMPILERS,
+    ),
     "outbox": (
         "rust-outbox-e2e (outbox)",
         ("rust-e2e-outbox-harness", "rust-e2e-legacy-binaries"),
@@ -56,7 +59,7 @@ E2E_PATHS = {
 # Actual YAML step labels, deliberately not regex-based guesses about whether
 # Cargo ran. These are observable GitHub step durations, NOT per-rustc CPU time.
 COMPILER_STEPS = {
-    "architecture-and-rust": "Compile independent DataForSEO and three pure owner groups with source issuers",
+    "architecture-and-rust": "Compile independent DataForSEO and pure owner groups with source issuers",
     "rust-e2e-temporal-harness": "Compile real Temporal/full-infra owner E2E test executable",
     "rust-e2e-legacy-binaries": "Compile canonical Worker, Outbox and historical Temporal in one Cargo pass",
     "rust-e2e-qdrant-temporal-harness": "Compile distinct live Temporal/PG/Qdrant E2E test executable",
@@ -74,6 +77,7 @@ LIVE_E2E_STEPS = {
     "native-mixed-v7": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
     "native-mixed-v2": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
     "native-dataforseo": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "native-semantic": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
     "outbox": "Execute nine exact A14 PostgreSQL/Worker E2E checks",
 }
 

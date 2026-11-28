@@ -54,6 +54,7 @@ KINDS = {
     # synthetic path through the generic parent binary.
     "seo_steps_pure": ("temporal_seo_steps_pure",),
     "truth_pure": ("temporal_truth_pure",),
+    "semantic_pure": ("temporal_semantic_pure",),
     "one_step_request_issuer": ("one_step_request_issuer",),
 }
 SHA = re.compile(r"[a-f0-9]{40}\Z")

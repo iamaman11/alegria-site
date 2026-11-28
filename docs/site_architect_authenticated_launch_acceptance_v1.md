@@ -70,11 +70,19 @@ Access app AUD, allowed email and opaque user UUID. The exact one-tool
 capability is signed into a 30-second HMAC proof; the native CLI mode verifies
 issuer, resource, single subject and request UUID against a separate immutable
 operator-owned intent before the existing SQL grant / Temporal path. The
-Workers VPC Service binding pins a fixed private destination, but a real
-Tunnel/VPC service, private native HTTP ingress and configured Access
-application are **not deployed or accepted**. The default has no public route;
-a bound request may report only SQL reservation or an ambiguous outcome.
-Fixture-signing tests do not establish an actual user login or Start.
+Workers VPC Service binding pins a fixed private destination. The native
+`--operator-serve-signed-granted-single-v1` mode implements the private
+loopback HTTP ingress. The isolated CI scenario sends the Worker's signed
+request over HTTP to this ingress, consumes one SQL grant, observes the
+native Temporal Parent and Children, and checks that a repeated submission
+does not launch another execution. Wrong subject, invalid signature and
+expired proof leave the grant unclaimed. The Worker reports reservation
+separately from any independently verified execution.
+
+The existing self-hosted Access application for the technical MCP resource
+has Managed OAuth enabled. The target Worker is absent from the account's
+deployed scripts. Live switching through the private Tunnel/VPC binding
+and a real ChatGPT login still require the isolated release trial.
 
 ## Distinct statuses; never infer success
 

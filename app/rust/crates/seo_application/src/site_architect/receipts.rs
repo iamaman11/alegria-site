@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     canonical_owner_result_hash, enforce_json_budget, owner_child_workflow_id_v2,
-    owner_content_hash, ArtifactId, ArtifactSchema, ContractCatalog, ExecutionPlan,
-    OperationDagReceiptV1, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId,
-    DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES,
+    owner_content_hash, ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog,
+    ExecutionPlan, OperationDagReceiptV1, OperationInstanceId, OperationRef, PlanError, PlanHash,
+    PortId, DAG_MAX_INPUT_BYTES, DAG_MAX_RESULT_BYTES,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -87,6 +87,10 @@ pub struct StepSummary {
     pub result_hash: String,
     pub receipt_hash: String,
     pub output_count: usize,
+    /// Derived from the dispatch key. The reader has not fetched this History.
+    pub child_workflow_id: String,
+    pub inputs: BTreeMap<PortId, ArtifactBinding>,
+    pub outputs: BTreeMap<PortId, ArtifactId>,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,6 +204,7 @@ pub fn inspect_execution(
         let result_hash = canonical_owner_result_hash(result)
             .map_err(|_| InspectionError::Inconsistent("result_encoding"))?;
         let receipt_hash = owner_content_hash(&result.receipt_bytes);
+        let child_workflow_id = owner_child_workflow_id_v2(&result.dispatch_execution_key);
         for (port, artifact_id) in &node.outputs {
             let actual = receipt
                 .artifacts
@@ -221,8 +226,7 @@ pub fn inspect_execution(
                 || proof.port != *port
                 || proof.artifact_id != *artifact_id
                 || proof.dispatch_execution_key != result.dispatch_execution_key
-                || proof.child_workflow_id
-                    != owner_child_workflow_id_v2(&result.dispatch_execution_key)
+                || proof.child_workflow_id != child_workflow_id
                 || proof.result_hash != result_hash
                 || proof.receipt_hash != receipt_hash
                 || proof.payload_hash != owner_content_hash(&actual.payload)
@@ -237,6 +241,9 @@ pub fn inspect_execution(
             result_hash,
             receipt_hash,
             output_count: result.outputs.len(),
+            child_workflow_id,
+            inputs: node.inputs.clone(),
+            outputs: node.outputs.clone(),
         });
     }
 
